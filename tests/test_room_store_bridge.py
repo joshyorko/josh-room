@@ -697,6 +697,24 @@ def test_loopback_http_minio_locator_is_accepted_by_restic_store(tmp_path):
 
 
 @pytest.mark.integration
+def test_new_room_same_folder_content_has_own_initial_snapshot(tmp_path, monkeypatch):
+    dimension, material, _backend, _identity, _recovery = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic identical contents\n")
+    instance = tmp_path / "instance"
+    bootstrap = bridge.save_room_store(instance, dimension, "synthetic-bootstrap", workspace, material, components=[])
+    created = bridge.save_room_store(instance, dimension, "synthetic-new", workspace, material, components=[])
+    assert bootstrap["status"] == created["status"] == "saved"
+    assert created["project_id"] == "synthetic-new"
+    assert created["workspace_snapshot_id"] != bootstrap["workspace_snapshot_id"]
+    assert created["workspace_parent_snapshot_id"] is None
+    unchanged = bridge.save_room_store(instance, dimension, "synthetic-new", workspace, material, components=[])
+    assert unchanged["status"] == "already-saved"
+    assert unchanged["snapshot_id"] == created["snapshot_id"]
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("native_cache", [True, False])
 def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     tmp_path, monkeypatch, native_cache
@@ -1902,3 +1920,89 @@ def test_save_preview_preserves_workspace_validation_diagnostic(tmp_path, monkey
     assert caught.value.result["diagnostic"] == (
         "Git storage is not self-contained; linked worktrees are unsupported"
     )
+
+
+def test_explicit_selection_omits_rcc_and_preserves_historical_descriptor(tmp_path, monkeypatch):
+    from josh_room.component_selection import COMPONENTS
+
+    dimension, material, _backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "synthetic.txt").write_text("synthetic workspace")
+    request = {"format_version": 1, "components": dict.fromkeys(COMPONENTS, "keep")}
+    first = bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert first["status"] == "saved"
+    # A newly present robot must not override an explicit omit or invoke RCC.
+    (workspace / "robot.yaml").write_text("synthetic: invalid-robot\n")
+    request["components"]["rcc_environment"] = "omit"
+    preview = bridge.preview_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert preview["component_plan"]["rcc_environment"]["state"] == "excluded"
+    assert preview["rcc_capture_pending"] is False
+    second = bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert second["status"] == "saved"
+    assert second["component_receipt"]["rcc_environment"]["status"] == "excluded"
+    third = bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert third["status"] == "already-saved"
+    assert third["component_selection_sha256"] == preview["component_selection_sha256"]
+    assert first["snapshot_id"] != second["snapshot_id"]
+
+
+def test_component_preview_token_refuses_new_latest_before_capture(tmp_path, monkeypatch):
+    from josh_room.component_selection import COMPONENTS
+    dimension, material, _backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    (workspace / 'notes.txt').write_text('synthetic one')
+    request = {'format_version': 1, 'components': dict.fromkeys(COMPONENTS, 'keep')}
+    preview = bridge.preview_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request)
+    from josh_room.cli import _bounded_json_result
+    preview = json.loads(json.dumps(_bounded_json_result(preview)))
+    assert len(preview['component_plan_token']) == 64
+    first = bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request, component_plan_token=preview['component_plan_token'])
+    assert first['status'] == 'saved'
+    with pytest.raises(bridge.RoomStoreBridgeError, match='stale'):
+        bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request, component_plan_token=preview['component_plan_token'])
+
+
+def test_changed_selected_homebrew_bytes_bypass_noop_and_omit_keeps_history(tmp_path, monkeypatch):
+    from josh_room.component_selection import COMPONENTS
+    from josh_room.room_store_homebrew import prepare_recipe_archive
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    (workspace / 'notes.txt').write_text('unchanged synthetic workspace')
+    recipe = tmp_path / 'recipe'
+    recipe.mkdir()
+    (recipe / 'Brewfile').write_text('brew "hello"\n')
+    archive = prepare_recipe_archive(recipe, tmp_path / 'synthetic.tar.zst')
+
+    class FixtureValidator:
+        def validate_brew_archive(self, path):
+            # This test qualifies Restic and selection semantics, not managed JAT.
+            assert path.name == 'homebrew-recovery.tar.zst'
+            assert path.stat().st_size > 0
+
+    monkeypatch.setattr(bridge, 'create_managed_hauler_adapter', lambda *_args, **_kwargs: FixtureValidator())
+    request = {'format_version': 1, 'components': {**dict.fromkeys(COMPONENTS, 'keep'), 'homebrew_recovery': 'refresh'}}
+
+    def save(selected, **options):
+        return bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=selected, **options)
+
+    first = save(request, homebrew_archive=archive, jat_root=tmp_path / 'fixture-jat')
+    assert first['status'] == 'saved'
+    assert save(request, homebrew_archive=archive, jat_root=tmp_path / 'fixture-jat')['status'] == 'already-saved'
+    (recipe / 'Brewfile').write_text('brew "jq"\n')
+    archive.unlink()
+    prepare_recipe_archive(recipe, archive)
+    changed = save(request, homebrew_archive=archive, jat_root=tmp_path / 'fixture-jat')
+    assert changed['status'] == 'saved'
+    assert changed['workspace_signature'] == first['workspace_signature']
+    assert changed['component_receipt']['homebrew_recovery']['reference']['archive_sha256'] != first['component_receipt']['homebrew_recovery']['reference']['archive_sha256']
+    keep = {'format_version': 1, 'components': dict.fromkeys(COMPONENTS, 'keep')}
+    assert save(keep)['status'] == 'already-saved'
+    historical_objects = set(backend.objects)
+    omit = {'format_version': 1, 'components': {**keep['components'], 'homebrew_recovery': 'omit'}}
+    omitted = save(omit)
+    assert omitted['status'] == 'saved'
+    assert omitted['component_receipt']['homebrew_recovery']['status'] == 'excluded'
+    assert historical_objects <= set(backend.objects)

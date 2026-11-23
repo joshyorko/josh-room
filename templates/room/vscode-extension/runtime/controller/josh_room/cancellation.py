@@ -162,7 +162,7 @@ def _signal_owned(target: _OwnedProcess, signum: int) -> None:
 def _wait_owned(process, targets: list[_OwnedProcess], timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if process.poll() is not None and not any(_owned_alive(target) for target in targets):
+        if (process is None or process.poll() is not None) and not any(_owned_alive(target) for target in targets):
             return
         remaining = deadline - time.monotonic()
         descriptors = [target.pidfd for target in targets if target.pidfd is not None and _owned_alive(target)]
@@ -251,3 +251,18 @@ def terminate_owned_process(process, platform: str | None = None, grace_seconds:
             process.wait(timeout=grace_seconds)
         except subprocess.TimeoutExpired:
             pass
+
+
+def terminate_owned_descendants(parent_pid: int, grace_seconds: float = 0.4) -> None:
+    """Stop a Linux Serve subreaper's adopted descendants without signalling it."""
+    targets = _snapshot_descendants(parent_pid)
+    try:
+        for target in targets:
+            _signal_owned(target, signal.SIGTERM)
+        _wait_owned(None, targets, grace_seconds)
+        for target in targets:
+            if _owned_alive(target):
+                _signal_owned(target, signal.SIGKILL)
+        _wait_owned(None, targets, grace_seconds)
+    finally:
+        _close_pidfds(targets)

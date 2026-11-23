@@ -1,0 +1,60 @@
+{
+  "format": "josh-room.coordinator-installed-linux-summary.v1",
+  "subject_sha": "cb860f7f9387aea1561ab1cefa2bc15cf6936325",
+  "result": "FAIL",
+  "installed_pilot_qualified": false,
+  "release_qualified": false,
+  "published": false,
+  "vsix_sha256": "a189d69fe846d2382e2af0c8bd77093dfe1534d6de8e272e9a0c924418170e1b",
+  "controller_environment": "sha256:94e93cf6d2d4109dd12118717f684302fa022b4d609ab1bf3bbf2d82a20f7f84",
+  "controller_rcca_sha256": "06e4cc9d4d781d79d7b16e7799880f84ded191501a22fc2b597134ac2564328d",
+  "provenance": "Summary of the independent installed-test lane's retained native evidence; direct CLI/current immutable RCC, not source-Python fallback. Coordinator verified package/runtime digests; data cases were executed by the test lane.",
+  "failures": [
+    {
+      "case": "registered New history chooser",
+      "boundary": "Dimension router removes legacy backend argument; controller status parser requires it",
+      "observed": "Both HISTORY rows unavailable despite direct status admission succeeding",
+      "target_descriptors_created": 0
+    },
+    {
+      "case": "new logical Room using an unchanged previously saved folder",
+      "boundary": "Restic automatic parent selection and skip-if-unchanged",
+      "diagnostic": "restic reported a no-op without a parent snapshot",
+      "target_descriptors_committed": 0
+    },
+    {
+      "case": "literal zero-wire-mutation assertion",
+      "observed": "FAIL: repeat includes three Restic lock PUT/DELETE pairs",
+      "lock_requests": 6,
+      "non_lock_payload_history_catalog_writes": 0,
+      "locks_disabled": false
+    }
+  ],
+  "direct_installed_cli_rcc_passes": {
+    "two_tool_save_and_reserved_ids": true,
+    "repeat_same_point_same_capture_ids": true,
+    "repeat_new_history_payload_bytes": 0,
+    "codex_a_b_a_three_distinct_events_one_workspace_point": true,
+    "claude_exact_reuse": true,
+    "changed_workspace_new_reserved_point": true,
+    "both_provider_exact_cold_historical_restore": true,
+    "original_source_profile_deleted_before_restore": true,
+    "restored_bytes_original_uuid_and_cwd_verified": true,
+    "native_provider_or_model_launches": 0
+  },
+  "not_qualified": [
+    "registered history chooser or restore",
+    "managed fault and exact retry cases",
+    "remaining native UI regression matrix",
+    "published legacy cold restore and rollback",
+    "immutable Windows RCC data acceptance",
+    "default runtime pins or release"
+  ],
+  "metrics": "Earlier source spies counted controller-provider API calls, not all Restic wire traffic. No-op payload publication and transient lock activity are separate observations; literal zero-wire failure is retained.",
+  "cleanup": {
+    "owned_services_and_private_scratch_removed": true,
+    "public_fixture_image_parent_lease_retained": true,
+    "public_fixture_image_bytes": 334313017
+  },
+  "release_hold": true
+}

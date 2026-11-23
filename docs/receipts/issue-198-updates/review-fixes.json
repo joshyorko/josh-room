@@ -1,0 +1,124 @@
+{
+  "issue": 198,
+  "pull_requests": [
+    216,
+    218
+  ],
+  "product_source_sha": "67fe8e036926929d7bd336d98ad63e9e344500cd",
+  "shared_product_sha": "5ba87102f730d06d8c204d533362fa2ced603cdf",
+  "release_hold": true,
+  "review": {
+    "result": "SCOPED CORRECTED",
+    "model": "Astra HIGH",
+    "scope": "reported inherited-policy/provenance/serialization/framing/accounting/ancestry corrections",
+    "reviewer_native_gate": "SKIP host Restic0.20; not a native pass"
+  },
+  "final_installed_artifact": {
+    "source": "67fe8e036926929d7bd336d98ad63e9e344500cd",
+    "python_modules": 73,
+    "vsix_sha256": "ff8be03d099978f38becd6bf5f3cffc2b1398ebe6196f204c0b4742b410df613",
+    "changed_module_sha256": {
+      "composition_lifecycle.py": "4f65e19b477262728912edd0718b19b7647bd62ccc5a72b725fdb3d4e84610de",
+      "composition_updates.py": "5c076bad114f7526e791b7f77a8ac26621e7195bb3510d5faf6a798de1461248",
+      "composition_safety.py": "977c45df4d9ab95dd906dfe81b744beff75978f0b9633dddd7b89a62ed4176f9",
+      "restic_store.py": "61b77d558d3bc75fc10fe0ad3afae8d2e12f38655849a9d29f24e7ac13f97d28",
+      "workspace_policy.py": "cd16f701584579a7328c41ab0636d25fc47a78af53bbf8b2f64f700e1af510be",
+      "logical_jat.py": "824356d91653b0eca6f1fdabd4394ecf3c5d0aa2895871a9074d23538dc29819"
+    },
+    "dirty_js_sha256": "d8c98f39d087c52dd01ac4d32cee01c97bf0e74dcb7936cc0eafb84731cd761c"
+  },
+  "runtime": {
+    "python": "3.12.14",
+    "restic": "0.19.1",
+    "age": "1.3.2",
+    "vsce": "4.0.0",
+    "override": "explicit existing Python executing installed controller modules; NOT immutable RCC",
+    "transport": "durable synthetic SQLite S3 object transport; NOT live provider"
+  },
+  "final_scoped_tests": {
+    "policy_binding_real": "5 passed,15 deselected in175.30s",
+    "installed_policy_binding_real": "1 passed,19 deselected in53.90s",
+    "cases": [
+      "unmarked and experimental-v1 legacy fresh-ID refusal",
+      "marked-v2 changed policy refused before staging/runtime/authority writes",
+      "fresh/no-op/committed retry reuse and unchanged-policy child Save",
+      "old/new exact payload restores preserve policy and exclude local-only reports",
+      "policy edits after backup and after descriptor PUT stop pin commitment"
+    ],
+    "installed_dirty_js": "PASS actual file reload,escaped hash,anchored path,ordinary comments,Python hash parity; dirty.js bytes unchanged from aa03",
+    "v2_compatibility": "PASS optional v1/v2 schema+reader; actual20ff and aa03 old decoders refuse v2; legacy descriptors read",
+    "base_new_compatibility": "PASS 4 narrow serialization/schema/policy cases, then1 v2 compatibility case"
+  },
+  "earlier_scoped_runs": [
+    {
+      "product": "4d8489597a8a92a156b3993b2d68d517df8ca744",
+      "real": "5 passed236.76s (framing,counts,ancestry,future rules)",
+      "installed_controller": "6 passed320.51s (same plus CLI-dispatch/old-new parent recovery)"
+    },
+    {
+      "product": "10f37708111b64593ad4d9ad60cf67ba39a99435",
+      "real": "4 initial capture crash/retry cases passed87.53s with real accounting"
+    },
+    {
+      "product": "aa03d9e02202357161c307e1dee61e19cffb441b",
+      "real": "2 provenance/hash-rule cases passed61.75s",
+      "installed_controller": "2 passed61.35s",
+      "ordinary_opt_out": "1 real Save/no-op/incremental/restore passed12.44s; every publication lacks composition provenance",
+      "admission_unit": "249 passed,1 integration deselected,47subtests;17 native dirty/catalog tests;1 additional Python/native hash-parity case"
+    }
+  ],
+  "retained_broad_result": {
+    "product": "4d8489597a8a92a156b3993b2d68d517df8ca744",
+    "result": "7 failed,2370 passed,6 skipped,33 integration deselected,47subtests in86.04s",
+    "failures": "PCC config-untrusted: sandbox maps root ancestors to UID65534; unchanged trust checks",
+    "affected_host_rerun": "17 PCC tests passed1.85s in normal host UID mapping",
+    "initial_attempt": "aborted after sandbox npm network denial; not a pass"
+  },
+  "old_reader_evidence": [
+    {
+      "source": "20ff8fa489df9b759084a794837b3ae2ae6716fa",
+      "module_sha256": "93f95b1213f1bfca3c952938494fdc6e86fccc541eba65f3bac1cad990b71a74",
+      "old_read": true,
+      "new_v2_refused": true
+    },
+    {
+      "source": "aa03d9e02202357161c307e1dee61e19cffb441b",
+      "module_sha256": "31800fdb52d23ea64a62f7f28e26915bf6e39c9b98ba0143b45b25b6877e675d",
+      "old_read": true,
+      "new_v2_refused": true
+    }
+  ],
+  "limits": [
+    "Linux source-only/component-free",
+    "all policy changes including comments refused; explicit reconciliation unsupported",
+    "absent/experimental-v1 provenance descriptors remain readable/restorable but cannot authorize updates",
+    "pre-backup claims and changed reserved requests require reconciliation",
+    "128 child updates/32 parent operations; no trimming",
+    "local policy/binding and remote publication are not atomic; late local edits remain unverified",
+    "native registered dialogs at corrected source NOT RUN",
+    "corrected-source real MinIO/R2/S3 NOT RUN",
+    "installed immutable RCC and native Windows composition NOT RUN",
+    "unload/deletion/large-resource envelope NOT qualified"
+  ],
+  "secret_scan": {
+    "files": 38,
+    "findings": 1,
+    "hits": [
+      {
+        "file": "tests/test_restic_store.py",
+        "ruleId": "@secretlint/secretlint-rule-basicauth",
+        "line": 885
+      }
+    ],
+    "version": "10.2.2",
+    "baseline_hits": [
+      {
+        "file": "tests/test_restic_store.py",
+        "ruleId": "@secretlint/secretlint-rule-basicauth",
+        "line": 885
+      }
+    ],
+    "introduced_findings": 0,
+    "classification": "one unchanged synthetic BasicAuth-rejection fixture; zero introduced findings"
+  }
+}

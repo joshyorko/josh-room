@@ -1,0 +1,53 @@
+{
+  "source_sha": "1ebb277f43e51c333fb9aeb577b6c7a70972448e",
+  "packages": [
+    {
+      "filename": "josh_room-0.1.0.dev0-py3-none-any.whl",
+      "sha256": "f43c89e755642b8b974065ef928283901db2b0fb52d249ccdc56e4fd4ce8bc38",
+      "size": 1802160
+    },
+    {
+      "filename": "josh-room-0.1.52.vsix",
+      "sha256": "7a3bb8a8362d540be2180620df1aca87736536175224c39488fd51fcb0da078c",
+      "size": 1846521
+    }
+  ],
+  "published": false,
+  "release_qualified": false,
+  "default_pins_changed": false,
+  "platform": "linux-x64",
+  "scope": "Installed immutable VSIX controller inside exact current CI-acquired RCC dependency environment via explicit runtime selection hook. No host-Python fallback or live integration worktree imports. Real registered native UI; synthetic data only. CLI entry is RCC env exec -- python -m josh_room using the installed VSIX controller; installed wheel was not substituted.",
+  "controller_environment": "sha256:71b2f5cdeb2f1c08dcd122b8899adfe72d881f25e0c61e50716d9f9211d37c10",
+  "controller_archive_sha256": "5e2d6d26b6075768608d8d51fe3db532ce1cb3553e44b8798851fe1dbb5fead5",
+  "controller_ci_run": 45060569301,
+  "jat_environment": "sha256:ae8e02e83daaa7ec87b0538d37a34f2114e393888b999e67c646478d63410cd2",
+  "jat_archive_sha256": "8e39aa721e60db98dd3f047d3277d1bf252b0a181c67ddd75c7b9e152cbd549c",
+  "jat_source_sha": "1eb2d9ffe638dc66f04e1f90256dca021f979b3c",
+  "jat_published": false,
+  "data_gates": {
+    "native_ordinary_save": "PASS",
+    "native_ordinary_diff": "PASS",
+    "composition_installed_cli": "PASS",
+    "native_selective_extract": "PASS",
+    "native_ordinary_enter": "PASS",
+    "native_child_save": "PASS",
+    "explicit_session_capture_restore_history": "NOT RUN",
+    "native_child_recovery": "PASS",
+    "native_parent_refresh": "PASS"
+  },
+  "workbench_close_seconds": 2.172,
+  "inner_rcc_failure_seconds": 0.92,
+  "caller_owned_startup_receipt": "expected retained; native invocation directory removed on workbench close",
+  "cleanup": {
+    "owned_processes_remaining": [],
+    "public_fixture_image": "retained while separate producer lease active"
+  },
+  "explicit_limits": [
+    "session capture/restore/history NOT RUN in this trial",
+    "all agent Save selectors unavailable",
+    "newer Save adapter not included in frozen source",
+    "native Windows installed trial separate",
+    "installed wheel not substituted for VSIX controller data gates",
+    "default published runtime pins unchanged"
+  ]
+}

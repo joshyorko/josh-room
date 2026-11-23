@@ -29,7 +29,7 @@ def _signature(metadata):
 
 
 def capture_homebrew_component(
-    *, archive, prior_component, repository_id, repository_format, restic, validator, cancellation=None,
+    *, archive, prior_component, repository_id, repository_format, restic, validator, cancellation=None, installed_manifest_sha256=None,
 ) -> dict:
     _cancelled(cancellation)
     if repository_format != 2 or not isinstance(repository_id, str) or _SHA256.fullmatch(repository_id) is None:
@@ -91,7 +91,13 @@ def capture_homebrew_component(
                 if copied != before.st_size or copied_digest.hexdigest() != sha256:
                     raise RoomStoreHomebrewError("Homebrew archive changed during capture")
                 try:
-                    validator().validate_brew_archive(owned)
+                    if installed_manifest_sha256 is not None:
+                        from .homebrew_prefix import manifest_digest, read_archive
+                        installed, _data = read_archive(owned)
+                        if manifest_digest(installed) != installed_manifest_sha256:
+                            raise ValueError('installed capture manifest changed')
+                    else:
+                        validator().validate_brew_archive(owned)
                 except (OSError, RuntimeError, TypeError, ValueError):
                     raise RoomStoreHomebrewError("saved Homebrew archive failed JAT validation") from None
                 _cancelled(cancellation)
@@ -112,3 +118,59 @@ def capture_homebrew_component(
         raise
     except OSError:
         raise RoomStoreHomebrewError("saved Homebrew archive is unavailable") from None
+
+
+def recipe_bytes(directory: Path) -> bytes:
+    """Read a bounded Brewfile-only export; never traverse a Homebrew prefix."""
+    directory = Path(directory).absolute()
+    try:
+        if os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+            raise RoomStoreHomebrewError("Homebrew recipe directory capture is not qualified on this platform")
+        # Anchor every ancestor in a no-follow directory descriptor. The final
+        # read never resolves a path through a replaceable ancestor again.
+        descriptor = os.open(directory.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for part in directory.parts[1:]:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+            if set(os.listdir(descriptor)) != {"Brewfile"}:
+                raise RoomStoreHomebrewError("Select a Brewfile-only recipe directory or a prepared recovery archive")
+            target_info = os.stat("Brewfile", dir_fd=descriptor, follow_symlinks=False)
+            target_descriptor = os.open("Brewfile", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor)
+        finally:
+            os.close(descriptor)
+        with os.fdopen(target_descriptor, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 < before.st_size <= 1024 * 1024:
+                raise RoomStoreHomebrewError("Brewfile must be a bounded regular file without hardlinks")
+            data = handle.read(1024 * 1024 + 1)
+            if len(data) != before.st_size or _signature(os.fstat(handle.fileno())) != _signature(before) or _signature(target_info) != _signature(before):
+                raise RoomStoreHomebrewError("Homebrew recipe changed while reading")
+        return data
+    except OSError:
+        raise RoomStoreHomebrewError("Homebrew recipe is unavailable") from None
+
+
+def prepare_recipe_archive(directory: Path, output: Path) -> Path:
+    """Package inert recipe bytes; JAT validates the resulting recovery archive."""
+    import io
+    import tarfile
+
+    import zstandard
+
+    data = recipe_bytes(directory)
+    with Path(output).open("xb") as raw:
+        protect_private_file(output)
+        with zstandard.ZstdCompressor().stream_writer(raw, closefd=False) as compressed, tarfile.open(fileobj=compressed, mode="w|") as archive:
+            directory_member = tarfile.TarInfo("homebrew-recovery")
+            directory_member.type = tarfile.DIRTYPE
+            directory_member.mode = 0o700
+            archive.addfile(directory_member)
+            member = tarfile.TarInfo("homebrew-recovery/Brewfile")
+            member.mode = 0o600
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    if recipe_bytes(directory) != data:
+        raise RoomStoreHomebrewError("Homebrew recipe changed during preparation")
+    return Path(output)

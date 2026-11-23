@@ -1,0 +1,23 @@
+{
+  "installed": true,
+  "source": "0.1.52",
+  "platform": "linux",
+  "architecture": "x64",
+  "renderedNativePicker": true,
+  "unavailableRowsRendered": true,
+  "defaultKeepSelection": {
+    "format_version": 1,
+    "components": {
+      "rcc_environment": "keep",
+      "homebrew_recovery": "keep",
+      "hauler_content": "keep"
+    }
+  },
+  "cancellationPassed": true,
+  "deselectAllOptionalPassed": true,
+  "fullSave": "NOT RUN: no qualified synthetic provider/managed runtime in isolated profile",
+  "nativeBinaryRestore": "NOT RUN",
+  "vsix_sha256": "6f7e38e8b2d1fbac5ae4799ddb382c27cf0cd358c9c7bc365daabdedc3212a0b",
+  "implementation_commit": "3748ec2439b7a76c590d1ea91bf58576a3647067",
+  "packaged_source_byte_parity": true
+}

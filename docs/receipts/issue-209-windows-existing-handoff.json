@@ -1,0 +1,30 @@
+{
+  "gate": "native-windows-registered-existing-handoff",
+  "status": "PARTIAL",
+  "source_head": "059c9239ea699db4444b7e8e5fb5b0ea73f880c1",
+  "tested_merge_sha": "70e1648045c0876a466e9aea5088b79fe10c5653",
+  "runtime": "installed-source-Python-guard-delegating-real-module-CLI-not-immutable-RCC",
+  "storage": "real loopback MinIO",
+  "job": "https://github.com/joshyorko/josh-room/actions/runs/45062870158/job/137332504219",
+  "artifact": "https://github.com/joshyorko/josh-room/actions/runs/45062870158/artifacts/14770427060",
+  "artifact_sha256": "caf7e70e040aa7e3b939ad193ee63a04636df3573cc2c2c30281c6e4cab5c7c6",
+  "vsix_sha256": "925812ddd8ff985972b26a9a2c986196895b373088184f80ef470a715d62e87d",
+  "installed_package_files_compared": 115,
+  "native_empty_file_and_directory_acl_preflight": "PASS",
+  "real_vscode_secret_storage_enrollment": "PASS",
+  "registered_browse_native_picker": "PASS",
+  "registered_existing_private_handoff_calls": [
+    {"action": "tree", "native_private_existing_handoff": true, "cli_exit_status": 0},
+    {"action": "diff", "native_private_existing_handoff": true, "cli_exit_status": 0},
+    {"action": "tree", "native_private_existing_handoff": true, "cli_exit_status": 0}
+  ],
+  "workspace_and_room_marker_unchanged": true,
+  "native_vault_cleanup": "PASS",
+  "ui_boundary": "harness timed out checking modified editor focus through DOM ancestry",
+  "unproven": [
+    "native readonly editor typing rejection and exact rendered text",
+    "registered selective extract and cancellation through existing handoffs",
+    "immutable feature RCC artifact",
+    "integrated release acceptance"
+  ]
+}

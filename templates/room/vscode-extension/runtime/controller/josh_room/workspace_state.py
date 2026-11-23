@@ -120,6 +120,7 @@ def write_stat_workspace_marker(
     signature_algorithm: str,
     capture_policy_sha256: str,
     path_binding: Path | None = None,
+    composition_namespace: str | None = None,
 ) -> dict:
     """Atomically write the local, non-authoritative stat baseline marker."""
     workspace = Path(workspace)
@@ -149,6 +150,10 @@ def write_stat_workspace_marker(
         "signature_algorithm": signature_algorithm,
         "capture_policy_sha256": capture_policy_sha256,
     }
+    if composition_namespace is not None:
+        if not isinstance(composition_namespace, str) or re.fullmatch('[a-f0-9]{32}', composition_namespace) is None:
+            raise ValueError('invalid composition namespace marker')
+        marker.update(format_version=4, composition_namespace=composition_namespace)
     _write_marker_atomically(workspace, marker)
     return marker
 
@@ -192,7 +197,7 @@ def _validate_workspace_marker(marker: object) -> dict:
             raise ValueError("marker display_name is invalid")
         return marker
     if marker.get("format_version") != 2:
-        if marker.get("format_version") != 3:
+        if marker.get("format_version") not in {3, 4}:
             raise ValueError("unsupported workspace marker format")
         required = {
             "format_version", "dimension_id", "encryption_domain_id",
@@ -200,6 +205,10 @@ def _validate_workspace_marker(marker: object) -> dict:
             "workspace_path_sha256", "workspace_signature", "signature_algorithm",
             "capture_policy_sha256",
         }
+        if marker['format_version'] == 4:
+            required.add('composition_namespace')
+            if not isinstance(marker.get('composition_namespace'), str) or re.fullmatch('[a-f0-9]{32}', marker['composition_namespace']) is None:
+                raise ValueError('invalid composition namespace marker')
         if set(marker) != required:
             raise ValueError("workspace marker v3 fields are invalid")
         for label in (
@@ -258,11 +267,11 @@ def context_status(workspace: Path) -> dict:
         if len(data) > _CONTEXT_MARKER_LIMIT:
             return result
         marker = _validate_workspace_marker(json.loads(data))
-        if marker.get("format_version") not in {2, 3}:
+        if marker.get("format_version") not in {2, 3, 4}:
             return result
         path_matches = marker["workspace_path_sha256"] == canonical_workspace_path_sha256(Path(workspace))
         if not path_matches:
-            return result
+            return {**result, **({'composition_namespace': marker['composition_namespace']} if marker['format_version'] == 4 else {})}
         return {
             "format_version": 1,
             "ok": True,
@@ -272,6 +281,7 @@ def context_status(workspace: Path) -> dict:
             "dimension_id": marker["dimension_id"],
             "project_id": marker["project_id"],
             "display_name": marker["display_name"],
+            **({'composition_namespace': marker['composition_namespace']} if marker['format_version'] == 4 else {}),
             **({"snapshot_id": marker["snapshot_id"]} if marker["format_version"] == 2 else {
                 "encryption_domain_id": marker["encryption_domain_id"],
                 "snapshot_id": marker["snapshot_id"],
@@ -291,7 +301,7 @@ def local_status(workspace: Path) -> dict:
     except ValueError as error:
         return {"ok": False, "state": "unlinked", "workspace": str(workspace), "error": str(error)}
     current_path = canonical_workspace_path_sha256(workspace)
-    if marker.get("format_version") == 3:
+    if marker.get("format_version") in {3, 4}:
         try:
             from .room_store_operations import scan_workspace_for_status
 

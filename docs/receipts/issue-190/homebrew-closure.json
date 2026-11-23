@@ -1,0 +1,91 @@
+{
+  "archives": {
+    "original_keg_archive": {
+      "bytes": 450560,
+      "sha256": "fd180f81a02f483d84151ecf6a4a6dd94bafb0aad606a93ab12da2e137966721"
+    },
+    "synthetic_declared_linkage_archive": {
+      "bytes": 450560,
+      "original_keg_links": [
+        "bin/hello",
+        "opt/hello"
+      ],
+      "reconstructed_link": {
+        "name": "lib/ld.so",
+        "provenance": "manually reconstructed from the observed source prefix alias; not captured original source bytes",
+        "target": "/lib64/ld-linux-x86-64.so.2"
+      },
+      "sha256": "a4f63f0db9ca153e48404166e914d2bbda88d216667654940a0b8e7ec6c8bd75"
+    }
+  },
+  "cleanup": {
+    "owned_trial_container": "removed",
+    "public_image_tags": "removed by parent with non-force exact image IDs after fresh checks proved zero container references and only task-created tags; initial automatic-review rejection retained in audit",
+    "raw_trial_scratch_bytes": 982442,
+    "retained_public_source_image_bytes": 0,
+    "retained_public_target_image_bytes": 0,
+    "unique_temporary_checkpoint_image": "removed"
+  },
+  "date": "2026-11-22",
+  "format_version": 1,
+  "limits": [
+    "One formula only, with no declared formula dependencies; not a general dependency-closure algorithm.",
+    "Only Ubuntu 22.04.5 x86_64 and exact standard prefix tested.",
+    "OS loader linkage was reconstructed explicitly; target OS runtime libraries were not captured or restored.",
+    "No JAT/Room Store component capture, installed VSIX restore, existing-prefix collision, services, macOS, Windows or different-prefix qualification.",
+    "No host prefix modified or user data read.",
+    "Installed-prefix option must remain unavailable until closed schema/lifecycle, provenance, OS ABI/link policy and broader restore gates qualify."
+  ],
+  "results": {
+    "all_58_regular_file_digests_equal_to_source_archive": true,
+    "hello_custom_greeting": "synthetic room190 closure",
+    "hello_version": "hello (GNU Hello) 2.12.3",
+    "initial_target_setup": "FAIL: implicit noexec tmpfs; corrected by explicit exec mount before dependency testing",
+    "keg_only_execution_without_loader": "FAIL as expected: missing prefix loader",
+    "no_unrelated_prefix_files": true,
+    "source_install": "PASS",
+    "target_process_exit_code": 0,
+    "target_topology_equals_declared_archive": true
+  },
+  "scope": "synthetic package/declared-linkage research; not installed-prefix product support",
+  "selection": {
+    "binary_sha256": "cbee33818fb29e6765db790c53c0dc20c59790991fc6d92226c255ecacff6e87",
+    "bottle": {
+      "cellar": "/home/linuxbrew/.linuxbrew/Cellar",
+      "sha256": "ab40f4006173c63e0d138bdd2b6634ee467f4685c2b130a3edaa712bfee0809a",
+      "url": "https://ghcr.io/v2/homebrew/core/hello/blobs/sha256:ab40f4006173c63e0d138bdd2b6634ee467f4685c2b130a3edaa712bfee0809a"
+    },
+    "dependency_command": "brew deps --installed --include-implicit hello",
+    "formula": "hello",
+    "formula_runtime_dependencies": [],
+    "original_regular_file_bytes": 344937,
+    "original_regular_file_count": 58,
+    "version": "2.12.3"
+  },
+  "source": {
+    "architecture": "x86_64",
+    "baseline_formulae": [],
+    "homebrew_version": "4.6.20",
+    "image": "homebrew/brew@sha256:b0072bfdebf5934ae24b93b44a1928a88057399b3283ffa0177bb86084fdedfd",
+    "os": "Ubuntu 22.04.5 LTS",
+    "prefix": "/home/linuxbrew/.linuxbrew"
+  },
+  "system_runtime": {
+    "qualification": "target OS ABI prerequisite; source/target system-library bytes differ",
+    "restored_from_archive": false,
+    "source_libc_sha256": "6e28ee37e8e1ee5ddb4292d58a668b8cd5bb5f928390b07021d842a91fff9f2b",
+    "source_loader_sha256": "9739c1dc9bff2b11533a38d4218a1a926638a4d8262ef1c9d75c17290ac257e9",
+    "target_libc_sha256": "4ebb1967c395ca547dcfeaeeab7a2819724604a331aede44e8a749a7e1a4628e",
+    "target_loader_sha256": "a87fec14aeedb537d0b2a80c6a3308b82e774d86541dff4654a75ab1fd22df0a"
+  },
+  "target": {
+    "all_capabilities_dropped": true,
+    "architecture": "x86_64",
+    "image": "ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6",
+    "network": "none",
+    "os": "Ubuntu 22.04.5 LTS",
+    "prefix": "/home/linuxbrew/.linuxbrew",
+    "prefix_initial_state": "empty private 16MiB executable tmpfs",
+    "root_filesystem": "read-only"
+  }
+}

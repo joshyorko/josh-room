@@ -1,0 +1,45 @@
+{
+  "checks": {
+    "duplicate_names": {
+      "independent_paths_preserved": false,
+      "ok": true,
+      "same_name_result": "second"
+    },
+    "individual_files": {
+      "encoded_parent_traversal_served": false,
+      "foreign_host_status": 200,
+      "nested_add_exit": 0,
+      "nested_bytes_match": true,
+      "nested_get_status": 200,
+      "nested_listing_status": 200,
+      "ok": true,
+      "one_shot_projection_frozen_after_live_edit": true,
+      "symlink_outside_projection_served": true,
+      "wildcard_listener_in_isolated_namespace": true
+    },
+    "jat_shaped_archive_projection": {
+      "jat_capture_executed": false,
+      "nested_path_status": 404,
+      "ok": true
+    }
+  },
+  "environment": {
+    "hauler_present": true,
+    "hauler_sha256": "68deab80633307d3834c52d40d5b39d8f06e9636f94896beff03f69217b907b4",
+    "hauler_version": "2.1.1",
+    "netns_error": "",
+    "netns_isolation_available": true,
+    "rcc_present": true
+  },
+  "limits": [
+    "Linux amd64 only; not Windows qualification",
+    "Synthetic archive layout, not a JAT capture/restore run",
+    "Isolated namespace only; not extension installed-runtime acceptance",
+    "No basic-auth/TLS qualification"
+  ],
+  "live_hauler_binary_executed": true,
+  "mode": "live",
+  "network_namespace_isolated": true,
+  "ok": true,
+  "status": "completed"
+}

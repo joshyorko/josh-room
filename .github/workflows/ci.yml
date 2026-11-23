@@ -71,7 +71,7 @@ jobs:
         run: uv run python scripts/request_release.py validate --root . --branch "$SOURCE_BRANCH"
       - run: uv run ruff check src tests
       - run: uv run pytest -q
-      - run: node --test vscode-extension/*.test.js scripts/verify_node_version.test.js
+      - run: node --test vscode-extension/*.test.js scripts/verify_node_version.test.js scripts/room_view_*.test.js scripts/installed_recovery_runtime.test.js
       - run: node --experimental-strip-types --test omp-extension/tests/*.test.mjs
       - run: git diff --check
 
@@ -89,6 +89,158 @@ jobs:
         env:
           PYTHONPATH: vscode-extension/runtime/controller
         run: python scripts/verify_private_runtime.py
+      - uses: astral-sh/setup-uv@v10.0.1
+      - name: Verify Windows component selection and installed-prefix refusal
+        run: uv run pytest -q tests/test_homebrew_prefix.py tests/test_homebrew_declared.py tests/test_component_selection.py tests/test_serve_job_windows.py
+
+  windows-recovery:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv sync --group dev
+      - name: Install checksum-pinned Windows Restic
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP "recovery-restic"
+          $receipt = uv run python scripts/install_restic.py --manifest vscode-extension/runtime/restic-manifest.json --destination $destination --platform win32-x64
+          if ($LASTEXITCODE -ne 0) { throw "Pinned Restic installation failed" }
+          $pin = $receipt | ConvertFrom-Json
+          "JOSH_ROOM_TEST_RESTIC=$($pin.executable)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $receipt | Set-Content (Join-Path $env:RUNNER_TEMP "recovery-restic.json")
+      - name: Verify native pinned recovery and no-clobber boundaries
+        shell: pwsh
+        run: uv run pytest tests/test_recovery_windows.py tests/test_recovery_text.py tests/test_encryption_windows.py tests/test_encryption_handoff_input.py -q -s --junitxml="$env:RUNNER_TEMP/recovery-windows.xml"
+      - name: Upload native recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-recovery-evidence
+          path: |
+            ${{ runner.temp }}/recovery-restic.json
+            ${{ runner.temp }}/recovery-windows.xml
+          if-no-files-found: error
+
+  windows-installed-recovery:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      JOSH_ROOM_ACCEPTANCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv sync --group dev
+      - name: Qualify installed registered recovery with native Windows custody
+        shell: pwsh
+        run: |
+          node scripts/verify_node_version.js --minimum $env:NODE_VERSION --source-sha $env:GITHUB_SHA --report (Join-Path $env:RUNNER_TEMP "windows-recovery-node.json")
+          if ($LASTEXITCODE -ne 0) { throw "Patched Node runtime verification failed" }
+          node --test scripts/installed_recovery_runtime.test.js
+          if ($LASTEXITCODE -ne 0) { throw "Installed runtime adapter regression failed" }
+          $python = uv run python -c "import sys; print(sys.executable)"
+          if ($LASTEXITCODE -ne 0) { throw "Project Python unavailable" }
+          $env:JOSH_ROOM_ACCEPTANCE_PYTHON = $python.Trim()
+          $env:JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE = Join-Path $env:RUNNER_TEMP "windows-installed-recovery-evidence"
+          node scripts/windows_handoff_probe.js
+          if ($LASTEXITCODE -ne 0) { throw "Native pre-write ACL dependency failed before downloads" }
+          node scripts/windows_recovery_installed.js
+          if ($LASTEXITCODE -ne 0) { throw "Installed Windows qualification failed; inspect sanitized receipt" }
+      - name: Upload sanitized installed recovery evidence only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installed-recovery-evidence
+          path: ${{ runner.temp }}/windows-installed-recovery-evidence/*.json
+          if-no-files-found: error
+
+  windows-immutable-recovery-022ddef:
+    # Explicit unpublished qualification input, never a product/default runtime pin.
+    # Owner applies this label before pushing the acceptance-only checkpoint.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'qualify-windows-rcc-022ddef')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CANDIDATE_SUBJECT: 022ddefd1218d73a836b2e81d37f1b954e4f4373
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Verify patched Node 22 runtime
+        shell: pwsh
+        run: |
+          node scripts/verify_node_version.js --minimum "$env:NODE_VERSION" --source-sha "$env:GITHUB_SHA" --report "$env:RUNNER_TEMP/windows-immutable-node-runtime.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Patched Node runtime verification failed.' }
+      - name: Retrieve existing exact-subject inputs without solve or product rebuild
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'immutable-recovery-inputs'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $inputs = @(
+            @{ Id = '14775243343'; Name = 'controller'; Sha = '2cd4f293a7753858cd30cb48097d48542b7974426c5a11127dc4c6444f8e788b' },
+            @{ Id = '14774839605'; Name = 'product'; Sha = 'd1e26a9564d44cea48fc0b843c4c8b953285ff09a68095099b7110b24f7be473' }
+          )
+          foreach ($inputAsset in $inputs) {
+            $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($inputAsset.Id)"
+            $metadata = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 30
+            if ($metadata.expired -or $metadata.workflow_run.head_sha -ne $env:CANDIDATE_SUBJECT) { throw 'Subject artifact expired or belongs to another source.' }
+            $archive = Join-Path $root "$($inputAsset.Name).zip"
+            Invoke-WebRequest -Uri "$uri/zip" -Headers $headers -OutFile $archive -TimeoutSec 120
+            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne $inputAsset.Sha) { throw 'Subject artifact ZIP digest mismatch.' }
+            Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $root $inputAsset.Name)
+          }
+          $pin = Get-Content (Join-Path $root 'controller/josh-room-controller-windows-amd64.json') | ConvertFrom-Json
+          if ($pin.source -ne $env:CANDIDATE_SUBJECT -or $pin.artifact_digest -ne 'sha256:756b529af1dda6a5da65cda69684d294e7ef6056a5922160e7d4f894f5511192' -or !$pin.verified_no_build) { throw 'Candidate RCCA subject receipt mismatch.' }
+          $candidate = @{
+            subject_sha = $env:CANDIDATE_SUBJECT
+            vsix = (Join-Path $root 'product/win32-x64/candidate.vsix')
+            vsix_sha256 = '5306c503c202559f3809c292ba400ab21db7eb345e090efff429675d1e9d218b'
+            archive = (Join-Path $root 'controller/josh-room-controller-windows-amd64.rcca')
+            archive_sha256 = '971e529bceb0d57eb694a497fc8b3569f80ff85c8f70c45d3c32453a64b28c4d'
+            artifact = $pin.artifact_digest
+          }
+          $candidatePath = Join-Path $root 'candidate.json'
+          $candidate | ConvertTo-Json | Set-Content $candidatePath -Encoding utf8NoBOM
+          "JOSH_ROOM_ACCEPTANCE_RCC_CANDIDATE=$candidatePath" >> $env:GITHUB_ENV
+          "JOSH_ROOM_ACCEPTANCE_HEAD_SHA=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_ENV
+          "JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE=$(Join-Path $env:RUNNER_TEMP 'immutable-recovery-evidence')" >> $env:GITHUB_ENV
+      - name: Qualify installed native recovery through the immutable candidate
+        shell: pwsh
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          node --test scripts/installed_recovery_runtime.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate adapter contract failed.' }
+          node scripts/windows_recovery_installed.js
+          if ($LASTEXITCODE -ne 0) { throw 'Immutable installed recovery failed; inspect sanitized receipt.' }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-immutable-recovery-022ddef
+          path: ${{ runner.temp }}/immutable-recovery-evidence/*.json
+          if-no-files-found: error
 
   managed-runtime-consumer:
     strategy:

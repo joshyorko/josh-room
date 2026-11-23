@@ -30,10 +30,13 @@ not claim byte identity with a historical monolithic archive.
 The output is create-only. JAT builds into an unpublished temporary file, and
 Josh Room promotes it with an atomic no-replace link only after inspection,
 restore, and identity checks succeed. Cancellation and every failure remove
-staging and leave no promoted partial capsule. Disk preflight reserves twice the
-descriptor's logical workspace and component archive bytes for materialization
+staging and leave no promoted partial capsule. Disk preflight reserves eight times the
+descriptor's logical workspace and component archive bytes, plus 512 MiB, for materialization
 and output work; this is an estimate, since the final Hauler capsule can be
 larger than its inputs.
+
+Export and Serve failures retain the `portable-export-failed` error code and
+include the path-free export reason in `diagnostic` in the controller JSON result.
 
 The helper returns a bounded `PortableExportResult`: logical JAT ID, status,
 output size and SHA-256, workspace entry count, verified component names, and
@@ -71,3 +74,64 @@ Historical Room Store snapshots that excluded `.git` cannot regain that data
 through portable export; the capsule faithfully represents their incomplete
 recorded contents. Create a new recovery point from an intact workspace before
 relying on Git recovery.
+
+## Native serving endpoints
+
+`josh-room snapshot serve <room>`, legacy `josh-room serve <room>`, and
+`josh-room jat serve --haul <file>` forward `--fileserver-port`, `--registry-port`
+and `--startup-file` to JAT. Port `0` (the default) requests automatic allocation;
+explicit nonzero ports must be honored by JAT or fail. Room never probes a free
+port and then asks JAT to bind it.
+
+The extension uses a unique private directory per Serve invocation. JAT publishes
+an atomic new-file-only startup receipt after its owned listeners are ready:
+`{schema_version: 1, state: "ready", operation: "serve", pid, serve: {mode,
+fileserver_url, registry_url, fileserver_bind, registry_bind}}`. Mode is resolved
+(`files`, `registry`, `both`); inactive URL/bind values are null. Fileserver
+bind is `all-interfaces` on unpatched Hauler 2.1.1 (or `loopback` when explicitly
+provided by a capable runtime); registry bind must remain `loopback`. Room
+requires explicit `http://127.0.0.1:<port>` URLs, validates the mode and endpoints, and reads the registry catalog only from that session's URL.
+Status, copy actions and image references use those URLs, never 8080/5000 guesses.
+A localhost connection URL does not imply a localhost-only listener. Normal
+startup/status wording names the actual fileserver scope; it never describes
+wildcard artifact serving as private.
+JAT removes the startup file on graceful shutdown. An interrupted managed
+process may leave that caller-owned file behind; it is not proof that a listener
+is still running. The extension removes its entire private invocation directory
+when the terminal closes and verifies session liveness before copying pull
+references. CLI callers must use a fresh private startup path per invocation;
+Room does not delete an arbitrary caller-supplied path on cancellation. A
+verified RCC signal exit and Ctrl-C are reported as cancellation, not success
+or an artifact identity mismatch. Room watches the per-session
+controller result, RCC receipt, terminal lifecycle and an interruption-safe
+command completion marker during startup, surfacing
+export/unsupported-runtime failure immediately rather than waiting on a default
+port. There is no browser action service or Room-owned port allocator.
+
+On Linux, foreground Serve uses a task-scoped child guard with an anonymous
+lifetime pipe owned only by the Room CLI. The guard blocks on that pipe and
+the RCC pidfd; controller disappearance closes the pipe and terminates the
+owned RCC/JAT descendants, including detached listeners. The guard is a Linux
+child subreaper, so an RCC exit also adopts and stops its surviving descendants
+before releasing output pipes. Shutdown rechecks and reaps until the kernel
+reports no children; a single changing process-tree snapshot is not sufficient.
+It exits with the
+operation and creates no persistent service, state file or polling task.
+Linux without pidfd support fails before starting a listener. On Windows, the
+dedicated Serve CLI joins an anonymous kill-on-close Job Object before spawning
+RCC; setup or nested-job refusal fails before Serve. Native platform tests must
+qualify these guarantees. Forced death of the Linux guard itself or a hostile
+late detached fork is outside the owned-process cleanup guarantee.
+
+This is a source-level integration with the JAT dynamic-serving branch. Current
+released JAT pins lack startup reporting; source preflight fails before Room
+materialization when that support is absent. Unpatched Hauler 2.1.1 is supported
+for artifact files/registry/both/auto serving; no Hauler patch or new release is
+required. A matching qualified JAT runtime, paired managed artifacts and
+installed-extension acceptance remain required before pin promotion. Tests of
+source JAT with the unchanged Hauler pin are separate from those runtime gates.
+The optional upstream Hauler bind-host proposal is not a blocker for artifact
+serving or #202. Room View retains its own strict localhost-only transport.
+No pin, release or live service is changed here. The original
+`portable-export-failed` incident remains separate: a port collision has not
+been established as its cause.

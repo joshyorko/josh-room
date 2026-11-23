@@ -5,6 +5,77 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { followLogFile, stageForLog, waitForRegistry } = require("./registry");
+const { validateServeStartup, waitForServeStartup, probeRegistry, probeFileserver } = require("./registry");
+
+function startup(mode, fileserverUrl = null, registryUrl = null) {
+  return { schema_version: 1, state: "ready", operation: "serve", pid: process.pid, serve: {
+    mode, fileserver_url: fileserverUrl, registry_url: registryUrl,
+    fileserver_bind: fileserverUrl ? "loopback" : null,
+    registry_bind: registryUrl ? "loopback" : null,
+  } };
+}
+
+test("startup receipts accept truthful artifact scope but reject unsafe URLs and non-loopback registries", () => {
+  const good = startup("files", "http://127.0.0.1:41257");
+  assert.equal(validateServeStartup(good, "auto").fileserver_url, good.serve.fileserver_url);
+  for (const url of ["http://example.test:8080", "http://127.0.0.1:0", "http://127.0.0.1:99999",
+    "http://user@127.0.0.1:8080", "http://127.0.0.1:8080/path", "http://127.0.0.1:8080?token=x"]) {
+    assert.throws(() => validateServeStartup(startup("files", url)));
+  }
+  assert.throws(() => validateServeStartup(good, "registry"));
+  assert.throws(() => validateServeStartup({ ...good, serve: { ...good.serve, registry_bind: "all-interfaces" } }));
+  assert.throws(() => validateServeStartup({ ...good, serve: { ...good.serve, fileserver_bind: "0.0.0.0" } }));
+  assert.throws(() => validateServeStartup(startup("both", good.serve.fileserver_url, good.serve.fileserver_url)));
+  const wildcard = { ...good, serve: { ...good.serve, fileserver_bind: "all-interfaces" } };
+  assert.equal(validateServeStartup(wildcard, "files").fileserver_bind, "all-interfaces");
+  const both = startup("both", good.serve.fileserver_url, "http://127.0.0.1:41258");
+  both.serve.fileserver_bind = "all-interfaces";
+  assert.equal(validateServeStartup(both).registry_bind, "loopback");
+  both.serve.registry_bind = "all-interfaces";
+  assert.throws(() => validateServeStartup(both));
+});
+
+test("startup waits only for its session file and stops immediately on controller failure", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-startup-test-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "another-session.json"), JSON.stringify(startup("files", "http://127.0.0.1:41257")));
+  const own = path.join(root, "own-session.json");
+  await assert.rejects(waitForServeStartup(own, { timeoutMs: 0 }), /did not report/);
+  const began = Date.now();
+  await assert.rejects(waitForServeStartup(own, {
+    checkStopped() { throw new Error("portable-export-failed: insufficient disk"); },
+  }), /insufficient disk/);
+  assert.ok(Date.now() - began < 1000);
+  fs.writeFileSync(own, JSON.stringify(startup("files", "http://127.0.0.1:41259")));
+  assert.equal((await waitForServeStartup(own)).fileserver_url, "http://127.0.0.1:41259");
+});
+
+test("concurrent sessions probe their reported endpoints with occupied defaults", async (t) => {
+  const http = require("node:http");
+  const servers = [];
+  async function listen(port, marker) {
+    const server = http.createServer((request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ repositories: [marker], path: request.url }));
+    });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", resolve);
+    });
+    servers.push(server);
+    return `http://127.0.0.1:${server.address().port}`;
+  }
+  t.after(async () => Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve)))));
+  for (const port of [8080, 5000]) {
+    try { await listen(port, "wrong-session"); }
+    catch (error) { if (error.code !== "EADDRINUSE") throw error; }
+  }
+  const first = await listen(0, "session-one/image");
+  const second = await listen(0, "session-two/image");
+  const catalogs = await Promise.all([probeRegistry(first), probeRegistry(second)]);
+  assert.deepEqual(catalogs.map((catalog) => catalog.repositories), [["session-one/image"], ["session-two/image"]]);
+  assert.deepEqual(await probeFileserver(second), { fileserver: true });
+});
 
 test("waitForRegistry waits through startup and returns the live catalog", async () => {
   let attempts = 0;
@@ -32,7 +103,7 @@ test("stageForLog turns RCC and Hauler output into useful progress", () => {
   assert.equal(stageForLog("INF hauler/example:latest"), "Inspecting haul contents");
   assert.equal(stageForLog("INF copied artifacts to [127.0.0.1:41257]"), "Loading registry images");
   assert.equal(stageForLog("INF starting registry on port [5000]"), "Starting read-only registry");
-  assert.equal(stageForLog("level=info msg=\"listening on [::]:5000\""), "Registry is ready");
+  assert.equal(stageForLog("level=info msg=\"listening on [::]:5000\""), "Serve listener is ready");
   assert.equal(stageForLog("redis not configured"), undefined);
 });
 
@@ -121,6 +192,24 @@ test("dimensionArgs routes storage operations through the selected Dimension", (
     ["snapshots", "list", "demo-room", "--dimension", "archive"],
   );
   assert.deepEqual(dimensionArgs(["doctor", "--ide", "terminal"], undefined), ["doctor", "--ide", "terminal"]);
+});
+
+test("routed history status arguments are accepted by the real controller parser", t => {
+  const python = process.env.JOSH_ROOM_TEST_PYTHON || path.join(__dirname, "..", ".venv",
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  if (!fs.existsSync(python)) return t.skip("Python project runtime unavailable; set JOSH_ROOM_TEST_PYTHON");
+  const args = dimensionArgs(["snapshot", "agent-save-status", "demo-room", "--source", ".", "--backend", "minio"], "backup");
+  assert.equal(args.includes("--backend"), false);
+  const result = require("node:child_process").spawnSync(python, ["-c", [
+    "import json,sys",
+    "from josh_room.cli import build_parser",
+    "args=build_parser().parse_args(json.loads(sys.argv[1]))",
+    "print(json.dumps({'command':args.snapshot_command,'dimension':args.dimension,'room':args.project}))",
+  ].join(";"), JSON.stringify(args)], {
+    encoding: "utf8", env: { ...process.env, PYTHONPATH: path.join(__dirname, "..", "src") },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { command: "agent-save-status", dimension: "backup", room: "demo-room" });
 });
 
 test("buildProviderTree reads v2 dimension catalogs and populates JAT children", () => {
@@ -333,4 +422,17 @@ test("S3 retains explicit provider identity rather than Cloudflare authority", (
   assert.equal(providerLabel("s3"), "Amazon S3 / S3-compatible");
   const tree = buildProviderTree({ dimensions: [{ id: "synthetic-s3", provider: "s3", bucket: "synthetic-room", projects: [] }] });
   assert.equal(tree[0].provider, "s3");
+});
+
+test("pull references require the reported registry authority and matching immutable digest", () => {
+  const { verifiedPull } = require("./registry");
+  const serve = { session_id: "test", registry_bind: "loopback", registry_url: "http://127.0.0.1:45123" };
+  const digest = "sha256:" + "a".repeat(64);
+  const ref = "127.0.0.1:45123/nested/team/api@" + digest;
+  const verify = (pull_reference) => verifiedPull(serve, { pull_reference, digest });
+  assert.equal(verify(ref), ref);
+  for (const unsafe of [null, ref + "\n", ref.replace("45123", "5000"), ref.replace("api", "api;id"),
+    ref.replace("team", ".."), ref.replace("api", "api$(id)"), ref.slice(0,-1), "api:latest"]) {
+    assert.equal(verify(unsafe), undefined);
+  }
 });

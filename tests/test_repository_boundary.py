@@ -87,6 +87,10 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert commands == {
         "joshRoom.checkWorkspace",
         "joshRoom.splitWorkspace",
+        "joshRoom.saveCatalog",
+        "joshRoom.enterChild",
+        "joshRoom.saveChild",
+        "joshRoom.refreshCatalogPins",
         "joshRoom.addStorage",
         "joshRoom.connectCloudflare",
         "joshRoom.reconnectCloudflare",
@@ -105,7 +109,12 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
         "joshRoom.initializeEncryption", "joshRoom.migrateEncryption", "joshRoom.resumeEncryption",
         "joshRoom.exportRecovery", "joshRoom.importRecovery",
-        "joshRoom.inspectLogicalSnapshot", "joshRoom.exportPortableJat", "joshRoom.extractLogicalSnapshot",
+        "joshRoom.inspectLogicalSnapshot", "joshRoom.exportPortableJat", "joshRoom.extractLogicalSnapshot", "joshRoom.serveLogicalSnapshot",
+        "joshRoom.agentSessionsStatus",
+        "joshRoom.agentRecoveryStatus",
+        "joshRoom.captureAgentRecovery",
+        "joshRoom.restoreAgentRecovery",
+        "joshRoom.browseRecoveryPoint",
         "joshRoom.verifyRoomStore", "joshRoom.optimizeRoomStore", "joshRoom.reconcileRoomStore",
     }
     assert package["extensionKind"] == ["workspace"]

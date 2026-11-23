@@ -1,15 +1,87 @@
 const fs = require("fs");
 const http = require("http");
 
-const REGISTRY_URL = "http://127.0.0.1:5000";
-const FILESERVER_URL = "http://127.0.0.1:8080";
+function serveUrl(value) {
+  if (typeof value !== "string" || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value)) {
+    throw new Error("JAT reported an invalid or non-loopback Serve endpoint");
+  }
+  const url = new URL(value);
+  if (Number(url.port) > 65535) throw new Error("JAT reported an invalid Serve port");
+  return url.origin;
+}
 
-function probeRegistry() {
+function validateServeStartup(value, requestedMode = "auto") {
+  const serve = value?.serve;
+  if (value?.schema_version !== 1 || value.state !== "ready" || value.operation !== "serve"
+      || !Number.isSafeInteger(value.pid) || value.pid <= 0
+      || !["files", "registry", "both"].includes(serve?.mode)
+      || (requestedMode !== "auto" && requestedMode !== serve.mode)) {
+    throw new Error("JAT returned an incompatible Serve startup receipt");
+  }
+  for (const [key, active] of [["fileserver", serve.mode !== "registry"], ["registry", serve.mode !== "files"]]) {
+    if (active) {
+      serveUrl(serve[`${key}_url`]);
+      const allowedBindings = key === "fileserver" ? ["loopback", "all-interfaces"] : ["loopback"];
+      if (!allowedBindings.includes(serve[`${key}_bind`])) throw new Error("JAT reported an unsupported Serve listener scope");
+    } else if (serve[`${key}_url`] !== null || serve[`${key}_bind`] !== null) {
+      throw new Error("JAT reported an unexpected Serve endpoint");
+    }
+  }
+  if (serve.fileserver_url && serve.fileserver_url === serve.registry_url) throw new Error("JAT Serve endpoints collide");
+  return { ...serve, session_id: value.session_id, pid: value.pid };
+}
+
+function readServeJson(file, limit = 1024 * 1024) {
+  try {
+    const info = fs.lstatSync(file);
+    if (!info.isFile() || info.size > limit) throw new Error("Invalid Serve receipt file");
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function waitForServeStartup(startupFile, {
+  mode = "auto", timeoutMs = 120000, intervalMs = 100, checkStopped = () => {},
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    checkStopped();
+    const value = readServeJson(startupFile);
+    if (value) return validateServeStartup(value, mode);
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  } while (true);
+  throw new Error("JAT did not report selected endpoints; the acquired runtime may lack Serve startup support");
+}
+
+function verifiedPull(serve, image) {
+  if (serve.registry_bind !== "loopback" || !serve.session_id || !serve.registry_url) return;
+  const reference = image.pull_reference;
+  if (typeof reference !== "string" || typeof image.digest !== "string") return;
+  const authority = serve.registry_url.slice("http://".length);
+  const parts = reference.split("/");
+  if (parts.shift() !== authority) return;
+  const pieces = parts.join("/").split("@");
+  if (pieces.length !== 2 || pieces[1] !== image.digest || !/^sha256:[0-9a-f]{64}$/.test(image.digest)) return;
+  if (!pieces[0].split("/").every(part => /^[a-z0-9]+(?:(?:[.]|_{1,2}|-+)[a-z0-9]+)*$/.test(part))) return;
+  // JS end anchors can accept a final newline. Clipboard commands must be one shell argument.
+  if (/[^a-z0-9:@/._-]/.test(reference)) return;
+  return reference;
+}
+
+function probeRegistry(endpoint) {
+  const registryUrl = serveUrl(endpoint);
   return new Promise((resolve, reject) => {
-    const request = http.get(`${REGISTRY_URL}/v2/_catalog`, { timeout: 1000 }, (response) => {
+    const request = http.get(`${registryUrl}/v2/_catalog`, { timeout: 1000 }, (response) => {
       let body = "";
       response.setEncoding("utf8");
-      response.on("data", (chunk) => { body += chunk; });
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 1048576) response.destroy(new Error("registry catalog exceeds size limit"));
+      });
+      response.on("error", reject);
       response.on("end", () => {
         if (response.statusCode !== 200) {
           reject(new Error(`registry returned HTTP ${response.statusCode}`));
@@ -27,10 +99,11 @@ function probeRegistry() {
   });
 }
 
-function probeFileserver() {
+function probeFileserver(endpoint) {
+  const fileserverUrl = serveUrl(endpoint);
   // Any HTTP response proves the JAT fileserver is accepting connections.
   return new Promise((resolve, reject) => {
-    const request = http.get(`${FILESERVER_URL}/`, { timeout: 1000 }, (response) => {
+    const request = http.get(`${fileserverUrl}/`, { timeout: 1000 }, (response) => {
       response.resume();
       resolve({ fileserver: true });
     });
@@ -81,7 +154,7 @@ function cleanLogLine(line) {
 
 function stageForLog(line) {
   const normalized = cleanLogLine(line).toLowerCase();
-  if (normalized.includes("listening on") && normalized.includes(":5000")) return "Registry is ready";
+  if (normalized.includes("listening on")) return "Serve listener is ready";
   if (normalized.includes("starting registry on port")) return "Starting read-only registry";
   if (normalized.includes("copied artifacts to")) return "Loading registry images";
   if (normalized.includes("hauler/") && normalized.includes(":latest")) return "Inspecting haul contents";
@@ -129,8 +202,11 @@ function followLogFile(logPath, onLine, { intervalMs = 100 } = {}) {
 }
 
 module.exports = {
-  FILESERVER_URL,
-  REGISTRY_URL,
+  serveUrl,
+  readServeJson,
+  validateServeStartup,
+  waitForServeStartup,
+  verifiedPull,
   cleanLogLine,
   followLogFile,
   probeFileserver,

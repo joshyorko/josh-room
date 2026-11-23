@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -20,6 +21,7 @@ from josh_room.restic_store import (
     SnapshotInfo,
     SnapshotInventoryItem,
 )
+from josh_room.room_store_bridge import ExistingRoomStoreContext
 from josh_room.room_store_lifecycle import (
     complete_logical_catalog_removal,
     copy_logical_jat_as_new,
@@ -27,6 +29,7 @@ from josh_room.room_store_lifecycle import (
     export_logical_jat,
     extract_logical_jat,
     inspect_logical_jat,
+    inspect_selected_room_store,
     optimize_room_store,
     reconcile_room_store,
     remove_logical_catalog_records,
@@ -42,6 +45,17 @@ REPOSITORY = "a" * 64
 WORKSPACE_SNAPSHOT = "b" * 64
 WORKSPACE_TREE = "c" * 64
 SIGNATURE = "d" * 64
+
+
+class _NoAgentReferenceBackend:
+    @staticmethod
+    def read_control(_key, _max_bytes):
+        return None, None
+
+
+class _Context(ExistingRoomStoreContext):
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
 
 
 def _descriptor(
@@ -102,9 +116,9 @@ def _context(*, descriptor=None, catalog=None, publish=None, store=None, repo_id
     descriptor = descriptor or _descriptor()
     catalog = catalog or _catalog(descriptor)
     record = catalog.resolve_snapshot(descriptor.to_dict()["room_id"], descriptor.to_dict()["logical_jat_id"])
-    return SimpleNamespace(
+    return _Context(
         instance=None,
-        backend=SimpleNamespace(),
+        backend=_NoAgentReferenceBackend(),
         catalog=catalog,
         catalog_etag="etag-before",
         store=store or SimpleNamespace(),
@@ -112,7 +126,7 @@ def _context(*, descriptor=None, catalog=None, publish=None, store=None, repo_id
         material=SimpleNamespace(
             recipient="recipient",
             encryption_domain_id=DOMAIN,
-            keyset=SimpleNamespace(recovery_recipients=("recovery",)),
+            keyset=SimpleNamespace(recovery_recipients=("recovery",), key_generation=1),
         ),
         dimension=SimpleNamespace(
             dimension_id=DIMENSION,
@@ -224,7 +238,7 @@ def test_copy_refuses_legacy_or_unknown_payloads():
         copy_logical_jat_as_new(source_context, destination_context, "destination", "Destination Room")
 
 
-def test_reconcile_is_read_only_and_reports_reference_categories():
+def test_reconcile_is_read_only_and_reports_reference_categories(tmp_path):
     descriptor = _descriptor()
     catalog = _catalog(descriptor)
     inventory = (
@@ -232,7 +246,7 @@ def test_reconcile_is_read_only_and_reports_reference_categories():
         SnapshotInventoryItem("f" * 64, "1" * 64, "2026-10-02T12:00:00Z", None),
     )
     store = SimpleNamespace(snapshots=lambda: inventory)
-    context = _context(descriptor=descriptor, catalog=catalog, store=store)
+    context = replace(_context(descriptor=descriptor, catalog=catalog, store=store), instance=tmp_path)
 
     result = reconcile_room_store(context, {("source", "jat-source"): descriptor})
 
@@ -242,7 +256,8 @@ def test_reconcile_is_read_only_and_reports_reference_categories():
     assert result["component_only"] == []
 
 
-def test_cross_dimension_copy_restores_and_rebacks_workspace_under_destination_binding(tmp_path):
+@pytest.mark.parametrize("agent_failure", [False, True])
+def test_cross_dimension_copy_restores_and_rebacks_workspace_under_destination_binding(tmp_path, monkeypatch, agent_failure):
     source_workspace = tmp_path / "source-workspace"
     source_workspace.mkdir()
     (source_workspace / "hello.txt").write_text("hello", encoding="utf-8")
@@ -310,6 +325,23 @@ def test_cross_dimension_copy_restores_and_rebacks_workspace_under_destination_b
     )
     source_context.dimension.endpoint = "https://minio.example.invalid"
     source_context.dimension.bucket = "source-bucket"
+
+    if agent_failure:
+        monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.preflight_copy", lambda *_args: None)
+
+        def fail_agent_copy(*_args):
+            raise ValueError("untrusted private provider details")
+
+        monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.copy_reference", fail_agent_copy)
+        with pytest.raises(ValueError) as raised:
+            copy_logical_jat_to_dimension(source_context, destination_context, "copied", "Copied Room")
+        assert raised.value.result["publication_state"] == "committed"
+        assert raised.value.result["agent_recovery_state"] == "uncertain"
+        assert backed_up["descriptor"].to_dict()["room_id"] == "copied"
+        receipt = json.loads(next((destination_context.instance / "receipts").glob("*.json")).read_text())
+        assert receipt["publication_state"] == "committed"
+        assert "unpublished_restic_snapshot_ids" not in receipt
+        return
 
     result = copy_logical_jat_to_dimension(
         source_context,
@@ -577,6 +609,33 @@ def test_optimize_defaults_to_dry_run_and_requires_explicit_confirmation():
     assert completed["status"] == "completed"
 
 
+@pytest.mark.parametrize("action", ["export", "serve"])
+def test_portable_failure_preserves_public_diagnostic(monkeypatch, tmp_path, action):
+    monkeypatch.setattr("josh_room.room_store_lifecycle.require_serve_startup", lambda _root: None)
+    from josh_room.room_store_export import PortableExportError
+    from josh_room.room_store_lifecycle import RoomStoreLifecycleError
+
+    context = _context(descriptor=_descriptor())
+    context.private_dir = tmp_path / "private"
+    context.private_dir.mkdir(mode=0o700)
+    diagnostic = "portable export requires more free disk space"
+
+    def fail(**kwargs):
+        raise PortableExportError(diagnostic)
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat", fail)
+    with pytest.raises(RoomStoreLifecycleError) as caught:
+        if action == "export":
+            export_logical_jat(context, jat_root=tmp_path, output=tmp_path / "out.haul")
+        else:
+            serve_logical_jat(context, jat_root=tmp_path, mode="files")
+
+    assert caught.value.result == {
+        "error": "portable-export-failed", "diagnostic": diagnostic,
+    }
+    assert list(context.private_dir.iterdir()) == []
+
+
 def test_export_delegates_only_when_explicitly_called(monkeypatch, tmp_path):
     descriptor = _descriptor()
     context = _context(descriptor=descriptor)
@@ -615,6 +674,7 @@ def test_serve_and_extract_materialize_only_for_the_explicit_actions(monkeypatch
         return SimpleNamespace()
 
     monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat", export)
+    monkeypatch.setattr("josh_room.room_store_lifecycle.require_serve_startup", lambda _root: None)
     monkeypatch.setattr("josh_room.room_store_lifecycle.run_serve", lambda *_args, **kwargs: calls.append(("serve", kwargs)) or {"served": True})
     monkeypatch.setattr("josh_room.room_store_lifecycle.run_extract", lambda *_args: calls.append(("extract", _args)) or {"extracted": True})
 
@@ -693,28 +753,34 @@ def test_legacy_portable_export_decrypts_verified_payload_and_never_overwrites(t
         )
 
 
-def test_native_snapshot_delete_cas_precedes_descriptor_object_delete_and_forget(tmp_path, monkeypatch):
+@pytest.mark.parametrize("agent_state", [None, "removed", "pending", "error"])
+def test_native_snapshot_delete_cas_precedes_descriptor_object_delete_and_forget(tmp_path, monkeypatch, agent_state):
     descriptor = _descriptor()
     catalog = _catalog(descriptor)
     object_key = catalog.resolve_snapshot("source", "jat-source")["object_key"]
     deleted_objects = []
     published = {}
+    events = []
 
-    class Backend:
+    class Backend(_NoAgentReferenceBackend):
         def conditional_catalog_put(self, body, expected_etag):
+            events.append("catalog")
             published.update(body=body, expected_etag=expected_etag)
 
         def delete_object(self, key):
+            events.append("descriptor")
             deleted_objects.append(key)
 
     class Store:
         def snapshots(self):
+            events.append("inventory")
             return (SnapshotInventoryItem(WORKSPACE_SNAPSHOT, WORKSPACE_TREE, "2026-10-02T12:00:00Z", None),)
 
         def plan_forget(self, snapshot_ids):
             return ForgetPlan(REPOSITORY, tuple(snapshot_ids), (WORKSPACE_TREE,))
 
         def forget(self, snapshot_ids, *, plan, confirmed=False):
+            events.append("forget")
             published["forget"] = (tuple(snapshot_ids), plan, confirmed)
             return MaintenanceResult("forget", False, tuple(snapshot_ids))
 
@@ -732,6 +798,19 @@ def test_native_snapshot_delete_cas_precedes_descriptor_object_delete_and_forget
         return b"encrypted-catalog"
 
     monkeypatch.setattr("josh_room.room_store_lifecycle._encrypt_catalog", encrypted)
+    if agent_state is not None:
+        def close_agents(*_args):
+            events.append("agent-close")
+            return ({"room_id": "source", "logical_jat_id": "jat-source", "objects": []},)
+
+        def complete_agents(*_args, **_kwargs):
+            events.append("agent-cleanup")
+            if agent_state == "error":
+                raise ValueError("untrusted private provider details")
+            return {"state": agent_state, "reconciliation_required": agent_state == "pending"}
+
+        monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.close_for_records", close_agents)
+        monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.complete_removed_references", complete_agents)
 
     pending = remove_logical_catalog_records(
         context,
@@ -760,6 +839,17 @@ def test_native_snapshot_delete_cas_precedes_descriptor_object_delete_and_forget
 
     result = complete_logical_catalog_removal(fresh_context, pending, descriptors={})
 
+    if agent_state is not None:
+        assert events.index("agent-close") < events.index("catalog") < events.index("descriptor")
+        assert events.index("inventory") < events.index("agent-cleanup")
+        assert pending.agent_reference_receipts
+        receipt = json.loads((context.instance / "receipts" / f"{pending.operation_id}.json").read_text())
+        assert receipt["agent_reference_receipts"]
+    if agent_state in {"pending", "error"}:
+        assert result["status"] == "cleanup-pending" and result["reconciliation_required"] is True
+        assert result["restic_snapshots_forgotten"] == []
+        assert "forget" not in events
+        return
     assert result["restic_snapshots_forgotten"] == [WORKSPACE_SNAPSHOT]
     assert published["forget"][2] is True
 
@@ -769,7 +859,7 @@ def test_delete_rechecks_after_cas_and_skips_newly_referenced_snapshot(tmp_path,
     catalog = _catalog(descriptor)
     published = {}
 
-    class Backend:
+    class Backend(_NoAgentReferenceBackend):
         def conditional_catalog_put(self, body, _expected_etag):
             published["body"] = body
 
@@ -832,7 +922,8 @@ def test_delete_rechecks_after_cas_and_skips_newly_referenced_snapshot(tmp_path,
     assert store.forgotten is False
 
 
-def test_catalog_conflict_never_deletes_descriptor_objects_or_restic_snapshots(tmp_path, monkeypatch):
+@pytest.mark.parametrize("agent_closure", [False, True])
+def test_catalog_conflict_never_deletes_descriptor_objects_or_restic_snapshots(tmp_path, monkeypatch, agent_closure):
     from josh_room import room_store_lifecycle
 
     descriptor = _descriptor()
@@ -842,7 +933,7 @@ def test_catalog_conflict_never_deletes_descriptor_objects_or_restic_snapshots(t
     class Conflict(RuntimeError):
         published = False
 
-    class Backend:
+    class Backend(_NoAgentReferenceBackend):
         def conditional_catalog_put(self, *_args):
             raise Conflict("stale")
 
@@ -861,6 +952,11 @@ def test_catalog_conflict_never_deletes_descriptor_objects_or_restic_snapshots(t
     context.backend = Backend()
     context.catalog_etag = "stale-etag"
     monkeypatch.setattr(room_store_lifecycle, "_encrypt_catalog", lambda *_args: b"encrypted")
+    if agent_closure:
+        monkeypatch.setattr(
+            room_store_lifecycle.native_agent_reference, "close_for_records",
+            lambda *_args: ({"room_id": "source", "logical_jat_id": "jat-source", "objects": []},),
+        )
 
     with pytest.raises(ValueError, match="catalog removal was not confirmed") as raised:
         remove_logical_catalog_records(
@@ -870,4 +966,130 @@ def test_catalog_conflict_never_deletes_descriptor_objects_or_restic_snapshots(t
         )
 
     assert raised.value.result["publication_state"] == "rejected"
+    assert raised.value.result["reconciliation_required"] is agent_closure
+    if agent_closure:
+        assert raised.value.result["agent_recovery_state"] == "captures-closed"
     assert deleted_objects == []
+
+
+def test_serve_refuses_unsupported_jat_before_portable_materialization(tmp_path, monkeypatch):
+    from josh_room.jat import JATError
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat",
+                        lambda **_kwargs: pytest.fail("unsupported Serve must not materialize"))
+    with pytest.raises(JATError, match="update the pinned JAT runtime"):
+        serve_logical_jat(_context(descriptor=_descriptor()), jat_root=tmp_path)
+
+
+def test_selected_inspect_reports_agent_metadata_outside_closed_components(monkeypatch):
+    context = _context()
+    metadata = {"state": "history-only", "native_resume_verified": False}
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.inspect_reference", lambda _context: None)
+    absent = inspect_selected_room_store(context)
+    assert "agent_recovery" not in absent
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.inspect_reference", lambda _context: metadata)
+    present = inspect_selected_room_store(context)
+    assert present["agent_recovery"] == metadata
+    assert present["components"] == absent["components"]
+    assert set(context.selected_descriptor.to_dict()["components"]) == {"rcc_environment", "homebrew_recovery", "hauler_content"}
+
+
+def test_agent_copy_preflight_refuses_before_descriptor_publication(monkeypatch):
+    calls = []
+    context = _context(publish=lambda *_args, **_kwargs: calls.append("publish"))
+
+    def refuse(*_args):
+        raise ValueError("agent-reference-not-authorized")
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.preflight_copy", refuse)
+    with pytest.raises(ValueError, match="not-authorized"):
+        copy_logical_jat_as_new(context, context, "destination", "Destination")
+    assert calls == []
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_same_dimension_copy_preserves_agent_metadata_or_reports_committed_failure(tmp_path, monkeypatch, failure):
+    events = []
+    context = _context(publish=lambda *_args, **_kwargs: events.append("workspace-published"))
+    context.instance = tmp_path / "instance"
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.preflight_copy", lambda *_args: events.append("agent-preflight"))
+
+    def copy_agent(*_args):
+        events.append("agent-copy")
+        if failure:
+            raise ValueError("secret internal URL or path")
+        return {"state": "copied", "mode": "history-only", "data_uploaded": 123}
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.copy_reference", copy_agent)
+    if failure:
+        with pytest.raises(ValueError) as raised:
+            copy_logical_jat_as_new(context, context, "destination", "Destination")
+        assert raised.value.result["publication_state"] == "committed"
+        assert raised.value.result["agent_recovery_state"] == "uncertain"
+        receipt = json.loads(next((context.instance / "receipts").glob("*.json")).read_text())
+        assert receipt["publication_state"] == "committed"
+        assert "secret internal" not in json.dumps(receipt)
+    else:
+        result = copy_logical_jat_as_new(context, context, "destination", "Destination")
+        assert result["agent_recovery"]["mode"] == "history-only"
+        assert result["data_uploaded"] == 123
+    assert events == ["agent-preflight", "workspace-published", "agent-copy"]
+
+
+def test_agent_export_preflight_prevents_portable_output(monkeypatch, tmp_path):
+    calls = []
+
+    def refuse(*_args):
+        raise ValueError("agent-reference-export-target-collision")
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.preflight_export", refuse)
+    monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat", lambda **_kwargs: calls.append("portable"))
+    with pytest.raises(ValueError, match="target-collision"):
+        export_logical_jat(_context(), jat_root=tmp_path / "jat", output=tmp_path / "output.haul")
+    assert calls == []
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_agent_export_companion_is_explicit_and_partial_output_is_disclosed(monkeypatch, tmp_path, failure):
+    events = []
+    output = tmp_path / "output.haul"
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.preflight_export", lambda *_args: events.append("agent-preflight"))
+
+    def portable(**_kwargs):
+        events.append("portable")
+        output.write_bytes(b"synthetic portable bytes")
+        return SimpleNamespace(logical_jat_id="jat-source", status="exported", output_size=24,
+                               output_sha256="f" * 64, workspace_entry_count=1, verified_components=(),
+                               estimated_required_bytes=24, available_bytes=100)
+
+    def companion(*_args):
+        events.append("agent-companion")
+        if failure:
+            raise ValueError("secret internal URL or path")
+        return {"state": "exported", "mode": "history-only", "output_size": 10}
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat", portable)
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.export_reference", companion)
+    if failure:
+        with pytest.raises(ValueError) as raised:
+            export_logical_jat(_context(), jat_root=tmp_path / "jat", output=output)
+        assert raised.value.result["portable_export_committed"] is True
+        assert raised.value.result["agent_recovery_state"] == "uncertain"
+        assert "secret internal" not in str(raised.value)
+    else:
+        result = export_logical_jat(_context(), jat_root=tmp_path / "jat", output=output)
+        assert result["agent_recovery"]["mode"] == "history-only"
+    assert output.read_bytes() == b"synthetic portable bytes"
+    assert events == ["agent-preflight", "portable", "agent-companion"]
+
+
+def test_agent_reachability_is_reported_without_changing_restic_references(monkeypatch):
+    context = _context(store=SimpleNamespace(snapshots=lambda: (
+        SnapshotInventoryItem(WORKSPACE_SNAPSHOT, WORKSPACE_TREE, "2026-10-02T12:00:00Z", None),
+    )))
+    metadata = {"reachable_objects": ["objects/sha256/" + "f" * 64], "destructive_cleanup_performed": False}
+    monkeypatch.setattr("josh_room.room_store_lifecycle.native_agent_reference.reconcile_references", lambda *_args, **_kwargs: metadata)
+    result = reconcile_room_store(context, descriptors={("source", "jat-source"): context.selected_descriptor})
+    assert result["agent_recovery"] == metadata
+    assert result["catalog_referenced"] == [WORKSPACE_SNAPSHOT]
+    assert result["destructive_cleanup_performed"] is False

@@ -1,0 +1,232 @@
+{
+  "schema_version": 2,
+  "chrome": "/usr/bin/google-chrome",
+  "viewport": "1440x900",
+  "zero_network": {
+    "total_observed_requests": 18,
+    "blocked_external_requests": [],
+    "csp_violations": [],
+    "console_errors": [],
+    "pass": true
+  },
+  "render_on_demand": {
+    "idle_ms": 1200,
+    "renders_during_idle": 0,
+    "shadow_updates_during_idle": 0,
+    "pass": true
+  },
+  "unix_navigate_inspect": {
+    "mode": "offline",
+    "webglActive": true,
+    "itemCount": 41,
+    "firstFrameMs": 1309.2,
+    "drawCalls": 175,
+    "cameraY": 13.2,
+    "layoutSummary": {
+      "isUnixTree": true,
+      "maxDepth": 4,
+      "pedestals": 21,
+      "blocks": 41,
+      "summaryBlocks": 0,
+      "wires": 20
+    },
+    "inspectorHiddenOnLoad": true,
+    "legendItems": [
+      "Artifact",
+      "Config",
+      "×Failed",
+      "Verified",
+      "Redacted",
+      "Source"
+    ],
+    "wallBootMs": 1423,
+    "file_bytes": 1675347,
+    "breadcrumbs_inside_dir": [
+      "/",
+      "src",
+      "core"
+    ],
+    "source_preview": {
+      "title": "scheduler.py",
+      "path": "/src/core/scheduler.py",
+      "codeLines": 22,
+      "slots": [
+        "source",
+        "diff"
+      ],
+      "linkTargets": [
+        {
+          "rel": "producer",
+          "target": "run-var-gate-verify"
+        },
+        {
+          "rel": "references",
+          "target": "file-etc-policy-json"
+        },
+        {
+          "rel": "incoming:verifies",
+          "target": "file-src-test-gate"
+        },
+        {
+          "rel": "incoming:references",
+          "target": "file-src-sanitizer-patch"
+        }
+      ]
+    },
+    "diff_highlight_lines": 3,
+    "relationship_link_jump": {
+      "currentNodeId": "node/run-var-gate-verify",
+      "title": "gate-verify",
+      "path": "/var/runs/gate-verify",
+      "stepRows": 4,
+      "hasErrorBox": true,
+      "linkTargets": [
+        "file-src-sanitizer-patch",
+        "file-var-log-042",
+        "file-var-report-html",
+        "file-etc-room-conf",
+        "file-src-test-gate",
+        "file-src-scheduler",
+        "file-src-sanitizer-patch",
+        "file-usr-rules",
+        "file-var-state",
+        "file-var-log-042",
+        "file-var-report-html",
+        "file-var-visual-diff",
+        "file-home-notes"
+      ]
+    },
+    "json_tree": {
+      "detailsCount": 5,
+      "keyCount": 10
+    },
+    "redacted_card": {
+      "status": "redacted",
+      "badge": "CONTENT REDACTED"
+    },
+    "unix_pdf": {
+      "canvasCount": 1,
+      "firstPageMs": 11.5
+    },
+    "sql_links_rows": 23,
+    "pass": true
+  },
+  "pr_review_regressions": {
+    "tree_single_key_dispatch": {
+      "beforeId": "root",
+      "afterId": "node/dir-etc",
+      "expectedNext": "node/dir-etc",
+      "singleStepOnly": true
+    },
+    "collision_free_and_custom_legend": {
+      "distinctStagePedestals": true,
+      "noDuplicateBlocks": true,
+      "customLegendPassIsZero": true,
+      "customLegendBadge": "× Error"
+    },
+    "pass": true
+  },
+  "performance": {
+    "fixture_300": {
+      "mode": "offline",
+      "viewMode": "3d",
+      "webglActive": true,
+      "itemCount": 300,
+      "firstFrameMs": 821.2,
+      "drawCalls": 163,
+      "renderCount": 4,
+      "shadowUpdateCount": 1,
+      "cameraY": 13.2,
+      "layoutSummary": {
+        "isUnixTree": false,
+        "maxDepth": 2,
+        "pedestals": 16,
+        "blocks": 81,
+        "summaryBlocks": 7,
+        "wires": 15
+      },
+      "inspectorHiddenOnLoad": true,
+      "canvasAriaHidden": "true",
+      "treeRole": "tree",
+      "treeItemCount": 4,
+      "livePolite": "polite",
+      "hasImportMap": true,
+      "wallBootMs": 1077,
+      "file_bytes": 1704375,
+      "first_click_ms": 0.1,
+      "shadow_updates_on_select": 1,
+      "pdf_first_page": {
+        "canvasCount": 1,
+        "infoText": "3 pages · p1 in 110.2ms",
+        "firstPageMs": 110.2,
+        "statusText": "Fit WidthFit Page−+3 pages · p1 in 110.2msPage 1 / 3Page 2 / 3Page 3 / 3"
+      },
+      "sql_preset_rows": 53,
+      "sql_mutation_blocked": true
+    },
+    "fixture_540": {
+      "itemCount": 540,
+      "firstFrameMs": 122.4,
+      "drawCalls": 135,
+      "layoutSummary": {
+        "isUnixTree": false,
+        "maxDepth": 1,
+        "pedestals": 5,
+        "blocks": 0,
+        "summaryBlocks": 24,
+        "wires": 4
+      },
+      "wallBootMs": 218
+    }
+  },
+  "accessibility": {
+    "canvas_aria_hidden": true,
+    "tree_role": "tree",
+    "tree_items_rendered": 4,
+    "live_region_politeness": "polite",
+    "live_announcement_sample": "Focused /sector-beta/verify/verify-01.fail, Fail, 293.4",
+    "keyboard_next_fail_synced_tree": true,
+    "after_next_fail": {
+      "currentNodeId": "item/item-0003",
+      "selectedTreeNode": "item/item-0003",
+      "liveText": "Focused /sector-alpha/ingest/ingest-03.fail, Fail, 335.2"
+    }
+  },
+  "security": {
+    "html_attachment_script_executed": false,
+    "inert_report_badge": "INERT PARSED REPORT (scripts blocked: 1)",
+    "inert_table_rows": 4,
+    "pass": true
+  },
+  "fallback_webgl_off": {
+    "webglActive": false,
+    "viewMode": "grid",
+    "gridVisible": true,
+    "noticeVisible": true,
+    "tileCount": 41,
+    "filterChipCount": 7,
+    "sqlRowCount": 1,
+    "inspectorOpen": true,
+    "pass": true
+  },
+  "screenshots": [
+    "01-night-unix-overview.png",
+    "02-night-unix-directory.png",
+    "03-night-spotlight-v2.png",
+    "04-night-spotlight-baseline.png",
+    "04b-night-inspect-source-diff.png",
+    "04c-night-inspect-run-jump.png",
+    "04d-night-inspect-json-tree.png",
+    "05-grass-unix-overview.png",
+    "06-grass-unix-directory.png",
+    "07-grass-spotlight-v2.png",
+    "08-grass-spotlight-baseline.png",
+    "10-sql-console.png",
+    "01b-night-pipeline-300-overview.png",
+    "03b-night-spotlight-v2-evidence-pdf.png",
+    "09-night-reduced-motion.png",
+    "11-scale-10-items.png",
+    "12-scale-540-items.png",
+    "13-webgl-off-grid-fallback.png"
+  ]
+}

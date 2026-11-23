@@ -542,16 +542,136 @@ def test_jat_cli_failure_raises_with_exit_status(tmp_path, monkeypatch):
         __import__("josh_room.jat", fromlist=["run_inspect"]).run_inspect(tmp_path, tmp_path / "workspace.haul")
 
 
-def test_jat_cli_serve_runs_foreground_without_timeout(tmp_path, monkeypatch):
+@pytest.mark.parametrize("startup", [True, False])
+def test_jat_cli_serve_runs_foreground_without_timeout(tmp_path, monkeypatch, startup):
+    source = tmp_path / "src/jat"
+    source.mkdir(parents=True)
+    (source / "cli.py").write_text('# synthetic CLI contract: --startup-file\n')
     _managed_env(monkeypatch)
     haul = tmp_path / "workspace.haul"
     seen = {}
     monkeypatch.setattr("josh_room.jat._run_cli", _fake_run_cli(seen, _cli_stdout("serve")))
+    if startup:
+        receipt = str(tmp_path / "ready.json")
+        monkeypatch.setenv("JOSH_ROOM_SERVE_STARTUP_FILE", receipt)
     __import__("josh_room.jat", fromlist=["run_serve"]).run_serve(tmp_path, haul, mode="both")
 
     assert seen["timeout"] is None
     command = seen["argv"][seen["argv"].index("--") + 1:]
-    assert command == ["python", "-m", "jat.cli", "serve", "--haul", str(haul), "--mode", "both", "--json"]
+    assert command == ["python", "-m", "jat.cli", "serve", "--haul", str(haul), "--mode", "both", "--fileserver-port", "0", "--registry-port", "0", *(["--startup-file", receipt] if startup else []), "--json"]
+
+
+def test_serve_forwards_startup_file_and_explicit_ports_and_refuses_old_runtime(tmp_path, monkeypatch):
+    from josh_room.jat import run_serve
+
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "0")
+    seen = {}
+    monkeypatch.setattr("josh_room.jat._run_cli", _fake_run_cli(seen, _cli_stdout("serve")))
+    startup = tmp_path / "startup.json"
+    with pytest.raises(JATError, match="update the pinned JAT runtime"):
+        run_serve(tmp_path, tmp_path / "demo.haul", startup_file=startup)
+    assert not seen
+    source = tmp_path / "src/jat"
+    source.mkdir(parents=True)
+    (source / "cli.py").write_text('# synthetic CLI contract: --startup-file\n')
+    run_serve(tmp_path, tmp_path / "demo.haul", mode="files", fileserver_port=41257,
+              registry_port=0, startup_file=startup)
+    command = seen["argv"]
+    assert command[command.index("--fileserver-port") + 1] == "41257"
+    assert command[command.index("--registry-port") + 1] == "0"
+    assert command[command.index("--startup-file") + 1] == str(startup)
+    assert seen["timeout"] is None
+
+
+@pytest.mark.parametrize("change", [None, "artifact", "verification", "verification-artifact", "wrapper", "child"])
+def test_managed_serve_signal_is_cancelled_only_with_matching_verified_receipt(tmp_path, monkeypatch, change):
+    from josh_room.cancellation import CLICancelled
+    from josh_room.jat import run_serve
+
+    _managed_env(monkeypatch)
+    source = tmp_path / "src/jat"
+    source.mkdir(parents=True)
+    (source / "cli.py").write_text("# synthetic contract: --startup-file\n")
+    selected = os.environ["JOSH_ROOM_JAT_ARTIFACT"]
+    seen = {}
+
+    def interrupted(argv, timeout, **kwargs):
+        receipt = Path(argv[argv.index("--receipt-file") + 1])
+        seen["receipt"] = receipt
+        value = {
+            "artifactDigest": selected, "exitCode": -1,
+            "verification": {"valid": True, "artifactDigest": selected},
+        }
+        if change == "artifact":
+            value["artifactDigest"] = "sha256:" + "b" * 64
+        elif change == "verification":
+            value["verification"]["valid"] = False
+        elif change == "verification-artifact":
+            value["verification"]["artifactDigest"] = "sha256:" + "b" * 64
+        elif change == "child":
+            value["exitCode"] = True
+        receipt.write_text(json.dumps(value))
+        return (1 if change == "wrapper" else 255), "", ""
+
+    monkeypatch.setattr("josh_room.jat._run_cli", interrupted)
+    expected = CLICancelled if change is None else JATError
+    with pytest.raises(expected) as caught:
+        run_serve(tmp_path, tmp_path / "fixture.haul", mode="registry")
+    if change is None:
+        assert caught.value.result == {"stage": "jat-serve", "exit_status": -1, "rcc_exit_status": 255}
+    assert not seen["receipt"].exists()
+
+
+def test_signal_receipt_does_not_authorize_other_jat_operations(tmp_path):
+    from josh_room.jat import _validate_rcc_receipt
+
+    artifact = "sha256:" + "a" * 64
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({"artifactDigest": artifact, "exitCode": -1,
+        "verification": {"valid": True, "artifactDigest": artifact}}))
+    with pytest.raises(JATError, match="exit status"):
+        _validate_rcc_receipt(receipt, artifact, 255)
+
+
+def test_serve_ctrl_c_reports_cancellation_without_deleting_caller_receipt(tmp_path, monkeypatch):
+    from josh_room.cancellation import CLICancelled
+    from josh_room.jat import run_serve
+
+    source = tmp_path / "src/jat"
+    source.mkdir(parents=True)
+    (source / "cli.py").write_text("# synthetic contract: --startup-file\n")
+    startup = tmp_path / "startup.json"
+
+    def interrupted(*args, **kwargs):
+        startup.write_text("caller-owned receipt")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("josh_room.jat._run_jat_cli", interrupted)
+    with pytest.raises(CLICancelled) as caught:
+        run_serve(tmp_path, tmp_path / "fixture.haul", mode="registry", startup_file=startup)
+    assert caught.value.result == {"stage": "jat-serve"}
+    assert startup.read_text() == "caller-owned receipt"
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="terminal hangup is POSIX-specific")
+def test_serve_terminal_hangup_unwinds_and_restores_handler(tmp_path, monkeypatch):
+    from josh_room.cancellation import CLICancelled
+    from josh_room.jat import run_serve
+
+    source = tmp_path / "src/jat"
+    source.mkdir(parents=True)
+    (source / "cli.py").write_text("# synthetic contract: --startup-file\n")
+    previous = signal.getsignal(signal.SIGHUP)
+
+    def hangup(*args, **kwargs):
+        os.kill(os.getpid(), signal.SIGHUP)
+        pytest.fail("terminal hangup did not unwind Serve")
+
+    monkeypatch.setattr("josh_room.jat._run_jat_cli", hangup)
+    with pytest.raises(CLICancelled) as caught:
+        run_serve(tmp_path, tmp_path / "fixture.haul", mode="registry")
+    assert caught.value.result == {"stage": "jat-serve"}
+    assert signal.getsignal(signal.SIGHUP) is previous
 
 
 def test_jat_cli_extract_passes_reference_and_destination_verbatim(tmp_path, monkeypatch):

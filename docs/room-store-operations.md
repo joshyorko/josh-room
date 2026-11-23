@@ -49,9 +49,16 @@ malformed output, or source/policy drift prevents descriptor publication. The
 saved tree is checked again through Restic's entry stream. A no-op creates no
 descriptor or marker update only when the selected latest descriptor has the
 same policy, components, source, producer, Room scope, and Restic parent.
+Without a logical parent, the first backup forces a content scan so Restic cannot
+automatically borrow another Room's matching snapshot. Subsequent Linux backups
+retain the explicitly selected parent and incremental/no-op behavior. This does
+not disable encrypted chunk deduplication or repository locking.
 `SaveResult.scanned_bytes` is the source file-size total; `data_added_bytes` is
 Restic's `data_added` count and is not a network-transfer measurement. Preview
-does not claim that scanned bytes were added. Suspicious deletions (at least 25 paths and at least one quarter of
+and no-op checks can create and remove temporary Restic lock objects. A zero
+payload count does not mean zero wire traffic or zero temporary metadata writes.
+The no-op message therefore reports no new backup data, not zero wire bytes.
+Preview does not claim that scanned bytes were added. Suspicious deletions (at least 25 paths and at least one quarter of
 the prior entry count) require the exact token returned by the current preview.
 
 Restore validates the descriptor's Room Store scope, repository and tree

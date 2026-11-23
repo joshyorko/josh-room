@@ -1,0 +1,108 @@
+{
+  "date": "2026-11-20",
+  "scope": "Linux source checkout; synthetic tests; not installed/released runtime acceptance",
+  "source_files_sha256": {
+    "scripts/verify_hauler_fileserver_spike.py": "b01a659ac92045097142ba797720807e5fb93df7f7acf5ed8181572563ad5714",
+    "scripts/verify_room_view_browser.mjs": "c4b8ab496aee65c15ca2fa3696734927aa4d01fc5b3b93527164da669c035143",
+    "src/josh_room/cli.py": "9b53eb2e711409fcb31c8ae5e7d4d9f42f422fdb7098f51cf472fb829ebd5e40",
+    "src/josh_room/jat.py": "8f34acb04da944814a3e0bb67dc6442fb6ca7046f7a6b40fc1045e884ddf2071",
+    "src/josh_room/operations.py": "46a84ce4efcbed82fba63978afbe958d5feb9e5a04a06d66dbc013ad6ba9ac0f",
+    "src/josh_room/room_store_lifecycle.py": "fe8bb51d8cb69a78c9820b97463c53a173125e421233056d34cefde9270087f6",
+    "src/josh_room/view/room_provider.py": "0b69407aa1348624a7959a921820ed7f2b716306277dfb67da2e3d183a4f0ad3",
+    "tests/test_cli_contract.py": "dc4410efef972f4d10c21e4871a387b368550d9ae8d461febe64466bdf7b6fd9",
+    "tests/test_hydration_safety.py": "dcf70256ad3bebfff0bcd028960f826e77382b23e32333265eebd58b8189cbcb",
+    "tests/test_jat.py": "8673fe1a8053d639e5b158589590dbb8b6b319dd58ff00f88d277f5db3bd4a23",
+    "tests/test_room_store_lifecycle.py": "4e2247afe6df1376ebe5745ec78429a23998e22aa48f4066e227d8a747522430",
+    "vscode-extension/extension.js": "90eb41565fa9b71ea017cb5494f409965610c4e799e900566787e43446cfcbca",
+    "vscode-extension/extension.test.js": "4617768e6564dbfdc12ee08bc113c3e6d2b5eb34d764a43c0de0e7d343240a86",
+    "vscode-extension/registry.js": "cc46e8a2c8e5bb68e065421a3c421f552ddfbd993f024500dd0013657c2babdd",
+    "vscode-extension/registry.test.js": "eda5f9a7fb37731a31a4932b8060f51b23078e0b568503334179d7d14d08197a"
+  },
+  "checks": [
+    {
+      "command": ".venv/bin/python -m pytest tests/test_jat.py tests/test_cli_contract.py tests/test_native_room_store_cli.py tests/test_room_store_lifecycle.py tests/test_hydration_safety.py tests/test_room_view.py tests/test_repository_boundary.py tests/test_controller_artifact.py tests/test_public_storage_safety.py -q",
+      "status": "PASS",
+      "result": "257 passed"
+    },
+    {
+      "command": "node --test vscode-extension/*.test.js scripts/verify_node_version.test.js",
+      "status": "PASS",
+      "result": "389 passed, 2 skipped"
+    },
+    {
+      "command": "node --experimental-strip-types --test omp-extension/tests/*.test.mjs",
+      "status": "PASS",
+      "result": "49 passed"
+    },
+    {
+      "command": ".venv/bin/ruff check src tests scripts/build_view_template.py scripts/verify_hauler_fileserver_spike.py",
+      "status": "PASS"
+    },
+    {
+      "command": ".venv/bin/python scripts/build_view_template.py --check",
+      "status": "PASS",
+      "template_sha256": "d63222eebfe779a62d95d90d5ba8afa9b24c50b615bdf45313228c1db3505fe6"
+    },
+    {
+      "command": "scripts/verify_room_view_browser.mjs with synthetic-unix, synthetic, synthetic-small, synthetic-large offline exports",
+      "status": "PASS",
+      "receipt": "browser-verification-receipt.json"
+    },
+    {
+      "command": "scripts/verify_hauler_fileserver_spike.py --mode live with pinned Hauler2.1.1 in isolated network namespace",
+      "status": "PASS",
+      "receipt": "hauler-fileserver-spike-receipt.json"
+    },
+    {
+      "command": "actual JAT working-tree startup_receipt/ServeEndpoints to Room validator (no servers)",
+      "status": "PASS",
+      "receipt": "startup-contract-receipt.json"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_real_vertical.py -q",
+      "status": "SKIPPED",
+      "reason": "full real RCC-first JAT/Hauler/age/tar/zstd environment unavailable; 1 skipped"
+    },
+    {
+      "command": "dedicated secret scanner (gitleaks/trufflehog)",
+      "status": "SKIPPED",
+      "reason": "not installed; focused sanitizer/public-storage privacy tests passed"
+    },
+    {
+      "command": "installed VSIX and released JAT/Hauler dynamic endpoint qualification",
+      "status": "NOT RUN",
+      "reason": "current runtime pins lack the startup/bind contract; no pin promotion authorized"
+    },
+    {
+      "command": "full pytest suite",
+      "status": "NOT RUN",
+      "reason": "affected suites run here; full CI on pushed source is separate"
+    }
+  ],
+  "review": {
+    "scope": "independent Codex review of dynamic-serving source diff",
+    "accepted_fixes": [
+      "unconditional capability preflight before materialization",
+      "inactive bind fields must be null",
+      "completion marker independent of optional shell integration",
+      "noninteractive wrapper finally/EXIT trap with interactive Ctrl+C regression"
+    ],
+    "limits": [
+      "Windows PowerShell wrapper shape tested; native Windows execution not run"
+    ]
+  },
+  "prior_failures": [
+    {
+      "status": "FAIL",
+      "scope": "checkpoint 05a59e3 CI test job",
+      "result": "1 failed, 2335 passed, 29 skipped; workspace preset selected nonexistent depth column",
+      "repair": "removed nonexistent depth column; affected preset/export tests now pass"
+    },
+    {
+      "status": "FAIL",
+      "scope": "inherited browser UNIX inspection receipt",
+      "result": "default diff slot counted against source line expectation",
+      "repair": "test explicitly selects Source; rerun passes with 22 source lines"
+    }
+  ]
+}

@@ -277,3 +277,20 @@ def test_python_contract_allows_origin_binding_to_be_omitted():
     descriptor.pop("origin_room_id")
 
     assert "origin_room_id" not in LogicalJat.from_dict(descriptor).to_dict()
+
+
+def test_optional_authenticated_policy_provenance_preserves_legacy_descriptor_reads():
+    legacy = _valid_descriptor()
+    _validator().validate(legacy)
+    assert LogicalJat.from_dict(legacy).to_dict() == legacy
+    current = copy.deepcopy(legacy)
+    for supported in ('inherited-rules-v1', 'inherited-rules-v2'):
+        current['source']['composition_policy'] = supported
+        _validator().validate(current)
+        assert LogicalJat.from_dict(current).to_dict() == current
+    for unsupported in (None, True, 'latest', 'unverified'):
+        current['source']['composition_policy'] = unsupported
+        with pytest.raises((TypeError, ValueError)):
+            LogicalJat.from_dict(current)
+        with pytest.raises(ValidationError):
+            _validator().validate(current)

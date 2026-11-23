@@ -490,6 +490,22 @@ async function main() {
     }
     await runManagedJatServe(haul, "jat-serve");
 
+    const knownWindowsRegistryBug = platform === "win32-x64"
+      && manifest.jat.release_tag === "v0.1.21-jat-runtime";
+    let haulerRoundTrip = { status: "not-run", reason: "hauler-dev/hauler#916" };
+    if (!knownWindowsRegistryBug) {
+      haulerRoundTrip = JSON.parse(run(
+        "python", [path.join(repository, "scripts", "managed_hauler_acceptance.py"), path.join(root, "hauler-roundtrip")],
+        { env: environment, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", timeout: 240000 },
+      ).trim());
+      if (haulerRoundTrip.status !== "passed") throw new Error("installed Hauler round trip did not pass");
+    }
+    await fsp.writeFile(
+      path.join(evidenceDir, "hauler-roundtrip.json"),
+      `${JSON.stringify(haulerRoundTrip, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+
     let windowsRoomStoreAcceptance = { status: "not-applicable", native_windows_only: true };
     if (platform === "win32-x64") {
       const roomStoreResultFile = path.join(paths.logsRoot, "managed-controller-windows-room-store-result.json");

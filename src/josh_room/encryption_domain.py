@@ -189,7 +189,7 @@ def physical_bucket_identity(provider: str, endpoint: str, bucket: str) -> str:
 
 
 def is_control_key(key: str) -> bool:
-    return key in CONTROL_KEYS
+    return key in CONTROL_KEYS or (isinstance(key, str) and re.fullmatch(r"control/agent-references/v1/[0-9a-f]{64}\.age", key) is not None)
 
 
 def validate_recipient(value: object, label: str = "recipient") -> str:

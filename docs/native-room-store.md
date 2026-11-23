@@ -18,7 +18,7 @@ Save with:
 josh-room snapshot create my-room --source . --dimension archive --json
 ```
 
-The first Save initializes the Dimension's Room Store repository and publishes a complete logical JAT. Later Saves reuse unchanged Restic data. A no-op Save returns `status: already-saved` and adds no recovery point. Human output says `Already saved — 0 bytes uploaded`.
+The first Save initializes the Dimension's Room Store repository and publishes a complete logical JAT. Later Saves reuse unchanged Restic data. A no-op Save returns `status: already-saved` and adds no recovery point. Human output says `Already saved — no new backup data`. Temporary Restic lock writes can still occur; this is not a claim of zero network writes.
 
 If a Save reports `deletion-confirmation-required`, review a fresh preview and pass its token back with `--confirm-deletion`:
 
@@ -27,6 +27,12 @@ josh-room snapshot create my-room --source . --dimension archive --confirm-delet
 ```
 
 Save installs the checksum-pinned Restic 0.19.1 runtime on demand. Preview does not install it. Preview and Enter require an already prepared, verified runtime.
+
+The CLI wheel includes the same pinned Restic manifest and installer as the
+VSIX. It resolves these assets inside its installed package, so an installed
+wheel does not require a repository checkout or an adjacent VSIX. The separate
+published 0.1.52 wheel lacks these assets; its recorded Save failure is not
+changed by this correction.
 
 When the source contains `robot.yaml`, Save captures the RCC Environment Artifact and stores its RCCA as a Room Store component. Save requires RCC v18.19.11 and fails closed if RCC cannot publish or export that artifact. The source workspace and its robot files also remain part of the complete Restic snapshot.
 
@@ -60,3 +66,10 @@ An empty Secret Service lookup is normal before the first credential is stored.
 The native helper's silent no-match exit is recognized as reachable; locked,
 disconnected and other error results remain unavailable. Credentials still use
 the native secure store, never a plaintext fallback.
+
+## Recover a historical file without entering a Room
+
+The additive `recovery tree|inspect|diff|extract` commands require an exact
+historical point. See [historical recovery](historical-recovery.md) for absent
+destination safety, format capabilities, native navigation and current limits.
+Portable snapshots continue to use the existing explicit whole-Room workflow.

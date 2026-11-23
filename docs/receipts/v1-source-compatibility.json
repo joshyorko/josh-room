@@ -1,0 +1,47 @@
+{
+  "scope": "immutable-source-decoder-and-schema-only",
+  "installed_binary_restore": "NOT RUN",
+  "checks": 6,
+  "results": [
+    {
+      "source": "23c80716b8a646cbf74f6eacb04eb639af87c9c2",
+      "fixture": "legacy-ordinary",
+      "decoder_accepts": true,
+      "schema_accepts": true
+    },
+    {
+      "source": "23c80716b8a646cbf74f6eacb04eb639af87c9c2",
+      "fixture": "composition-v2",
+      "decoder_accepts": false,
+      "schema_accepts": false
+    },
+    {
+      "source": "23c80716b8a646cbf74f6eacb04eb639af87c9c2",
+      "fixture": "unrecognized-agent-component",
+      "decoder_accepts": false,
+      "schema_accepts": false
+    },
+    {
+      "source": "1ebb277f43e51c333fb9aeb577b6c7a70972448e",
+      "fixture": "legacy-ordinary",
+      "decoder_accepts": true,
+      "schema_accepts": true
+    },
+    {
+      "source": "1ebb277f43e51c333fb9aeb577b6c7a70972448e",
+      "fixture": "composition-v2",
+      "decoder_accepts": true,
+      "schema_accepts": true
+    },
+    {
+      "source": "1ebb277f43e51c333fb9aeb577b6c7a70972448e",
+      "fixture": "unrecognized-agent-component",
+      "decoder_accepts": false,
+      "schema_accepts": false
+    }
+  ],
+  "decoder_sha256": {
+    "23c80716b8a646cbf74f6eacb04eb639af87c9c2": "93f95b1213f1bfca3c952938494fdc6e86fccc541eba65f3bac1cad990b71a74",
+    "1ebb277f43e51c333fb9aeb577b6c7a70972448e": "824356d91653b0eca6f1fdabd4394ecf3c5d0aa2895871a9074d23538dc29819"
+  }
+}

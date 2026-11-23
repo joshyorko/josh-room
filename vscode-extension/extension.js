@@ -12,7 +12,7 @@ const {
   formatProgressDisplay,
   operationKind,
 } = require("./progress");
-const { FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
+const { followLogFile, stageForLog, waitForServeStartup, validateServeStartup, verifiedPull, probeRegistry, readServeJson } = require("./registry");
 const providerTools = require("./provider");
 
 let outputChannel;
@@ -954,7 +954,10 @@ async function writeEncryptionHandoff(environment, material) {
   fs.chmodSync(directory, 0o700);
   const filename = path.join(directory, "material.identity");
   try {
-    fs.writeFileSync(filename, identity.endsWith("\n") ? identity : `${identity}\n`, { mode: 0o600 });
+    if (process.platform === "win32") await require("./windows-handoff").prepareWindowsHandoff(directory);
+    fs.writeFileSync(filename, identity.endsWith("\n") ? identity : `${identity}\n`, {
+      mode: 0o600, flag: process.platform === "win32" ? "r+" : "w",
+    });
     fs.chmodSync(filename, 0o600);
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -1133,7 +1136,9 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     environment = managedRuntime.mergeRuntimeEnvironment(process.env, { ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath });
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
-      authFree: ["status", "composition"].includes(args[0]),
+      authFree: ["status", "agents"].includes(args[0])
+        || (args[0] === "composition" && ["plan", "inventory", "reconcile", "capture-plan"].includes(args[1]))
+        || (options.localConfigurationOnly && args[0] === "dimensions" && !args.includes("--with-hierarchy")),
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
@@ -1143,7 +1148,12 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     throw error;
   }
   return new Promise((resolve, reject) => {
-    environment.JOSH_ROOM_RESULT_FILE = resultPath;
+    if (args[0] === "recovery" && args.includes("--include-text")) {
+      // Text preview is pipe-only; never put reversible content in runtime receipts.
+      delete environment.JOSH_ROOM_RESULT_FILE;
+    } else {
+      environment.JOSH_ROOM_RESULT_FILE = resultPath;
+    }
     const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(sanitizeProgressEvent(event)))];
     if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
       const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
@@ -1330,6 +1340,10 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       }
       cleanup();
       if (options.inventoryError) { reject(options.inventoryError); return; }
+      if (result?.ok === false && result.error === "agent-save-partial") {
+        reject(controllerFailure(result, { controllerExitStatus: code, controllerStderr: stderr }));
+        return;
+      }
       if (cancelled || cancellationToken?.isCancellationRequested) {
         reject(cancellationError());
         return;
@@ -1384,7 +1398,8 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
     outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
     return result;
   } catch (error) {
-    if (cancellationToken?.isCancellationRequested || isCancellationError(error)) {
+    const agentPartial = error.result?.ok === false && error.result.error === "agent-save-partial";
+    if ((cancellationToken?.isCancellationRequested || isCancellationError(error)) && !agentPartial) {
       throw cancellationError();
     }
     if (error.result) {
@@ -1594,7 +1609,7 @@ class JatToolsProvider {
       { label: "Extract from JAT", description: "One reference", icon: "go-to-file", command: "joshRoom.jatExtract" },
       { label: "Restore Workspace", description: "Restore", icon: "folder-library", command: "joshRoom.jatRestore" },
       { label: "Serve JAT…", description: "Auto · Files · Registry · Both", icon: "server-process", command: "joshRoom.jatServe" },
-      { label: "Export Images…", description: "containerd", icon: "archive", command: "joshRoom.jatExport" },
+      { label: "Export Images…", description: "All images in one containerd archive", icon: "archive", command: "joshRoom.jatExport" },
       { label: "Copy / Seed…", description: "registry · dir", icon: "copy", command: "joshRoom.jatCopy" },
     ];
   }
@@ -1821,14 +1836,15 @@ function assertValidRoomStorePreview(preview) {
     || typeof preview.rcc_capture_pending !== "boolean"
     || preview.signature_algorithm !== "josh-room-stat-v1"
     || !digest(preview.workspace_signature)
-    || !digest(preview.capture_policy_sha256)) {
+    || !digest(preview.capture_policy_sha256)
+    || (preview.agent_plan && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(preview.project_id || ""))) {
     throw new Error("Room Store Save Preview returned an invalid receipt.");
   }
 }
 
 async function approveRoomStorePreview(preview, { name, source, allImages, dimension } = {}) {
-  const target = name ? `Room: ${name}\nDimension: ${dimension || "selected storage"}\nFolder: ${source}\nCapture: ${allImages ? "Workspace and all tagged local OCI images" : "Workspace only"}\n\n` : "";
-  const message = target + roomStorePreviewText(preview);
+  const target = name ? `Room: ${name}\nDimension: ${dimension || "selected storage"}\nFolder: ${source}\nCapture: ${preview.component_plan ? "Workspace plus the explicit component plan below" : allImages ? "Workspace and all tagged local OCI images" : "Workspace only"}\n\n` : "";
+  const message = target + roomStorePreviewText(preview) + "\n" + require("./component-picker").planText(preview);
   if (preview.deletion_confirmation_token) {
     const action = await vscode.window.showWarningMessage(
       `${message}\n\nDeleted paths:\n${preview.deleted_paths.map((item) => JSON.stringify(item)).join("\n")}\n\nThis deletion plan needs confirmation before Save.`,
@@ -2167,9 +2183,113 @@ async function splitWorkspace() {
   return outcome;
 }
 
+async function newRoom() {
+  assertWorkspaceTrusted("create a Room");
+  const choice = await vscode.window.showQuickPick([
+    { label: "Save one Room", id: "ordinary" },
+    { label: "Configure Catalog Room", id: "catalog" },
+  ], { title: "New Room", placeHolder: "Save one Room is the default" });
+  if (!choice) return "cancelled";
+  return choice.id === "catalog" ? saveCatalogRoom() : saveRoom({ forceCreate: true });
+}
+
+async function saveCatalogRoom() {
+  assertWorkspaceTrusted("save a Catalog Room");
+  const argsFor = (selection, command) => ["composition", command, "--workspace", selection.root,
+    "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
+    "--parent-room", selection.parentRoom, "--expected-domain", selection.dimension.encryption_domain_id, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`])];
+  return require("./catalog-actions").saveCatalog(vscode, {
+    dimensions: async (root) => dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true })),
+    plan: (selection) => runJoshRoom(argsFor(selection, "capture-plan"), selection.root),
+    save: (selection, approval) => runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"], selection.root,
+      selection.dimension, { title: "Saving Catalog Room…", action: "save a Catalog Room" }),
+  });
+}
+
+async function enterChildRoom() {
+  assertWorkspaceTrusted("enter a child Room");
+  const root = activeWorkspace();
+  return require("./catalog-actions").enterChild(vscode, {
+    root, marker: currentRoom(root),
+    enter: async ({ namespace, child, marker }) => {
+      const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
+      const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
+      if (!dimension) throw new Error("The parent Dimension is not configured.");
+      return runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
+        "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
+      dimension, { title: "Entering pinned child Room…", action: "enter a child Room" });
+    },
+    open: (target) => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(target), false),
+  });
+}
+
+async function updateCompositionRoom(kind) {
+  assertWorkspaceTrusted("update a namespace Room");
+  const root = activeWorkspace();
+  const marker = currentRoom(root);
+  if (!marker?.composition_namespace) throw new Error("Open a namespace Room first.");
+  const isChild = fs.existsSync(path.join(root, ".josh-room-split.json"));
+  if ((kind === "child") !== isChild) throw new Error("Select the child Save or parent pin refresh action for this Room.");
+  if (kind === "child" && (vscode.workspace.textDocuments || []).some((document) => {
+    if (!document.isDirty || document.uri?.scheme !== "file") return false;
+    const relative = path.relative(root, document.uri.fsPath);
+    return relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  })) throw new Error("Save the child Room's editor files before capturing its disk content.");
+  if (!extensionContext?.workspaceState) throw new Error("The extension operation store is unavailable.");
+  const key = `composition.${kind}.${marker.composition_namespace}.${marker.project_id}`;
+  const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
+  const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
+  if (!dimension) throw new Error("The namespace Dimension is not configured.");
+  const invoke = (ticket, apply) => {
+    const command = kind === "child" ? (apply ? "save-child" : "plan-child-save") : (apply ? "refresh-parent-pins" : "plan-parent-refresh");
+    const args = ["composition", command, "--dimension", marker.dimension_id, "--namespace", ticket.namespace, "--operation-id", ticket.operationId,
+      ...(kind === "child" ? ["--room", ticket.room, "--child-snapshot", ticket.baseline, "--workspace", root]
+        : ["--parent-room", ticket.room, "--parent-snapshot", ticket.baseline, "--set-child", `${ticket.child}=${ticket.pin}`]),
+      ...(apply ? ["--approve", ticket.approval] : [])];
+    return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
+  };
+  return require("./catalog-actions").updateRoom(vscode, { marker, kind, pending: extensionContext.workspaceState.get(key),
+    remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
+}
+
+function agentPartialMatchesReview(receipt, plan, source, dimension, project, domain) {
+  if (receipt?.ok !== false || receipt.error !== "agent-save-partial" || plan?.format !== "josh-room.save-agent-plan.v2"
+    || typeof project !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(project)
+    || !/^[a-f0-9]{64}$/.test(plan.attempt_id || "") || receipt.attempt_id !== plan.attempt_id
+    || !/^[a-f0-9]{32}$/.test(plan.workspace_candidate_id || "")
+    || ![plan.workspace_candidate_id, plan.reviewed_point?.logical_jat_id].filter(Boolean).includes(receipt.candidate_logical_jat_id)) return false;
+  try {
+    if (loadCapturePolicy(source).sha256 !== plan.capture_policy_sha256) return false;
+    let metadata;
+    try { metadata = fs.lstatSync(path.join(source, ".josh-room.json")); }
+    catch (error) { if (error.code === "ENOENT") return true; throw error; }
+    if (!metadata.isFile() || metadata.isSymbolicLink()) return false;
+    const marker = currentRoom(source);
+    return Boolean(marker && domain && marker.encryption_domain_id === domain && marker.dimension_id === dimension && marker.project_id === project
+      && marker.capture_policy_sha256 === plan.capture_policy_sha256
+      && [plan.workspace_candidate_id, plan.reviewed_point?.logical_jat_id].filter(Boolean).includes(marker.snapshot_id)
+      && marker.workspace_path_sha256 === realWorkspacePathSha256(source) && !marker.composition_namespace);
+  } catch (_) { return false; }
+}
+
+function agentPartialWorkspace(receipt, source, dimension) {
+  if (receipt?.ok !== false || receipt.error !== "agent-save-partial") return undefined;
+  const result = receipt.workspace_result;
+  if (result?.ok !== true || !["saved", "saved-but-dirty", "already-saved"].includes(result.status)) return undefined;
+  const marker = currentRoom(source);
+  try {
+    return marker?.dimension_id === dimension && nativeSaveBindingMatches(result, marker, source, loadCapturePolicy(source))
+      ? result : undefined;
+  } catch (_) { return undefined; }
+}
+
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
+  if (currentRoom(cwd)?.composition_namespace) {
+    if (options.current && fs.existsSync(path.join(cwd, ".josh-room-split.json"))) return updateCompositionRoom("child");
+    throw new Error("This Room belongs to a composition namespace. Use explicit parent pin refresh; ordinary Save cannot update it.");
+  }
   const currentMarker = options.current ? currentRoom(cwd) : undefined;
   if (options.current && !currentMarker) {
     await vscode.window.showInformationMessage("Open a Room first, or use Save Folder As Room.");
@@ -2200,39 +2320,9 @@ async function saveRoom(options = {}) {
     }
     throw new Error("Composed Save is blocked until retention and publication are admitted.");
   }
-  const imageChoices = [
-    { label: "Workspace only", allImages: false },
-    { label: "Workspace + all tagged local OCI images", allImages: true },
-  ];
-  let imageChoice = currentMarker && sessionCaptureChoices.get(captureChoiceKey(source, currentMarker.dimension_id, currentMarker.project_id));
-  const cachedReceipt = options.forceCreate ? undefined : trustedLocalSaveReceipt(source, cwd);
-  if (cachedReceipt) {
-    if (!imageChoice) imageChoice = await vscode.window.showQuickPick(imageChoices, {
-      title: "Include local OCI images?",
-      ignoreFocusOut: true,
-    });
-    if (!imageChoice) return "cancelled";
-    // VS Code intentionally suppresses some .git events. Event silence is
-    // never evidence that a recovery point contains the current Git objects.
-    if (trustedLocalSaveReceipt(source, cwd) === cachedReceipt
-      && Boolean(imageChoice.allImages) === cachedReceipt.all_images
-      && await nativeSaveReceiptStillMatches(source, cachedReceipt)) {
-      const action = await vscode.window.showInformationMessage(
-        "Already saved — 0 bytes uploaded",
-        "Done",
-        ...(currentMarker ? [] : ["Choose another Room"]),
-      );
-      if (action !== "Choose another Room"
-        && await nativeSaveReceiptStillMatches(source, cachedReceipt)
-        && trustedLocalSaveReceipt(source, cwd) === cachedReceipt) {
-        refreshRoomStatus();
-        return "already-saved";
-      }
-      trustedSaveReceipt = undefined;
-    } else {
-      trustedSaveReceipt = undefined;
-    }
-  }
+  // Component admission precedes any no-op probe. The backend compares the
+  // actual resolved component identities, including refreshed external bytes.
+  let imageChoice;
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const marker = currentRoom(source);
@@ -2322,18 +2412,16 @@ async function saveRoom(options = {}) {
       }
     }
   }
-  if (!imageChoice) {
-    imageChoice = await vscode.window.showQuickPick(imageChoices, {
-      title: "Include local OCI images?",
-      ignoreFocusOut: true,
-    });
-    if (!imageChoice) return "cancelled";
-  }
+  const choiceKey = captureChoiceKey(source, targetDimensionId, selected.project?.id || name);
+  imageChoice = await require("./component-picker").pickComponents(vscode, source, sessionCaptureChoices.get(choiceKey) || require("./component-picker").storedChoice(extensionContext?.globalState, choiceKey), () => runJoshRoom(["snapshot", "homebrew-capabilities"], source),
+    ["minio", "s3"].includes(targetProvider) ? () => runJoshRoom(nativeRegistry.dimensionArgs(
+      ["snapshot", "agent-save-status", name, "--source", source, "--backend", targetProvider], targetDimensionId), source) : undefined);
+  if (!imageChoice) return "cancelled";
   const buildArgs = nativeRegistry.dimensionArgs(
     ["snapshot", "create", name, "--source", source, "--backend", targetProvider],
     targetDimensionId || selectedDimensionId,
   );
-  if (imageChoice.allImages) buildArgs.push("--all-images");
+  buildArgs.push(...imageChoice.args);
   // This hint only skips the local no-op probe. Save still validates the full
   // workspace and Restic remains the content authority.
   if (workspaceBindingTrusted && workspaceBaseline
@@ -2349,7 +2437,7 @@ async function saveRoom(options = {}) {
       ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
       targetDimensionId || selectedDimensionId,
     );
-    if (imageChoice.allImages) previewArgs.push("--all-images");
+    previewArgs.push(...imageChoice.args);
     preview = await runSelectedEncryption(
       previewArgs,
       source,
@@ -2359,6 +2447,8 @@ async function saveRoom(options = {}) {
     assertValidRoomStorePreview(preview);
     deletionConfirmationToken = await approveRoomStorePreview(preview, { name, source, allImages: imageChoice.allImages, dimension: targetDimension?.display_name || targetDimensionId });
     if (deletionConfirmationToken === undefined) return "cancelled";
+    if (preview.agent_plan) buildArgs.push("--agent-plan", JSON.stringify(preview.agent_plan));
+    if (preview.component_plan_token) buildArgs.push("--component-plan-token", preview.component_plan_token);
     if (deletionConfirmationToken) buildArgs.push("--confirm-deletion", deletionConfirmationToken);
   }
   if (nativeSave && extensionContext) {
@@ -2377,13 +2467,38 @@ async function saveRoom(options = {}) {
     }
   }
   const saveEventGeneration = workspaceEventGeneration;
-  const result = nativeSave
-    ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
-      title: `Saving ${name}…`,
-      action: "save a Room",
-      encryptionMaterial,
-    })
-    : await runOperation(`Saving ${name}…`, buildArgs, source);
+  let result;
+  let agentPartial;
+  while (true) {
+    try {
+      result = nativeSave
+      ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
+        title: `Saving ${name}…`,
+        action: "save a Room",
+        encryptionMaterial,
+      })
+      : await runOperation(`Saving ${name}…`, buildArgs, source);
+      break;
+    } catch (error) {
+      if (!nativeSave || !agentPartialMatchesReview(error.result, preview?.agent_plan, source, targetDimensionId, preview?.project_id, targetDimension?.encryption_domain_id)) throw error;
+      const workspaceResult = agentPartialWorkspace(error.result, source, targetDimensionId);
+      agentPartial = error.result;
+      result = workspaceResult;
+      if (workspaceResult) finishRoomStoreSave(workspaceResult, source, saveEventGeneration, imageChoice.allImages);
+      else setRoomState("unknown", { bindingTrusted: false });
+      outputChannel?.appendLine(`Agent Save partial: ${sanitizeControllerText(JSON.stringify(agentPartial.agent_result))}`);
+      const action = await vscode.window.showWarningMessage(workspaceResult
+        ? "Workspace saved; selected agent HISTORY did not finish. The recovery point is retained. Retry reconciles only this exact reviewed attempt."
+        : agentPartial.agent_result?.candidate_point_verified === true && agentPartial.agent_result.workspace_committed === null
+          ? "Candidate recovery point verified; this attempt's workspace commit is unverified. Agent HISTORY is blocked. Retry reconciles only this exact reviewed attempt."
+        : "Agent HISTORY Save is incomplete and the workspace outcome is not verified. Retry reconciles only this exact reviewed attempt; it cannot substitute a newer recovery point.",
+      "Retry Exact Attempt", "Show Details");
+      if (action === "Show Details") outputChannel?.show(true);
+      if (action === "Retry Exact Attempt") { agentPartial = undefined; continue; }
+      if (!workspaceResult) return "agent-save-uncertain";
+      break;
+    }
+  }
   if (nativeSave) {
     if (!["saved", "saved-but-dirty", "already-saved"].includes(result.status)) {
       throw new Error("Room Store Save returned an unsupported receipt.");
@@ -2396,16 +2511,27 @@ async function saveRoom(options = {}) {
       if (result[key] !== undefined && result[key] !== null) outputChannel?.appendLine(`${key}: ${sanitizeControllerText(result[key])}`);
     }
     let action;
-    if (dirtyBuffers.size > 0) {
+    if (agentPartial) {
+      // The partial receipt and explicit exact-attempt retry were handled above.
+    } else if (dirtyBuffers.size > 0) {
       action = await vscode.window.showWarningMessage("The Room was saved from disk, but unsaved editor changes remain. Save the files and save the Room again.", "Show Details");
     } else if (result.status === "already-saved") {
-      action = await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded", "Show Details");
+      const entries = result.agent_result?.entries;
+      const knownBytes = Array.isArray(entries) && entries.length > 0 && entries.every(entry => Number.isSafeInteger(entry.data_uploaded) && entry.data_uploaded >= 0);
+      const agentBytes = knownBytes ? entries.reduce((sum, entry) => sum + entry.data_uploaded, 0) : undefined;
+      action = await vscode.window.showInformationMessage(result.agent_result && !knownBytes
+        ? "Workspace already saved; agent HISTORY receipt has no verified upload count."
+        : agentBytes > 0 ? `Workspace already saved; agent HISTORY uploaded ${agentBytes} bytes.` : "Already saved — no new backup data", "Show Details");
     } else if (result.status === "saved-but-dirty" || saveEventGeneration !== workspaceEventGeneration) {
       action = await vscode.window.showWarningMessage(`Saved “${name}”, but workspace changes remain.`, "Show Details");
     } else {
       action = await vscode.window.showInformationMessage(`Saved “${name}”.`, "Show Details");
     }
     if (action === "Show Details") outputChannel?.show(true);
+    if (result.component_receipt) {
+      for (const [name, receipt] of Object.entries(result.component_receipt)) outputChannel?.appendLine(`${name}: ${receipt.status}`);
+    }
+    if (!agentPartial && result.agent_result) outputChannel?.appendLine(`Agent HISTORY receipt: ${sanitizeControllerText(JSON.stringify(result.agent_result))}`);
     finishRoomStoreSave(result, source, saveEventGeneration, imageChoice.allImages);
   } else {
     const size = Number.isFinite(result.ciphertext_size)
@@ -2415,7 +2541,12 @@ async function saveRoom(options = {}) {
   }
   const savedMarker = currentRoom(source);
   if (savedMarker && savedMarker.dimension_id === targetDimensionId && savedMarker.project_id === (selected.project?.id || result.project_id)) {
-    sessionCaptureChoices.set(captureChoiceKey(source, savedMarker.dimension_id, savedMarker.project_id), imageChoice);
+    sessionCaptureChoices.set(choiceKey, imageChoice);
+    try {
+      await require("./component-picker").rememberChoice(extensionContext?.globalState, choiceKey, imageChoice);
+    } catch (_error) {
+      outputChannel?.warn("Room saved; component defaults could not be remembered.");
+    }
   }
   if (!nativeSave && path.resolve(source) === path.resolve(cwd)) {
     await startDirtyTracking(extensionContext);
@@ -2425,6 +2556,7 @@ async function saveRoom(options = {}) {
   } catch (_error) {
     await vscode.window.showWarningMessage("Room saved, but storage refresh did not finish. Use Refresh to reload the list; you do not need to save again.");
   }
+  if (agentPartial) return "agent-save-partial";
   return dirtyBuffers.size > 0 || saveEventGeneration !== workspaceEventGeneration || result.status === "saved-but-dirty"
     ? "saved-but-dirty" : nativeSave ? result.status : "saved";
 }
@@ -2724,7 +2856,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
         description: item.created_at || item.snapshot_id,
         snapshotId: item.snapshot_id,
       })),
-      { title: `Serve images from ${project.display_name}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
+      { title: `Serve content from ${project.display_name}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
     );
     if (!selected) return "cancelled";
     snapshotId = selected.snapshotId;
@@ -2738,7 +2870,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   if ((selectedRecord?.payload_kind || preferredRecord?.payload_kind) === "room-store-v1") {
     const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
       title: `Serve ${project.display_name} logical JAT`,
-      placeHolder: "How should JAT expose this recovery point?",
+      placeHolder: "Choose projection (Files, Registry, Both, or Auto; ports selected by JAT)",
       ignoreFocusOut: true,
     });
     if (!chosen) return "cancelled";
@@ -2773,7 +2905,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   return startRegistry({
     cwd,
     title: `Serving ${project.display_name}`,
-    terminalName: `Images: ${project.display_name}`,
+    terminalName: `Serve: ${project.display_name}`,
     args: ["serve", project.id, "--snapshot", snapshotId, "--backend", provider, "--dimension", dimension],
     encryptionMaterial,
     retry: () => vscode.commands.executeCommand("joshRoom.serve", project),
@@ -2793,6 +2925,28 @@ function shellJoin(values, platform = process.platform) {
 function buildTerminalLaunch(runtime, args, environment, platform = process.platform, receiptFile) {
   return {
     command: shellJoin([runtime.command, ...runtime.args(args, receiptFile)], platform),
+    environment: { ...environment },
+  };
+}
+
+function buildServeTerminalLaunch(runtime, args, environment, receiptFile, completionFile, platform = process.platform) {
+  const argv = [runtime.command, ...runtime.args(args, receiptFile)];
+  if (platform === "win32") {
+    const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+    const script = `$joshServeExit = 1; try { & ${argv.map(quote).join(" ")}; $joshServeExit = $LASTEXITCODE } finally { [System.IO.File]::WriteAllText(${quote(completionFile)}, [string]$joshServeExit) }`;
+    return {
+      command: `& ${["powershell.exe", "-NoLogo", "-NoProfile", "-Command", script].map(quote).join(" ")}`,
+      shellPath: "powershell.exe",
+      shellArgs: ["-NoLogo", "-NoProfile"],
+      environment: { ...environment },
+    };
+  }
+  const completion = `printf '%s\\n' "$?" > ${shellQuote(completionFile, platform)}`;
+  const script = `trap ${shellQuote(completion, platform)} 0; trap 'exit 130' INT; trap 'exit 143' TERM; ${shellJoin(argv, platform)}`;
+  return {
+    command: shellJoin(["/bin/sh", "-c", script], platform),
+    shellPath: "/bin/sh",
+    shellArgs: [],
     environment: { ...environment },
   };
 }
@@ -2877,14 +3031,38 @@ async function chooseHaul(cwd, title, openLabel = "Use this haul") {
   return files?.length ? files[0].fsPath : undefined;
 }
 
+// These labels are presentation only. Keep JAT references intact for operations.
+function contentLabels(references) {
+  const labels = references.map((reference) => reference.split("/").at(-1) || reference);
+  const counts = new Map();
+  for (const label of labels) counts.set(label, (counts.get(label) || 0) + 1);
+  return labels.map((label, index) => counts.get(label) > 1 ? references[index] : label);
+}
+
 function inventoryQuickPickItems(inventory) {
-  return (Array.isArray(inventory) ? inventory : [])
-    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference)
-    .map((entry) => ({
-      label: `$(package) ${entry.reference}`,
-      description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
-      entry,
-    }));
+  const entries = (Array.isArray(inventory) ? inventory : [])
+    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference);
+  const labels = contentLabels(entries.map((entry) => entry.reference));
+  return entries.map((entry, index) => ({
+    label: `$(${entry.type === "files" ? "file" : "package"}) ${labels[index]}`,
+    description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
+    entry,
+  }));
+}
+
+async function showCatalogRepositories(repositories) {
+  const names = repositories.filter((name) => typeof name === "string" && name);
+  if (!names.length) return vscode.window.showInformationMessage("The registry catalog lists no repositories.");
+  const labels = contentLabels(names);
+  const selected = await vscode.window.showQuickPick(names.map((name, index) => ({
+    label: `$(package) ${labels[index]}`, description: "OCI repository", name,
+  })), { title: "OCI registry catalog", placeHolder: "Select a repository for details" });
+  if (!selected) return;
+  const action = await vscode.window.showInformationMessage(
+    `Catalog repository: ${selected.name}. The catalog does not identify the original image or a verified pull target.`,
+    "Copy Repository Name",
+  );
+  if (action === "Copy Repository Name") await vscode.env.clipboard.writeText(selected.name);
 }
 
 async function jatBuild() {
@@ -3017,11 +3195,11 @@ async function showJatInventory(haul, cwd) {
     selected.entry.digest,
   ].filter(Boolean).join(" · ");
   const action = await vscode.window.showInformationMessage(
-    `${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
-    "Copy Reference",
+    `Stored reference: ${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
+    "Copy Stored Reference",
     "Extract…",
   );
-  if (action === "Copy Reference") {
+  if (action === "Copy Stored Reference") {
     await vscode.env.clipboard.writeText(selected.entry.reference);
     await vscode.window.showInformationMessage(`Copied ${selected.entry.reference}.`);
   } else if (action === "Extract…") {
@@ -3059,7 +3237,8 @@ async function jatExtract(preselection) {
     openLabel: "Extract here",
   });
   if (!parents?.length) return "cancelled";
-  const defaultName = `${path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "")}-extract`;
+  const slug = reference.split("/").at(-1).replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  const defaultName = `extract-${slug || "content"}`;
   const name = await vscode.window.showInputBox({
     title: "JAT: Extract from JAT",
     prompt: "New destination folder name (created only if absent)",
@@ -3130,10 +3309,10 @@ async function jatRestore() {
 }
 
 const JAT_SERVE_MODES = [
-  { label: "Auto", description: "Let JAT choose the compatible projection", mode: "auto" },
-  { label: "Files", description: "Direct downloads / file artifacts", mode: "files" },
-  { label: "Registry", description: "OCI images and charts", mode: "registry" },
-  { label: "Files + Registry", description: "Expose both from the same capsule", mode: "both" },
+  { label: "Auto", description: "JAT chooses the projection. Files may be served on all network interfaces.", mode: "auto" },
+  { label: "Files", description: "Serve file downloads on all network interfaces", mode: "files" },
+  { label: "Registry", description: "OCI images and charts on localhost", mode: "registry" },
+  { label: "Files + Registry", description: "Serve files on all network interfaces and the registry on localhost", mode: "both" },
 ];
 
 async function jatServe() {
@@ -3162,7 +3341,7 @@ async function jatExport() {
   if (!haul) return "cancelled";
   const base = path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "");
   const output = await vscode.window.showSaveDialog({
-    title: "Save containerd image archive",
+    title: "Save all images in one containerd archive",
     defaultUri: vscode.Uri.file(path.join(path.dirname(haul), `${base}-images.tar`)),
     filters: { "containerd archive": ["tar"] },
   });
@@ -3229,35 +3408,55 @@ async function jatCopy() {
   return "copied";
 }
 
-function firstEndpointSuccess(attempts) {
-  return new Promise((resolve, reject) => {
-    let pending = attempts.length;
-    let lastError;
-    if (!pending) {
-      resolve(undefined);
-      return;
-    }
-    for (const attempt of attempts) {
-      attempt.then(resolve, (error) => {
-        lastError = error;
-        pending -= 1;
-        if (pending === 0) reject(lastError);
-      });
-    }
-  });
+function sessionIsActive(startupPath, serve, isStopped) {
+  try {
+    if (isStopped() || typeof serve.session_id !== "string" || !serve.session_id) return false;
+    const current = validateServeStartup(readServeJson(startupPath), serve.mode);
+    if (current.session_id !== serve.session_id || current.pid !== serve.pid ||
+        current.registry_url !== serve.registry_url) return false;
+    process.kill(serve.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-function waitForServeEndpoint() {
-  // Auto delegates the projection decision to JAT, so wait for the first
-  // endpoint JAT actually starts (registry or fileserver) and report that.
-  return firstEndpointSuccess([
-    waitForRegistry().then((catalog) => ({ kind: "registry", catalog })),
-    waitForFileserver().then(() => ({ kind: "files" })),
-  ]);
+async function showMappedImages(serve, isActive) {
+  const images = serve.image_mapping.images.filter(image => typeof image?.stored_reference === "string" && image.stored_reference);
+  const labels = images.map(image => image.display_label || image.stored_reference);
+  const items = images.map((image, index) => ({
+    label: labels.indexOf(labels[index]) === labels.lastIndexOf(labels[index]) ? labels[index] : image.stored_reference,
+    description: image.platform || "OCI image",
+    detail: [image.requested_reference && `Requested: ${image.requested_reference}`, image.digest].filter(Boolean).join(" · "), image,
+  }));
+  const selected = await vscode.window.showQuickPick(items, { title: "Images in this JAT", ignoreFocusOut: true, placeHolder: "Select an image for details" });
+  if (!selected) return;
+  const image = selected.image;
+  const pull = isActive() && verifiedPull(serve, image);
+  const actions = [
+    ...(pull ? [
+      { label: "Copy Pull Command", detail: `docker pull ${pull}` },
+      { label: "Copy Served Reference", detail: pull },
+    ] : []),
+    ...(image.source_reference ? [{ label: "Copy Source Reference", detail: image.source_reference }] : []),
+    { label: "Copy Stored Reference", detail: image.stored_reference },
+  ];
+  const choice = await vscode.window.showQuickPick(actions, {
+    title: image.display_label || image.stored_reference,
+    placeHolder: pull ? "Choose a reference to copy" : "No verified pull reference for this session",
+    ignoreFocusOut: true,
+  });
+  const action = choice?.label;
+  if (action === "Copy Pull Command" || action === "Copy Served Reference") {
+    if (!pull || !isActive()) return vscode.window.showInformationMessage("This Serve session has ended.");
+    await vscode.env.clipboard.writeText(action === "Copy Pull Command" ? `docker pull ${pull}` : pull);
+  } else if (action === "Copy Source Reference") await vscode.env.clipboard.writeText(image.source_reference);
+  else if (action === "Copy Stored Reference") await vscode.env.clipboard.writeText(image.stored_reference);
 }
 
 async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry, encryptionMaterial }) {
   const runtime = await runtimeFor(cwd, args);
+  const jatRoot = runtime.jatRoot || runtime.env?.JOSH_ROOM_JAT_ROOT;
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
   let encryptionCleanup = () => {};
@@ -3267,17 +3466,21 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     credentialsCleanup();
     throw error;
   }
-  const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
   fs.chmodSync(progressDirectory, 0o700);
   const progressPath = path.join(progressDirectory, "events.jsonl");
   const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
   fs.writeFileSync(progressPath, "", { mode: 0o600 });
   environment.JOSH_ROOM_PROGRESS_FILE = progressPath;
-  const launch = buildTerminalLaunch(runtime, args, environment, process.platform, receiptPath);
+  const startupPath = path.join(progressDirectory, "serve-startup.json");
+  const resultPath = path.join(progressDirectory, "controller-result.json");
+  const completionPath = path.join(progressDirectory, "command-exit.txt");
+  environment.JOSH_ROOM_RESULT_FILE = resultPath;
+  const serveArgs = [...args, "--fileserver-port", "0", "--registry-port", "0", "--startup-file", startupPath];
+  const launch = buildServeTerminalLaunch(runtime, serveArgs, environment, receiptPath, completionPath);
   let terminal;
   try {
-    terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment });
+    terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment, shellPath: launch.shellPath, shellArgs: launch.shellArgs });
   } catch (error) {
     credentialsCleanup();
     encryptionCleanup();
@@ -3305,10 +3508,14 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
   );
   let stopped = false;
+  let terminalEnded = false;
+  let shellExecution;
+  const sessionEnded = () => stopped || terminalEnded || fs.existsSync(resultPath) || fs.existsSync(receiptPath) || fs.existsSync(completionPath);
   const stopFollowing = () => {
     if (stopped) return;
     stopped = true;
     for (const follower of followers) follower.dispose();
+    shellExecution?.dispose();
     progressReporter?.dispose();
     credentialsCleanup();
     encryptionCleanup();
@@ -3339,11 +3546,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     else outputChannel?.info("REGISTRY · Stopped");
     refreshRoomStatus();
   });
+  shellExecution = vscode.window.onDidEndTerminalShellExecution?.((event) => {
+    if (event.terminal === terminal) terminalEnded = true;
+  });
   outputChannel?.info(`START · ${title}`);
   outputChannel?.info(`LOGS · ${path.join(jatRoot, "output")}`);
   setStatus("$(sync~spin) Starting serve endpoints", title);
-  const autoServe = mode === "auto";
-  const waitsForRegistry = mode !== "files";
   terminal.show(true);
   try {
     const outcome = await vscode.window.withProgress(
@@ -3358,60 +3566,69 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
         terminal.sendText(launch.command, true);
         try {
-          if (autoServe) {
-            // JAT resolves Auto itself: a files-only capsule starts only the
-            // fileserver. Wait for whichever endpoint JAT actually starts
-            // instead of assuming the registry projection.
-            return await waitForServeEndpoint();
-          }
-          return waitsForRegistry ? { kind: "registry", catalog: await waitForRegistry() } : undefined;
+          const checkStopped = () => {
+            if (stopped) throw new Error("Serve terminal closed before readiness");
+            const completed = readServeJson(resultPath, 65536);
+            if (completed) throw new Error(sanitizeRuntimeLine(completed.diagnostic || completed.error || "Serve controller exited before readiness"));
+            if (fs.existsSync(receiptPath)) throw controllerReceiptError() || new Error("Serve controller exited before readiness");
+            if (fs.existsSync(completionPath)) throw new Error("Serve command exited before readiness; see terminal output for the runtime failure");
+            if (terminalEnded) throw new Error("Serve command exited before reporting endpoints; update the acquired runtime if it lacks startup support");
+          };
+          const serve = await waitForServeStartup(startupPath, { mode, checkStopped });
+          checkStopped();
+          const catalog = serve.registry_url ? await probeRegistry(serve.registry_url) : null;
+          checkStopped();
+          return { ...serve, catalog };
         } finally {
           progressActive = false;
         }
       },
     );
-    if (!outcome || outcome.kind === "files") {
-      setStatus("$(server-process) Serving files", title);
-      outputChannel?.info(`READY · JAT fileserver · ${title}`);
+    const fileserverUrl = outcome.fileserver_url;
+    const registryUrl = outcome.registry_url;
+    const fileserverScope = outcome.fileserver_bind === "all-interfaces" ? "all interfaces" : "localhost only";
+    if (outcome.mode === "files") {
+      setStatus(`$(server-process) Files :${new URL(fileserverUrl).port} (${fileserverScope})`, title);
+      outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}; ${fileserverScope}) · ${title}`);
       const filesAction = await vscode.window.showInformationMessage(
-        outcome
-          ? `JAT resolved this capsule to a files projection — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`
-          : `JAT is serving files from this capsule — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`,
+        `JAT is serving files at ${fileserverUrl}, listening on ${fileserverScope}. Close the ${terminalName} terminal to stop.`,
+        "Copy Fileserver URL",
         "Show Logs",
       );
-      if (filesAction === "Show Logs") outputChannel?.show(true);
+      if (filesAction === "Copy Fileserver URL") {
+        await vscode.env.clipboard.writeText(fileserverUrl);
+        await vscode.window.showInformationMessage(`Copied ${fileserverUrl}.`);
+      } else if (filesAction === "Show Logs") {
+        outputChannel?.show(true);
+      }
       return "started";
     }
     const catalog = outcome.catalog;
     const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
     const count = repositories.length;
-    const servingFiles = mode === "both";
+    const servingFiles = outcome.mode === "both";
     progressReporter?.event({ stage: "complete", message: "Serve endpoints ready" });
-    setStatus("$(server-process) Registry :5000", `${count} repositories · ${title}`);
-    outputChannel?.info(`READY · ${REGISTRY_URL} · ${count} ${count === 1 ? "repository" : "repositories"}`);
+    setStatus(`$(server-process) Registry :${new URL(registryUrl).port}${servingFiles ? ` / Files :${new URL(fileserverUrl).port} (${fileserverScope})` : ""}`, `${count} repositories · ${title}`);
+    outputChannel?.info(`READY · ${registryUrl} · ${count} ${count === 1 ? "repository" : "repositories"}`);
+    if (servingFiles) outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}; ${fileserverScope})`);
     const action = await vscode.window.showInformationMessage(
       servingFiles
-        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL} and files at ${FILESERVER_URL}.`
-        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl} (registry listening on localhost only) and files at ${fileserverUrl} (fileserver listening on ${fileserverScope}).`
+        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl}.`,
       "Show Images",
       "Copy Registry URL",
+      ...(servingFiles ? ["Copy Fileserver URL"] : []),
       "Show Logs",
     );
     if (action === "Show Images") {
-      if (!repositories.length) {
-        await vscode.window.showInformationMessage("This haul contains no registry repositories.");
-      } else {
-        await vscode.window.showQuickPick(
-          repositories.map((repository) => ({
-            label: `$(package) ${repository}`,
-            description: `127.0.0.1:5000/${repository}`,
-          })),
-          { title: "Images served by JAT", placeHolder: "Registry contents" },
-        );
-      }
+      if (outcome.image_mapping?.schema_version === 1 && Array.isArray(outcome.image_mapping.images)) {
+        await showMappedImages(outcome, () => sessionIsActive(startupPath, outcome, sessionEnded));
+      } else await showCatalogRepositories(repositories);
+    } else if (action === "Copy Fileserver URL") {
+      await vscode.env.clipboard.writeText(fileserverUrl);
     } else if (action === "Copy Registry URL") {
-      await vscode.env.clipboard.writeText(REGISTRY_URL);
-      await vscode.window.showInformationMessage(`Copied ${REGISTRY_URL}.`);
+      await vscode.env.clipboard.writeText(registryUrl);
+      await vscode.window.showInformationMessage(`Copied ${registryUrl}.`);
     } else if (action === "Show Logs") {
       outputChannel?.show(true);
     }
@@ -3421,7 +3638,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     terminal.dispose();
     terminalClosed.dispose();
     progressActive = false;
-    const detail = sanitizeRuntimeLine(latestLog || error.message || String(error));
+    const detail = sanitizeRuntimeLine(error.message || latestLog || String(error));
     progressReporter?.fail(error);
     outputChannel?.error(`JAT serve failed: ${detail}`);
     setStatus("$(error) JAT serve failed", detail);
@@ -3493,13 +3710,18 @@ function activate(context) {
   register(context, "joshRoom.save", () => saveRoom({ current: true }));
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
+  register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
+  register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
-  register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
+  register(context, "joshRoom.new", () => newRoom());
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
   register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
   register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
   register(context, "joshRoom.clearLocalFallback", clearLocalFallback);
@@ -3521,6 +3743,10 @@ function activate(context) {
 
 module.exports = { activate };
 module.exports.__test__ = {
+  agentPartialMatchesReview,
+  agentPartialWorkspace,
+  saveCatalogRoom,
+  enterChildRoom,
   splitWorkspace,
   enterRoom,
   checkWorkspace,
@@ -3622,7 +3848,7 @@ async function chooseServeProject(projects, marker, preferredProject) {
   }
   const choice = await vscode.window.showQuickPick(
     projects.map((project) => ({ label: roomLabel(project), project })),
-    { title: "Josh: Serve Room Images", placeHolder: "Choose a Room", ignoreFocusOut: true },
+    { title: "Josh: Serve Room Content\u2026", placeHolder: "Choose a Room", ignoreFocusOut: true },
   );
   return choice && choice.project;
 }
@@ -4985,7 +5211,7 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
   const generation = ++dirtyTrackingGeneration;
   watchWorkspace(context, root);
   const eventGenerationAtStart = workspaceEventGeneration;
-  const savedFingerprint = marker.format_version === 3
+  const savedFingerprint = [3, 4].includes(marker.format_version)
     ? marker.workspace_signature
     : marker.workspace_fingerprint;
   workspaceBindingTrusted = false;
@@ -5021,14 +5247,14 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     || status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
   );
   const localPathSha = realWorkspacePathSha256(root);
-  const v3BindingMatches = marker.format_version === 3 && Boolean(localPathSha)
+  const v3BindingMatches = [3, 4].includes(marker.format_version) && Boolean(localPathSha)
     && Boolean(status?.path_matches)
     && status?.workspace_path_sha256 === marker.workspace_path_sha256
     && marker.workspace_path_sha256 === localPathSha
     && status?.signature_algorithm === marker.signature_algorithm
     && status?.capture_policy_sha256 === marker.capture_policy_sha256
     && marker.capture_policy_sha256 === workspaceCapturePolicy.sha256;
-  workspaceBindingTrusted = marker.format_version === 3
+  workspaceBindingTrusted = [3, 4].includes(marker.format_version)
     ? v3BindingMatches
     : Boolean(status?.ok && status?.path_matches && status?.state === "clean" && status?.fingerprint_matches !== false);
   await workspaceBaseline.capture({ savedFingerprint, currentFingerprint: currentFingerprint || savedFingerprint });
@@ -5038,7 +5264,7 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     setRoomState("dirty", { bindingTrusted: workspaceBindingTrusted });
   } else if (!status || status.state === "unknown" || !workspaceBindingTrusted) {
     setRoomState("unknown", { bindingTrusted: false });
-  } else if (marker.format_version === 3) {
+  } else if ([3, 4].includes(marker.format_version)) {
     const signatureChanged = status.state === "changed"
       || status.signature_matches === false
       || status.policy_matches === false
@@ -5055,7 +5281,7 @@ module.exports.__test__.startDirtyTracking = startDirtyTracking;
 async function resetNativeBaseline(result) {
   if (!workspaceBaseline) return;
   const marker = currentRoom(activeWorkspace());
-  if (marker?.format_version === 3) {
+  if ([3, 4].includes(marker?.format_version)) {
     const policy = workspaceCapturePolicy;
     const pathSha = realWorkspacePathSha256(activeWorkspace());
     const bindingTrusted = Boolean(policy && pathSha
@@ -5148,7 +5374,20 @@ function contextSnapshot(context) {
   return snapshots.find((snapshot) => (snapshot.snapshot_id || snapshot.id) === context.snapshot_id);
 }
 
-async function selectedLogicalSnapshot(preselected, title) {
+async function selectedLogicalSnapshot(preselected, title, { selectedRowOnly = false } = {}) {
+  if (selectedRowOnly) {
+    const project = roomProject(preselected);
+    const dimension = explicitDimensionId(preselected);
+    const snapshotId = snapshotIdentity(preselected);
+    const snapshot = preselected?.snapshot || (project?.snapshots || project?.jats || [])
+      .find((entry) => (entry.snapshot_id || entry.id) === snapshotId);
+    if (!project?.id || !dimension || !snapshotId || snapshotId === "latest"
+        || snapshot?.payload_kind !== "room-store-v1") {
+      await vscode.window.showInformationMessage("Choose a specific logical JAT recovery-point row in Josh Rooms for agent recovery.");
+      return undefined;
+    }
+    return { ...project, project_id: project.id, dimension_id: dimension, snapshot_id: snapshotId };
+  }
   const context = await explicitRoomContext(preselected, title);
   if (!context) return undefined;
   if (contextSnapshot(context)?.payload_kind !== "room-store-v1") {
@@ -5192,6 +5431,38 @@ function logicalSnapshotSummary(result) {
   ].join("\n");
 }
 
+async function browseRecoveryPoint(preselected) {
+  const { browseRecovery, currentChildPin, isChildSnapshotId } = require("./recovery-actions");
+  const root = activeWorkspace();
+  const child = !preselected && currentChildPin(root);
+  let context;
+  if (child) {
+    assertWorkspaceTrusted("browse child recovery");
+    const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined,
+      undefined, { localConfigurationOnly: true }));
+    const dimension = dimensions.find((row) => (row.id || row.dimension_id) === child.dimension_id);
+    if (!dimension || (dimension.encryption_domain_id && dimension.encryption_domain_id !== child.encryption_domain_id)) {
+      throw new Error("The current child Dimension binding differs.");
+    }
+    const point = await vscode.window.showInputBox({ title: "Exact child recovery point to browse",
+      value: child.snapshot_id, ignoreFocusOut: true, validateInput: (id) =>
+        isChildSnapshotId(id) ? undefined : "Use the committed child snapshot ID (jat- followed by 32 lowercase hex digits)." });
+    if (!point) return "cancelled";
+    context = { ...child, dimension, snapshot_id: point };
+  } else {
+    const selected = await selectedLogicalSnapshot(preselected, "Browse Recovery Point");
+    if (selected) context = { ...selected, namespace: undefined };
+  }
+  if (!context) return "cancelled";
+  const dimensionId = explicitDimensionId(context);
+  const pinned = { ...context, dimension_id: dimensionId };
+  const dimension = context.dimension || { id: dimensionId, provider: context.provider };
+  return browseRecovery(vscode, pinned, (args) =>
+    runSelectedEncryption(nativeRegistry.dimensionArgs(args, dimensionId), root, dimension, {
+      title: "Reading historical recovery point…", action: "historical file recovery",
+    }), root);
+}
+
 async function inspectLogicalSnapshot(preselected) {
   assertWorkspaceTrusted("inspect a logical JAT");
   const context = await selectedLogicalSnapshot(preselected, "Josh: Inspect Logical JAT");
@@ -5202,6 +5473,284 @@ async function inspectLogicalSnapshot(preselected) {
   const action = await vscode.window.showInformationMessage(logicalSnapshotSummary(result), "Show Logs");
   if (action === "Show Logs") outputChannel?.show(true);
   return "inspected";
+}
+
+async function agentSessionsStatus(preselected) {
+  assertWorkspaceTrusted("inspect agent sessions");
+  const project = roomProject(preselected);
+  const dimension = explicitDimensionId(preselected);
+  if (!project?.id || !dimension) {
+    await vscode.window.showInformationMessage("Choose a Room in Josh Rooms to view Agent Sessions.");
+    return "unavailable";
+  }
+  const cwd = activeWorkspace();
+  const contextArgs = ["--dimension", dimension, "--room", project.id, "--workspace", cwd];
+  const result = await runJoshRoom(["agents", "room-status", ...contextArgs, "--json"], cwd);
+  const profiles = (Array.isArray(result.profiles) ? result.profiles : []).filter((profile) =>
+    /^[0-9a-f]{64}$/.test(profile.profile_ref || "")
+    && ["personal", "work", "oss", "homelab"].includes(profile.scope)
+    && profile.state === "configured"
+    && Array.isArray(profile.tools)
+    && profile.tools.some((tool) => ["codex", "claude"].includes(tool)));
+  const summary = [
+    agentSessionsSummary(result.capabilities || {}),
+    "Original T3 app-thread restoration is unavailable. This discovery does not import history or assign a new T3 ID.",
+    profiles.length ? `${profiles.length} configured local profile${profiles.length === 1 ? "" : "s"}. Discovery is read-only.`
+      : "No configured host-authorized profile matches this Room and workspace. Busy or unavailable profiles cannot be discovered here.",
+  ].join("\n");
+  const action = await vscode.window.showInformationMessage(
+    summary, { modal: true }, ...(profiles.length ? ["Discover native history"] : []),
+  );
+  if (action !== "Discover native history") return "inspected";
+  let profile = profiles[0];
+  if (profiles.length > 1) {
+    const picked = await vscode.window.showQuickPick(profiles.map((entry) => ({
+      label: `${entry.scope} profile ${entry.profile_ref.slice(0, 8)}`,
+      description: "Native history only",
+      profile_ref: entry.profile_ref,
+    })), { title: "Josh: Agent Sessions", placeHolder: "Choose a configured local profile" });
+    if (!picked) return "cancelled";
+    profile = profiles.find((entry) => entry.profile_ref === picked.profile_ref);
+    if (!profile) throw new Error("Choose a currently configured agent profile.");
+  }
+  const tools = [...new Set(profile.tools.filter((tool) => ["codex", "claude"].includes(tool)))];
+  let tool = tools[0];
+  if (tools.length > 1) {
+    const picked = await vscode.window.showQuickPick(tools.map((entry) => ({
+      label: entry === "codex" ? "Codex CLI" : "Claude Code",
+      description: "Native history only",
+      tool: entry,
+    })), { title: "Josh: Discover Native History", placeHolder: "Choose a provider history source" });
+    if (!picked) return "cancelled";
+    if (!tools.includes(picked.tool)) throw new Error("Choose an authorized history source.");
+    tool = picked.tool;
+  }
+  const discovery = await runJoshRoom([
+    "agents", "discover", ...contextArgs, "--profile-ref", profile.profile_ref, "--tool", tool, "--json",
+  ], cwd);
+  if (discovery.tool !== tool || discovery.scope !== profile.scope
+      || discovery.native_resume_verified !== false || discovery.original_t3_identity_restored !== false) {
+    throw new Error("Session discovery returned an unsupported history receipt.");
+  }
+  const sessions = (Array.isArray(discovery.sessions) ? discovery.sessions : []).filter((session) =>
+    session.tool === tool
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(session.provider_session_id || "")
+    && session.cwd_matches === true
+    && session.native_resume_verified === false
+    && session.t3_import?.state === "requires-verified-owned-server"
+    && session.t3_import?.original_t3_identity_restored === false
+    && session.t3_import?.new_t3_thread_id === null);
+  if (!sessions.length) {
+    await vscode.window.showInformationMessage("No qualified native history was found. No T3 import was performed; native continuation remains unverified.");
+    return "discovered";
+  }
+  const selected = await vscode.window.showQuickPick(sessions.map((session) => ({
+    label: `${tool === "codex" ? "Codex" : "Claude"} ${session.provider_session_id}`,
+    description: "Native-provider history only",
+    detail: "Workspace matches. No T3 import was performed. Original T3 identity is not restored; continuation is unverified.",
+    provider_session_id: session.provider_session_id,
+  })), { title: "Josh: Native Session History", placeHolder: "Inspect a session identity" });
+  if (!selected) return "discovered";
+  const session = sessions.find((entry) => entry.provider_session_id === selected.provider_session_id);
+  if (!session) throw new Error("Choose a discovered native session.");
+  await vscode.window.showInformationMessage([
+    `Provider session: ${session.provider_session_id}`,
+    "Workspace matches the approved Room.",
+    "No T3 import was performed. A supported provider-history import creates a new T3 app-thread ID; it does not restore the original T3 identity.",
+    "Native continuation is unverified. Save and Enter do not include agent state.",
+  ].join("\n"), { modal: true });
+  return "discovered";
+}
+
+function agentSessionsSummary(result) {
+  const providers = result.providers || {};
+  const labels = { t3: "T3 Code", codex: "Codex CLI", claude: "Claude Code" };
+  const states = new Set(["blocked", "history-only"]);
+  const lines = Object.entries(labels).map(([key, label]) => {
+    const state = providers[key]?.capture;
+    return `${label}: ${states.has(state) ? state : "unavailable"}; restore blocked`;
+  });
+  return [...lines, "Native continuation is unverified. Recovery is opt-in through josh-room agents. Save and Enter do not include agent state."].join("\n");
+}
+
+function agentRecoveryArgs(action, context, extra = []) {
+  const dimension = explicitDimensionId(context);
+  if (!dimension || !context?.project_id || !context.snapshot_id || context.snapshot_id === "latest") {
+    throw new Error("Choose a specific Room recovery point for agent history.");
+  }
+  return ["agents", action, "--dimension", dimension, "--room", context.project_id,
+    "--snapshot", context.snapshot_id, ...extra, "--json"];
+}
+
+function assertHistoryReferenceReceipt(result) {
+  if (result?.ok !== true || result.history_only !== true || result.native_resume_verified !== false
+      || result.original_t3_identity_restored === true) {
+    throw new Error("Agent recovery returned an unsupported history receipt.");
+  }
+}
+
+function agentRecoveryEntries(result, selection) {
+  assertHistoryReferenceReceipt(result);
+  if (result.contract_version !== 2 || result.original_t3_identity_restored !== false
+      || !["reference-absent", "history-reference"].includes(result.state)
+      || !Array.isArray(result.entries) || result.entries.length > 64
+      || (result.state === "reference-absent" ? result.entries.length !== 0 || result.format !== null
+        : !["josh-room.agent-references.v1", "josh-room.agent-references.v2"].includes(result.format))) {
+    throw new Error("Agent recovery returned an unsupported reference status.");
+  }
+  const ids = new Set();
+  for (const entry of result.entries) {
+    const stamp = entry?.created_at;
+    const date = typeof stamp === "string" ? stamp.slice(0, 10) : "";
+    if (typeof entry?.capture_id !== "string" || !/^[0-9a-f]{64}$/.test(entry.capture_id) || ids.has(entry.capture_id)
+        || typeof entry.profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(entry.profile)
+        || !["codex", "claude"].includes(entry.tool) || !["personal", "oss", "homelab"].includes(entry.scope)
+        || typeof entry.legacy !== "boolean" || entry.legacy !== (result.format === "josh-room.agent-references.v1")
+        || typeof entry.capture_closed !== "boolean"
+        || !(entry.legacy && entry.content_sha256 === null
+          || typeof entry.content_sha256 === "string" && /^[0-9a-f]{64}$/.test(entry.content_sha256))
+        || typeof stamp !== "string"
+        || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(stamp)
+        || !Number.isFinite(Date.parse(stamp)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date
+        || selection && (entry.tool !== selection.tool || entry.scope !== selection.profile.scope)) {
+      throw new Error("Agent recovery returned an unsupported capture history.");
+    }
+    ids.add(entry.capture_id);
+  }
+  return result.entries;
+}
+
+async function agentRecoveryStatus(preselected) {
+  assertWorkspaceTrusted("inspect agent recovery references");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Agent Recovery", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-status", context), activeWorkspace());
+  const entries = agentRecoveryEntries(result);
+  await vscode.window.showInformationMessage([
+    `Recovery point: ${context.snapshot_id}`,
+    result.state === "reference-absent" ? "No agent history reference is attached to this recovery point."
+      : `${result.entries.length} encrypted native-history reference${result.entries.length === 1 ? "" : "s"}.`,
+    ...entries.map((entry) => `${entry.tool === "codex" ? "Codex" : "Claude"} · ${entry.created_at} · ${entry.capture_id.slice(0, 12)}…`),
+    "History only. Native continuation and original T3 app-thread restoration are unverified.",
+    "Room Save and Enter do not include agent state.",
+  ].join("\n"), { modal: true });
+  return "inspected";
+}
+
+async function chooseAgentRecoveryProfile(context) {
+  const cwd = activeWorkspace();
+  const result = await runJoshRoom(["agents", "room-status", "--dimension", explicitDimensionId(context),
+    "--room", context.project_id, "--workspace", cwd, "--json"], cwd);
+  const profiles = (Array.isArray(result.profiles) ? result.profiles : []).filter((profile) =>
+    /^[0-9a-f]{64}$/.test(profile.profile_ref || "") && profile.room_reference_allowed === true
+    && ["personal", "oss", "homelab"].includes(profile.scope) && profile.state === "configured"
+    && Array.isArray(profile.tools) && profile.tools.some((tool) => ["codex", "claude"].includes(tool)));
+  if (!profiles.length) {
+    await vscode.window.showInformationMessage("No configured profile has explicit Room history-reference permission for this Room and workspace.");
+    return undefined;
+  }
+  let profile = profiles[0];
+  if (profiles.length > 1) {
+    const selected = await vscode.window.showQuickPick(profiles.map((entry) => ({
+      label: `${entry.scope} profile ${entry.profile_ref.slice(0, 8)}`,
+      description: "Encrypted history reference only", profile_ref: entry.profile_ref,
+    })), { title: "Josh: Agent Recovery", placeHolder: "Choose an explicitly authorized profile" });
+    if (!selected) return undefined;
+    profile = profiles.find((entry) => entry.profile_ref === selected.profile_ref);
+    if (!profile) throw new Error("Choose a currently authorized recovery profile.");
+  }
+  const tools = [...new Set(profile.tools.filter((tool) => ["codex", "claude"].includes(tool)))];
+  let tool = tools[0];
+  if (tools.length > 1) {
+    const selected = await vscode.window.showQuickPick(tools.map((entry) => ({
+      label: entry === "codex" ? "Codex CLI" : "Claude Code", tool: entry,
+      description: "Native history only",
+    })), { title: "Josh: Agent Recovery", placeHolder: "Choose a native history format" });
+    if (!selected) return undefined;
+    if (!tools.includes(selected.tool)) throw new Error("Choose an authorized native history format.");
+    tool = selected.tool;
+  }
+  return { profile, tool, extra: ["--workspace", cwd, "--profile-ref", profile.profile_ref, "--tool", tool] };
+}
+
+async function captureAgentRecovery(preselected) {
+  assertWorkspaceTrusted("capture an encrypted agent history reference");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Capture Agent History", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const selection = await chooseAgentRecoveryProfile(context);
+  if (!selection) return "cancelled";
+  const confirmed = await vscode.window.showInformationMessage(
+    `Capture encrypted native history for recovery point ${context.snapshot_id}? The controller requires this exact saved workspace. This does not enable native continuation or Room Save inclusion.`,
+    { modal: true }, "Capture History Reference",
+  );
+  if (confirmed !== "Capture History Reference") return "cancelled";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-capture", context, selection.extra), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (result.state !== "history-reference") throw new Error("Agent capture returned an unsupported reference state.");
+  if (result.noop === true && (result.created !== false || result.data_uploaded !== 0)) {
+    throw new Error("Agent capture returned an unsupported no-op receipt.");
+  }
+  await vscode.window.showInformationMessage(result.noop === true
+    ? "This native history is already retained for the selected recovery point. No new data was uploaded. Native continuation remains unverified."
+    : "Encrypted native-history reference captured for the selected recovery point. Native continuation remains unverified.");
+  return "captured";
+}
+
+async function restoreAgentRecovery(preselected) {
+  assertWorkspaceTrusted("restore one native agent history file");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Restore Agent History", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const selection = await chooseAgentRecoveryProfile(context);
+  if (!selection) return "cancelled";
+  const status = await runJoshRoom(agentRecoveryArgs("recovery-status", context, selection.extra), activeWorkspace());
+  const captures = agentRecoveryEntries(status, selection);
+  if (!captures.length) {
+    await vscode.window.showInformationMessage("No retained native history matches the selected profile and recovery point.");
+    return "unavailable";
+  }
+  let capture = captures[0];
+  if (captures.length > 1) {
+    const picked = await vscode.window.showQuickPick(captures.map((entry) => ({
+      label: `${entry.tool === "codex" ? "Codex" : "Claude"} · ${entry.created_at}`,
+      description: `${entry.capture_id.slice(0, 12)}…${entry.legacy ? " · Legacy history" : ""}`,
+      capture_id: entry.capture_id,
+    })), { title: "Josh: Choose Agent History Capture", placeHolder: "Choose a retained capture; no latest capture is selected automatically" });
+    if (!picked) return "cancelled";
+    capture = captures.find((entry) => entry.capture_id === picked.capture_id);
+    if (!capture) throw new Error("Choose a currently retained agent capture.");
+  }
+  const captureArgs = [...selection.extra, "--capture-id", capture.capture_id];
+  const verified = await runJoshRoom(agentRecoveryArgs("recovery-verify", context, captureArgs), activeWorkspace());
+  assertHistoryReferenceReceipt(verified);
+  if (verified.capture_id !== capture.capture_id) throw new Error("Agent verification returned a different capture identity.");
+  const sessions = (Array.isArray(verified.sessions) ? verified.sessions : []).filter((session) =>
+    session.tool === selection.tool && session.cwd_matches === true
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(session.provider_session_id || ""));
+  if (!sessions.length) {
+    await vscode.window.showInformationMessage("No verified native history matches the approved workspace and selected recovery point.");
+    return "unavailable";
+  }
+  const selected = await vscode.window.showQuickPick(sessions.map((session) => ({
+    label: `${selection.tool === "codex" ? "Codex" : "Claude"} ${session.provider_session_id}`,
+    description: "Restore one native history file", provider_session_id: session.provider_session_id,
+  })), { title: "Josh: Restore Agent History", placeHolder: "Choose a verified native session" });
+  if (!selected) return "cancelled";
+  const session = sessions.find((entry) => entry.provider_session_id === selected.provider_session_id);
+  if (!session) throw new Error("Choose a verified native session.");
+  const confirmed = await vscode.window.showWarningMessage(
+    "Restore one native history file into the approved profile. Existing files will not be overwritten. This does not resume a model or restore the original T3 app-thread identity.",
+    { modal: true }, "Restore Native History",
+  );
+  if (confirmed !== "Restore Native History") return "cancelled";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-restore", context,
+    [...captureArgs, "--session-id", session.provider_session_id]), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (result.state !== "history-materialized") throw new Error("Agent restore returned an unsupported materialization state.");
+  if (result.capture_id !== undefined && result.capture_id !== capture.capture_id) {
+    throw new Error("Agent restore returned a different capture identity.");
+  }
+  await vscode.window.showInformationMessage("Native history file restored. No model was resumed; native continuation remains unverified.");
+  return "restored";
 }
 
 async function exportPortableJat(preselected) {
@@ -5503,8 +6052,12 @@ function activateNative(context) {
   register(context, "joshRoom.save", () => saveRoom({ current: true }));
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
+  register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
+  register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
-  register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
+  register(context, "joshRoom.new", () => newRoom());
   register(context, "joshRoom.addStorage", addStorage);
   register(context, "joshRoom.connectCloudflare", connectCloudflare);
   register(context, "joshRoom.reconnectCloudflare", connectCloudflare);
@@ -5527,7 +6080,13 @@ function activateNative(context) {
   register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
   register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
+  register(context, "joshRoom.browseRecoveryPoint", browseRecoveryPoint);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
+  register(context, "joshRoom.agentSessionsStatus", agentSessionsStatus);
+  register(context, "joshRoom.agentRecoveryStatus", agentRecoveryStatus);
+  register(context, "joshRoom.captureAgentRecovery", captureAgentRecovery);
+  register(context, "joshRoom.restoreAgentRecovery", restoreAgentRecovery);
   register(context, "joshRoom.exportPortableJat", exportPortableJat);
   register(context, "joshRoom.extractLogicalSnapshot", extractLogicalSnapshot);
   register(context, "joshRoom.verifyRoomStore", verifyRoomStore);
@@ -5766,9 +6325,10 @@ async function editStorageSettings(item) {
 }
 
 Object.assign(module.exports.__test__, {
+  cacheEncryptionMaterial,
+  readEncryptionMaterial,
   JAT_SERVE_MODES,
   JatToolsProvider,
-  waitForServeEndpoint,
   jatBuild,
   jatInspect,
   jatExtract,
@@ -5776,6 +6336,11 @@ Object.assign(module.exports.__test__, {
   jatExport,
   jatCopy,
   inspectLogicalSnapshot,
+  agentSessionsStatus,
+  agentSessionsSummary,
+  agentRecoveryStatus,
+  captureAgentRecovery,
+  restoreAgentRecovery,
   exportPortableJat,
   extractLogicalSnapshot,
   verifyRoomStore,
@@ -5784,6 +6349,9 @@ Object.assign(module.exports.__test__, {
   logicalReferenceChoices,
   chooseHaul,
   inventoryQuickPickItems,
+  showCatalogRepositories,
+  showMappedImages,
+  sessionIsActive,
   isHaulerChunkSize,
   isSafeCopyTarget,
   resultPayloads,
@@ -5821,6 +6389,7 @@ Object.assign(module.exports.__test__, {
   operationNeedsJat,
   clearLocalFallback,
   buildTerminalLaunch,
+  buildServeTerminalLaunch,
   isSafeRestoreName,
   terminateChild,
   serveRoom,

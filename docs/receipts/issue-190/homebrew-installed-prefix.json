@@ -1,0 +1,219 @@
+{
+  "format_version": 1,
+  "issue": 190,
+  "date": "2026-11-22",
+  "classification": "synthetic installed CLI + real isolated MinIO/Secret Service + two-container same-platform exact-prefix proof; not managed RCC or general Homebrew qualification",
+  "base_head": "488ef1e21b38ee076fb5d3b8e46028cfe7200d4d",
+  "implementation_files_sha256": {
+    "src/josh_room/homebrew_prefix.py": "3bc1e1e1f5474da4f0fca99368eaacaf0b0ba45aa85d516677e8a3870e739ac2",
+    "src/josh_room/cli.py": "49a6355a648f5eceb211badac0758cecf2791761055d2057f60fd38fa779cc7e",
+    "src/josh_room/component_selection.py": "67ba7fcf3685faec8ed931e788c14a66f52f53de10629b85b042bbb4dc33f18b",
+    "src/josh_room/room_store_bridge.py": "ba9d980775ec13d1eeea16b111bd455d8b2f9afea3b0139a3400c114df911593",
+    "src/josh_room/room_store_homebrew.py": "c787ab9d55774032d64b3a9fe7c206a9f1adad05ab9101e581b8355e69d1ad1e",
+    "vscode-extension/component-picker.js": "09bbc3cee3dd5ea63eae9333a9780aea0ac3403869f4e45f40e66b26794185d5"
+  },
+  "wheel": {
+    "version": "0.1.0.dev0",
+    "sha256": "601d58f8101504c177cf0f1d622a7f77ec48e39fae8c4038c0fdfa1439977bcb",
+    "installed": true,
+    "source_controller_override": false,
+    "runtime_assets": "unchanged checked-in restic-manifest.json and install_restic.py manually placed at installed CLI lookup paths; standalone wheel alone failed runtime asset lookup",
+    "user_base": "task-private mounted user base, used on source and target"
+  },
+  "containers": {
+    "base": "python@sha256:4209fae09a3e20afd863e528bfddc235da5fd5977983e1996cd54cc9a72e6267",
+    "source_image": "sha256:606f9b1c9f07e3e2e7e1d44a636b4cf23b4a49d2d55856da65ecdd3730092e32",
+    "source_uid": 1000,
+    "source_network": "bridge; provider listens container loopback only, no published ports",
+    "target_image": "sha256:2d5ebe9eb2bdbffe8eb813b80b5e17bf72c730ab31082038cc908f127cd1d5b6",
+    "target_uid": 1000,
+    "target_network": "none",
+    "target_root": "read-only; executable private /home/linuxbrew tmpfs",
+    "runtime": "all capabilities dropped, no-new-privileges",
+    "host_prefix_mounted": false,
+    "customer_or_user_content": false
+  },
+  "provenance": {
+    "homebrew": "4.6.20",
+    "formula": "hello",
+    "version": "2.12.3",
+    "bottle": {
+      "rebuild": 1,
+      "root_url": "https://ghcr.io/v2/homebrew/core",
+      "files": {
+        "arm64_golden_gate": {
+          "cellar": ":any_skip_relocation",
+          "url": "https://ghcr.io/v2/homebrew/core/hello/blobs/sha256:4dd2596c2e897c81eae2dbf5030da37b43e797d217f0f0892d39343d0b8c2ca7",
+          "sha256": "4dd2596c2e897c81eae2dbf5030da37b43e797d217f0f0892d39343d0b8c2ca7"
+        },
+        "arm64_tahoe": {
+          "cellar": ":any_skip_relocation",
+          "url": "https://ghcr.io/v2/homebrew/core/hello/blobs/sha256:ae6237e3001bd354783f469d754cee875ee9828910461b85a5803f5990213dde",
+          "sha256": "ae6237e3001bd354783f469d754cee875ee9828910461b85a5803f5990213dde"
+        },
+        "arm64_sequoia": {
+          "cellar": ":any_skip_relocation",
+          "url": "https://ghcr.io/v2/homebrew/core/hello/blobs/sha256:78566829e680af4ececbe5b3aa596c06f9bd0c7b83172a50c4347510a0d8cf0a",
+          "sha256": "78566829e680af4ececbe5b3aa596c06f9bd0c7b83172a50c4347510a0d8cf0a"
+        },
+        "arm64_sonoma": {
+          "cellar": ":any_skip_relocation",
+          "url": "https://ghcr.io/v2/homebrew/core/hello/blobs/sha256:90e62f2bc18a74b2ce845e6d5b6b53b96a11e3ce304b83e6278fd3ca0fbed922",
+          "sha256": "90e62f2bc18a74b2ce845e6d5b6b53b96a11e3ce304b83e6278fd3ca0fbed922"
+        },
+        "arm64_linux": {
+          "cellar": "/home/linuxbrew/.linuxbrew/Cellar",
+          "url": "https://ghcr.io/v2/homebrew/core/hello/blobs/sha256:0557a40320fc342b63c4ebca125d81b8dc782576d619800506e00c4d6dffdf68",
+          "sha256": "0557a40320fc342b63c4ebca125d81b8dc782576d619800506e00c4d6dffdf68"
+        },
+        "x86_64_linux": {
+          "cellar": "/home/linuxbrew/.linuxbrew/Cellar",
+          "url": "https://ghcr.io/v2/homebrew/core/hello/blobs/sha256:ab40f4006173c63e0d138bdd2b6634ee467f4685c2b130a3edaa712bfee0809a",
+          "sha256": "ab40f4006173c63e0d138bdd2b6634ee467f4685c2b130a3edaa712bfee0809a"
+        }
+      }
+    },
+    "source_loader_alias": "/lib64/ld-linux-x86-64.so.2",
+    "normalized_loader_alias": "../.josh-room-runtime/ld-linux-x86-64.so.2",
+    "package_executable_unchanged": true,
+    "source_prefix_mode_admission": "initial777 prefix and666 receipt refused; only disposable fixture secured to755/644 before capture",
+    "qualified_files": {
+      ".josh-room-runtime/ld-linux-x86-64.so.2": {
+        "bytes": 215000,
+        "mode": 493,
+        "sha256": "02bcda52c1a5dfc236f94d9e5255b4a0e26347d8a372a5223b650e31f291ce3c"
+      },
+      ".josh-room-runtime/libc.so.6": {
+        "bytes": 1926232,
+        "mode": 493,
+        "sha256": "6b4a45352fd0c540a9c7c718f35ce8c8e46a4e482f9d3885a910c32d1a0e1421"
+      },
+      "Cellar/hello/2.12.3/bin/hello": {
+        "bytes": 76376,
+        "mode": 365,
+        "sha256": "cbee33818fb29e6765db790c53c0dc20c59790991fc6d92226c255ecacff6e87"
+      }
+    }
+  },
+  "provider": {
+    "name": "MinIO",
+    "release": "RELEASE.2025-09-07T16-13-09Z",
+    "sha256": "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f",
+    "origin": "official GitHub release asset; dl.min.io410, quay401 and DockerHub unavailable retained as setup failures",
+    "secrets": "generated in memory; task-only production Secret Service/keyring; never copied to receipt/config/argv",
+    "restic": "0.19.1, checked-in installer/pin",
+    "age": "1.2.1, SHA256-pinned official distribution"
+  },
+  "source_results": {
+    "preview": "PASS",
+    "preview_manifest_sha256": "a69c9ed38cf107c27aa3ff64bfd5e4339882edb374da9ea4a6f5d22994490910",
+    "save_status": "saved",
+    "snapshot_id": "978aff36ab124268a76903cc3df8e26c",
+    "repeat_status": "already-saved",
+    "repeat_snapshot_unchanged": true,
+    "stale_plan": {
+      "error": "component-plan-stale",
+      "ok": false
+    },
+    "export": {
+      "archive_sha256": "1b39799b12cb415bbc796500819614dc83ef117d04618b619a9c156314e1b7ea",
+      "archive_size": 1097479,
+      "format": "josh-room-homebrew-installed-v1",
+      "manifest_sha256": "a69c9ed38cf107c27aa3ff64bfd5e4339882edb374da9ea4a6f5d22994490910",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "status": "exported"
+    },
+    "component_reference": {
+      "archive_sha256": "1b39799b12cb415bbc796500819614dc83ef117d04618b619a9c156314e1b7ea",
+      "archive_size": 1097479,
+      "kind": "homebrew-recovery",
+      "member_basename": "homebrew-recovery.tar.zst",
+      "snapshot": {
+        "repository_format": 2,
+        "repository_id": "0be7f6d78f3bfa41dd1d35f7f7410c4852019d82b1763e94cc76a61522d9380c",
+        "snapshot_id": "5cea4ca417b900608999ac704334ce4bbba5d70f15c655ba22fd3379b261e0dc",
+        "tree_id": "d0caaaf860945a96165adaeb4209dfa841d519ab93fce271f67f0ed1340153b9"
+      }
+    },
+    "export_digest_matches_component": true,
+    "pinned_jat_validator": {
+      "source": "5437ce5fff658dc2f74d2db6bc3a72079b0cad37",
+      "result": "PASS",
+      "scope": "unchanged JAT source ArchiveAdapter/_validate_brew_recovery, real zstd/tar; dependencies supplied separately; not managed RCC artifact"
+    }
+  },
+  "target_results": {
+    "prefix_initially_absent": true,
+    "network": "none",
+    "root_readonly": true,
+    "plan": {
+      "file_count": 60,
+      "logical_bytes": 2486121,
+      "manifest_sha256": "a69c9ed38cf107c27aa3ff64bfd5e4339882edb374da9ea4a6f5d22994490910",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "restore_mode": "same-platform-exact-prefix-bundled-libc",
+      "status": "ready"
+    },
+    "restore": {
+      "file_count": 60,
+      "format": "josh-room-homebrew-installed-v1",
+      "logical_bytes": 2486121,
+      "manifest_sha256": "a69c9ed38cf107c27aa3ff64bfd5e4339882edb374da9ea4a6f5d22994490910",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "restore_mode": "same-platform-exact-prefix-bundled-libc",
+      "status": "restored"
+    },
+    "files_verified": 60,
+    "links_verified": 5,
+    "topology_entries": 171,
+    "no_unrelated_files": true,
+    "all_file_modes_and_digests_match": true,
+    "version": "hello (GNU Hello) 2.12.3",
+    "greeting": "synthetic-prefix-restore",
+    "bundled_libc_loaded": true,
+    "occupied_prefix_refused": {
+      "error": "installed-homebrew-unavailable",
+      "ok": false,
+      "reason": "installed restore requires an absent prefix; no overwrite or merge is permitted"
+    },
+    "after_refusal_bytes_unchanged": true
+  },
+  "retained_failures": [
+    "source-PYTHONPATH trial lacked package version; installed wheel corrected it",
+    "wheel user install HOME mismatch; explicit task PYTHONUSERBASE corrected it",
+    "standalone wheel omitted external runtime assets; explicit unchanged assets supplied",
+    "optional pinned-JAT validation initially lacked pydantic under disposable HOME; supplied existing fixture dependency search path for separate validator pass",
+    "initial local bridge tests used host Restic0.20.0; pin0.19.1 required"
+  ],
+  "unproven": [
+    "general Homebrew or work-jatt tool restore",
+    "other package/bottle/runtime hashes, additional formula dependencies or package scripts",
+    "locales/NSS/services/general dlopen behavior",
+    "other distros/prefixes/architectures/macOS/Windows",
+    "overwriting or merging populated prefixes (deliberately refused)",
+    "native cold-host reinstall from Brewfile",
+    "published managed RCC/controller artifact",
+    "independent security review invocation unavailable; ordinary correctness review performed"
+  ]
+}

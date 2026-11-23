@@ -1,0 +1,94 @@
+{
+  "source_sha": "e4be60c848897e7036af9a14e1ca1b31799791f4",
+  "scope": "security-fix exact tracked-source wheel; no v2 files in artifact",
+  "wheel_sha256": "f071021f88f63d26e7d763fe515d6672e37425a0856d888c64115e5557ef5907",
+  "source": {
+    "save_status": "saved",
+    "repeat_status": "already-saved",
+    "stale": {
+      "error": "component-plan-stale",
+      "ok": false
+    },
+    "export": {
+      "archive_sha256": "1b39799b12cb415bbc796500819614dc83ef117d04618b619a9c156314e1b7ea",
+      "archive_size": 1097479,
+      "format": "josh-room-homebrew-installed-v1",
+      "manifest_sha256": "a69c9ed38cf107c27aa3ff64bfd5e4339882edb374da9ea4a6f5d22994490910",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "status": "exported"
+    },
+    "pinned_jat": "PASS"
+  },
+  "target": {
+    "prefix_initially_absent": true,
+    "network": "none",
+    "root_readonly": true,
+    "plan": {
+      "file_count": 60,
+      "logical_bytes": 2486121,
+      "manifest_sha256": "a69c9ed38cf107c27aa3ff64bfd5e4339882edb374da9ea4a6f5d22994490910",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "restore_mode": "same-platform-exact-prefix-bundled-libc",
+      "status": "ready"
+    },
+    "restore": {
+      "file_count": 60,
+      "format": "josh-room-homebrew-installed-v1",
+      "logical_bytes": 2486121,
+      "manifest_sha256": "a69c9ed38cf107c27aa3ff64bfd5e4339882edb374da9ea4a6f5d22994490910",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "restore_mode": "same-platform-exact-prefix-bundled-libc",
+      "status": "restored"
+    },
+    "files_verified": 60,
+    "links_verified": 5,
+    "topology_entries": 171,
+    "no_unrelated_files": true,
+    "all_file_modes_and_digests_match": true,
+    "version": "hello (GNU Hello) 2.12.3",
+    "greeting": "synthetic-prefix-restore",
+    "bundled_libc_loaded": true,
+    "occupied_prefix_refused": {
+      "error": "installed-homebrew-unavailable",
+      "ok": false,
+      "reason": "installed restore requires an absent prefix; no overwrite or merge is permitted"
+    },
+    "after_refusal_bytes_unchanged": true
+  },
+  "windows_ci": {
+    "job": "https://github.com/joshyorko/josh-room/actions/runs/45039787230/job/137261493615",
+    "result": "PASS",
+    "scope": "native Windows private runtime and new focused prefix/selection tests; installed restore unavailable"
+  },
+  "linux_ci": {
+    "job": "https://github.com/joshyorko/josh-room/actions/runs/45039787230/job/137261493636",
+    "result": "PASS"
+  },
+  "independent_security_review": "SKIP: new invocation service-flagged before result; coordinator inline check separate",
+  "limits": [
+    "same installed wheel+manually supplied unchanged runtime assets",
+    "same-UID processes can modify files after completed verification",
+    "Hello-only artifact; useful jq work separate"
+  ]
+}

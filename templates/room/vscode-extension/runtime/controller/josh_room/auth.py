@@ -882,6 +882,8 @@ def _write_encryption_identity(path: Path, value: str) -> Path:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "w") as handle:
+            if os.name == "nt":
+                protect_private_file(temporary)
             handle.write(value.rstrip("\n") + "\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -893,10 +895,21 @@ def _write_encryption_identity(path: Path, value: str) -> Path:
     return path
 
 
-def _material_for_keyset(keyset: EncryptionKeyset, identity_path: Path | None = None) -> EncryptionMaterial:
-    if identity_path is not None and Path(identity_path).exists():
+def _material_for_keyset(
+    keyset: EncryptionKeyset,
+    identity_path: Path | None = None,
+    *,
+    require_existing_identity: bool = False,
+) -> EncryptionMaterial:
+    if require_existing_identity and identity_path is None:
+        raise ValueError("existing encryption identity handoff is required")
+    if identity_path is not None and (require_existing_identity or Path(identity_path).exists()):
         path = Path(identity_path)
-        if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("encryption identity handoff is unsafe")
+        if os.name == "nt":
+            verify_private_path(path, directory=False)
+        elif stat.S_IMODE(path.stat().st_mode) & 0o077:
             raise ValueError("encryption identity handoff is unsafe")
         if path.stat().st_size > 16 * 1024:
             raise ValueError("encryption identity handoff is too large")
@@ -1196,6 +1209,7 @@ def resolve_encryption_material(
     recovery_recipients=None,
     recovery_handoff: Path | None = None,
     identity_path: Path | None = None,
+    require_existing_identity: bool = False,
     preserve_identity_path: bool = False,
     allow_initialize: bool = True,
     occupied=(),
@@ -1205,6 +1219,7 @@ def resolve_encryption_material(
     R2 remains on its existing Cloudflare-issued identity path. MinIO reads the
     fixed remote keyset and only enrolls an empty physical bucket when callers
     explicitly supply public recovery recipients.
+    An explicit existing identity input is never recreated or used to enroll.
     """
     if dimension.provider == "r2":
         return None
@@ -1213,9 +1228,11 @@ def resolve_encryption_material(
     keyset = _keyset_from_backend(dimension, backend)
     if keyset is not None:
         _assert_keyset_matches_dimension(dimension, keyset)
-        return _material_for_keyset(keyset, identity_path)
+        return _material_for_keyset(
+            keyset, identity_path, require_existing_identity=require_existing_identity,
+        )
     handoff = recovery_handoff or os.environ.get("JOSH_ROOM_RECOVERY_HANDOFF")
-    if not allow_initialize or not recovery_recipients and not handoff:
+    if require_existing_identity or not allow_initialize or not recovery_recipients and not handoff:
         catalog, _catalog_etag = backend.read_catalog()
         if catalog is not None:
             raise EncryptionStateError(

@@ -1,0 +1,18 @@
+{
+  "minio": {
+    "version": "RELEASE.2025-09-07T16-13-09Z",
+    "url": "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.windows-amd64.RELEASE.2025-09-07T16-13-09Z.exe",
+    "sha256": "af709e6ba68488404e85acdd22a3030d0f5e56a108d4b27d744f18ceb50861b4"
+  },
+  "age": {
+    "version": "v1.2.1",
+    "url": "https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-windows-amd64.zip",
+    "sha256": "46db0db71f146061f7c8fffa912cb806aef1bc8450e27a3abc1744f0591b89fb"
+  },
+  "vscode": {
+    "version": "1.147.0",
+    "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5",
+    "url": "https://vscode.download.prss.microsoft.com/dbazure/download/stable/8a14f0cc1b08d531eb83255ea3764ae22aa932b5/VSCode-win32-x64-1.147.0.zip",
+    "sha256": "42d65f18009959964d7cff8ca6f33149a195d52c08622821c8c681a08469c26e"
+  }
+}

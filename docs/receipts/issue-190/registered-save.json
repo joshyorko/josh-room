@@ -1,0 +1,40 @@
+{
+  "runtime": "explicit local-build-fallback Python override; NOT managed RCC artifact",
+  "provider": "verified real loopback MinIO",
+  "secretService": "isolated task-only production Secret Service",
+  "stages": [
+    {
+      "registeredCommand": "joshRoom.save",
+      "result": "saved",
+      "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic Room Dimension: Synthetic Chooser Folder: ${TASK_ROOT}/provider-workspace Capture: Workspace plus the explicit component plan below Save Preview \u00b7 Logical entries: 4 Workspace scan: 2.0 MB Restic data estimate: determined by Save hauler_content: keep \u2014 absent homebrew_recovery: keep \u2014 absent rcc_environment: keep \u2014 absent",
+      "markerSnapshot": "05ca5630a131446195b949b5d45db707"
+    },
+    {
+      "registeredCommand": "joshRoom.save",
+      "result": "already-saved",
+      "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic Room Dimension: Synthetic Chooser Folder: ${TASK_ROOT}/provider-workspace Capture: Workspace plus the explicit component plan below Save Preview \u00b7 Logical entries: 4 Workspace scan: 2.0 MB Restic data estimate: determined by Save hauler_content: keep \u2014 absent homebrew_recovery: keep \u2014 absent rcc_environment: keep \u2014 absent",
+      "markerSnapshot": "05ca5630a131446195b949b5d45db707"
+    },
+    {
+      "registeredCommand": "joshRoom.save",
+      "result": "cancelled",
+      "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic Room Dimension: Synthetic Chooser Folder: ${TASK_ROOT}/provider-workspace Capture: Workspace plus the explicit component plan below Save Preview \u00b7 Logical entries: 4 Workspace scan: 2.0 MB Restic data estimate: determined by Save hauler_content: keep \u2014 absent homebrew_recovery: keep \u2014 absent rcc_environment: keep \u2014 absent",
+      "markerSnapshot": "05ca5630a131446195b949b5d45db707"
+    }
+  ],
+  "ok": true,
+  "initialSnapshot": "4c59c6266a5c4d3e9be00cf5db163773",
+  "savedSnapshot": "05ca5630a131446195b949b5d45db707",
+  "verifiedCatalogSnapshotCount": 5,
+  "catalogLatestMatchesSavedMarker": true,
+  "extensionManifestVersion": "0.1.52",
+  "vsix_sha256": "06e08bbedb01705b86178b19c01377f823ab12cb225c3cd5968361df5a59fa4d",
+  "tested_feature_sha256": {
+    "component-picker.js": "6da106a0c2284112030ebefbaf66846c1ec854eff07b9f78decc65012637ca7b",
+    "extension.js": "1521ae98f28513dbd3aca9d03bc3a9808290d960da41acb4e1ee2423d38e74c0",
+    "runtime/controller/josh_room/cli.py": "da9d70665a0185f13f1eea875047d55f8bd4e6680b74d5d94d59242828f415ae",
+    "runtime/controller/josh_room/room_store_bridge.py": "42b2646095445356913e64c50c44c281252afee7b0e0e95967dfc4e5c3ff4ad2",
+    "runtime/controller/josh_room/component_selection.py": "72d222be1527027dfdbfdebaba959e973d084ef337d5262e6d1ed0877dd28f2b"
+  },
+  "tested_feature_file_byte_parity": true
+}

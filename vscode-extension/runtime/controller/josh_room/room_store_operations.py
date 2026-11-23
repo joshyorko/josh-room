@@ -18,6 +18,7 @@ import os
 import posixpath
 import re
 import stat
+import sys
 import tempfile
 import unicodedata
 import uuid
@@ -121,7 +122,7 @@ def _opened_restic_store(store: Any):
 
 
 class RoomStorePublicationError(RoomStoreOperationsError):
-    def __init__(self, error: BaseException, publication_state: str) -> None:
+    def __init__(self, error: BaseException, publication_state: str, *, candidate=None) -> None:
         self.publication_state = publication_state
         self.reconciliation_required = publication_state == "uncertain"
         self.marker_state = (
@@ -139,7 +140,9 @@ class RoomStorePublicationError(RoomStoreOperationsError):
         }
         if self.reconciliation_required:
             self.result["reconciliation_required"] = True
-        super().__init__(f"Room Store catalog publication {publication_state}")
+        if candidate:
+            self.result.update(candidate)
+        super().__init__(f"Room Store catalog publication {publication_state}", result=self.result)
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,7 +546,7 @@ def _deletion_token(
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _rename_directory_noreplace(source: Path, destination: Path) -> None:
+def _rename_directory_noreplace(source: Path, destination: Path, *, directory_fd: int | None = None) -> None:
     """Promote a staged tree without replacing a destination created in a race."""
     if os.name == "nt":
         os.rename(source, destination)
@@ -553,7 +556,7 @@ def _rename_directory_noreplace(source: Path, destination: Path) -> None:
         raise RoomStoreOperationsError(
             "atomic no-replace restore promotion is unavailable"
         )
-    at_fdcwd = -100
+    at_fdcwd = -100 if directory_fd is None else directory_fd
     result = renameat2(
         at_fdcwd,
         os.fsencode(source),
@@ -601,6 +604,8 @@ class RoomStoreOperations:
         resolve_components: Callable[[Any, LogicalJat | None], Mapping[str, Any]]
         | None = None,
         prepare_components: Callable[[LogicalJat | None], None] | None = None,
+        publication_hook: Any = None,
+        descriptor_id: str | None = None,
         active_runtime_root: Path | None = None,
         secure_private_file: Callable[[int, Path, int], None] | None = None,
         validate_private_directory: Callable[[Path], None] | None = None,
@@ -622,6 +627,11 @@ class RoomStoreOperations:
         self.descriptor_metadata = copy.deepcopy(dict(descriptor_metadata))
         self.resolve_components = resolve_components
         self.prepare_components = prepare_components
+        self.publication_hook = publication_hook
+        if descriptor_id is not None and (not isinstance(descriptor_id, str) or re.fullmatch(r"[0-9a-f]{32}", descriptor_id) is None):
+            raise ValueError("reserved logical JAT ID is invalid")
+        self.descriptor_id = descriptor_id
+        self.publication_candidate = {}
         self.active_runtime_root = active_runtime_root
         self.secure_private_file = secure_private_file
         self.validate_private_directory = validate_private_directory
@@ -889,7 +899,7 @@ class RoomStoreOperations:
         body = {
             "format_version": 1,
             "payload_kind": "room-store-v1",
-            "logical_jat_id": uuid.uuid4().hex,
+            "logical_jat_id": self.descriptor_id if self.descriptor_id is not None else uuid.uuid4().hex,
             "dimension_id": self.descriptor_metadata["dimension_id"],
             "encryption_domain_id": self.descriptor_metadata["encryption_domain_id"],
             "room_id": self.descriptor_metadata["room_id"],
@@ -1208,6 +1218,8 @@ class RoomStoreOperations:
                     logical_bytes,
                     components,
                 )
+                if self.publication_hook is not None:
+                    self.publication_candidate = {"candidate_logical_jat_id": descriptor.to_dict()["logical_jat_id"]}
                 commit_state = "committed"
                 commit_error: BaseException | None = None
                 deferred_cancel: CLICancelled | None = None
@@ -1215,17 +1227,38 @@ class RoomStoreOperations:
                     self.save_stage = "descriptor-publication"
                     with defer_sigterm_cancellation():
                         try:
+                            publication_options = {}
+                            if self.publication_hook is not None:
+                                def before_catalog_cas(actual_descriptor, object_ref, workspace_signature):
+                                    self.publication_candidate["candidate_descriptor"] = {"key": object_ref.key, "sha256": object_ref.sha256, "size": object_ref.size}
+                                    self.publication_hook.before_workspace_publication(actual_descriptor, object_ref, workspace_signature)
+                                publication_options["before_catalog_cas"] = before_catalog_cas
                             self.publish_descriptor(
                                 descriptor,
                                 expected_etag=etag,
                                 workspace_signature=before.signature,
                                 signature_algorithm=before.signature_algorithm,
+                                **publication_options,
                             )
                         except BaseException as error:  # noqa: BLE001 - assign catalog outcome before deferred SIGTERM.
                             commit_error = error
-                            commit_state = self._publication_state(error)
+                            if isinstance(error, CLICancelled) and self.publication_hook is not None:
+                                deferred_cancel = error
+                                commit_state = error.result.get("publication_state", "uncertain")
+                            else:
+                                commit_state = self._publication_state(error)
                 except CLICancelled as error:
                     deferred_cancel = error
+                if self.publication_hook is not None:
+                    try:
+                        self.publication_hook.workspace_outcome(
+                            "committed" if commit_state.startswith("committed") else commit_state,
+                            logical_jat_id=descriptor.to_dict()["logical_jat_id"],
+                        )
+                    except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001 - preserve known workspace outcome on ledger failure.
+                        raise RoomStorePublicationError(error, commit_state, candidate=self.publication_candidate) from None
+                    if deferred_cancel is not None:
+                        deferred_cancel.result.update(self.publication_candidate)
                 if commit_state in {"rejected", "uncertain"}:
                     if deferred_cancel is not None:
                         deferred_cancel.result.update(
@@ -1237,10 +1270,11 @@ class RoomStoreOperations:
                                 "capture_policy_sha256": policy.sha256,
                             }
                         )
+                        deferred_cancel.result.update(self.publication_candidate)
                         raise deferred_cancel
                     assert commit_error is not None
                     raise RoomStorePublicationError(
-                        commit_error, commit_state
+                        commit_error, commit_state, candidate=self.publication_candidate
                     ) from commit_error
                 dirty = False
                 try:
@@ -1276,9 +1310,10 @@ class RoomStoreOperations:
                                 "capture_policy_sha256": policy.sha256,
                             }
                         )
+                        deferred_cancel.result.update(self.publication_candidate)
                         raise deferred_cancel
                     raise RoomStorePublicationError(
-                        error, "committed-marker-stale"
+                        error, "committed-marker-stale", candidate=self.publication_candidate
                     ) from error
                 if commit_state == "committed-verification-unknown":
                     if deferred_cancel is not None:
@@ -1296,10 +1331,11 @@ class RoomStoreOperations:
                                 "capture_policy_sha256": policy.sha256,
                             }
                         )
+                        deferred_cancel.result.update(self.publication_candidate)
                         raise deferred_cancel
                     assert commit_error is not None
                     raise RoomStorePublicationError(
-                        commit_error, commit_state
+                        commit_error, commit_state, candidate=self.publication_candidate
                     ) from commit_error
                 if deferred_cancel is not None:
                     deferred_cancel.result.update(
@@ -1314,6 +1350,7 @@ class RoomStoreOperations:
                             "capture_policy_sha256": policy.sha256,
                         }
                     )
+                    deferred_cancel.result.update(self.publication_candidate)
                     raise deferred_cancel
                 return SaveResult(
                     "saved-but-dirty" if dirty else "saved",
@@ -1340,6 +1377,7 @@ class RoomStoreOperations:
         write_restore_marker: Callable[[Path, Path, LogicalJat], None] | None = None,
         restic_store: Any | None = None,
         repository_info: Any | None = None,
+        destination_parent_fd: int | None = None,
     ) -> RestoreResult:
         body = descriptor.to_dict()
         if write_restore_marker is None:
@@ -1354,7 +1392,12 @@ class RoomStoreOperations:
         target = Path(destination)
         if target.exists() or target.is_symlink():
             raise RoomStoreOperationsError("restore destination must be absent")
-        parent_dir = target.parent.resolve(strict=True)
+        if destination_parent_fd is None:
+            parent_dir = target.parent.resolve(strict=True)
+        else:
+            if not sys.platform.startswith('linux') or not stat.S_ISDIR(os.fstat(destination_parent_fd).st_mode):
+                raise RoomStoreOperationsError('descriptor-bound restore is unavailable')
+            parent_dir = Path(f'/proc/{os.getpid()}/fd/{destination_parent_fd}')
         if not parent_dir.is_dir():
             raise RoomStoreOperationsError(
                 "restore destination parent must be a directory"
@@ -1427,7 +1470,10 @@ class RoomStoreOperations:
                         prepare_restored_workspace(stage, descriptor, opened)
                     _scan_workspace(stage, None, capture_mode=body.get("capture_mode", "full-repository"))
                     write_restore_marker(stage, target, descriptor)
-                    _rename_directory_noreplace(stage, target)
+                    if destination_parent_fd is None:
+                        _rename_directory_noreplace(stage, target)
+                    else:
+                        _rename_directory_noreplace(stage.relative_to(parent_dir), Path(target.name), directory_fd=destination_parent_fd)
                     return RestoreResult(descriptor, target)
         finally:
             if password_file is not None:

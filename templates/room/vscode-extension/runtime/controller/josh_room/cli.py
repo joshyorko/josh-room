@@ -171,9 +171,21 @@ def _assert_delete_inventory(catalog, project, args):
             raise ValueError("recovery point inventory changed after deletion confirmation; reload and confirm again")
 
 
+def _add_serve_options(parser):
+    parser.add_argument("--fileserver-port", type=int, default=0, help="0 selects an automatic fileserver port")
+    parser.add_argument("--registry-port", type=int, default=0, help="0 selects an automatic registry port")
+    parser.add_argument("--startup-file", type=Path, help="private JAT endpoint startup receipt")
+
+
+def _serve_options(args):
+    return {name: getattr(args, name, default) for name, default in (
+        ("fileserver_port", 0), ("registry_port", 0), ("startup_file", None))}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="josh-room")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("agents", help="inspect and manage opt-in isolated native agent profiles")
     workspace = commands.add_parser("workspace", help="inspect or repair workspace metadata")
     workspace_commands = workspace.add_subparsers(dest="workspace_command", required=True)
     for action in ("init", "exclude"):
@@ -462,7 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("workspace-check", help="validate workspace metadata without changing it")
     check.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(check)
-    composition = commands.add_parser("composition", help="offline split preview; publication is blocked")
+    composition = commands.add_parser("composition", help="explicit catalog capture, pinned entry and offline discovery")
     composition_commands = composition.add_subparsers(dest="composition_command", required=True)
     composition_plan = composition_commands.add_parser("plan")
     composition_plan.add_argument("--workspace", type=Path, required=True)
@@ -474,6 +486,42 @@ def build_parser() -> argparse.ArgumentParser:
     composition_reconcile = composition_commands.add_parser("reconcile", help="inspect offline evidence; never repair")
     composition_reconcile.add_argument("--evidence-file", type=Path, required=True)
     _json_option(composition_reconcile)
+    for action in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
+        operation = composition_commands.add_parser(action)
+        operation.add_argument('--dimension', required=True)
+        operation.add_argument('--namespace', required=True)
+        operation.add_argument('--parent-room', required=True)
+        if action in ('capture-plan', 'save'):
+            operation.add_argument('--expected-domain', help='encryption domain from the existing enrollment receipt; required if not cached in config')
+            operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice, no implicit default')
+        if action == 'save':
+            operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
+            operation.add_argument('--ack-local-only', action='store_true')
+        if action in ('restore-parent', 'enter-child'):
+            operation.add_argument('--parent-snapshot', required=True)
+        if action == 'restore-parent':
+            operation.add_argument('--destination', type=Path, required=True)
+        if action == 'enter-child':
+            operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--child-path', required=True)
+        _json_option(operation)
+    for action in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
+        operation = composition_commands.add_parser(action)
+        operation.add_argument('--dimension', required=True)
+        operation.add_argument('--namespace', required=True)
+        operation.add_argument('--operation-id', required=True, help='stable ID retained for crash retry')
+        if action in ('plan-child-save', 'save-child'):
+            operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--room', required=True)
+            operation.add_argument('--child-snapshot', required=True, help='specific saved baseline, never latest')
+        else:
+            operation.add_argument('--parent-room', required=True)
+            operation.add_argument('--parent-snapshot', required=True)
+            operation.add_argument('--set-child', action='append', required=True, help='relative-path=exact-logical-snapshot')
+        if action in ('save-child', 'refresh-parent-pins'):
+            operation.add_argument('--approve', required=True)
+        _json_option(operation)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
     _json_option(context)
@@ -517,6 +565,15 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_remove.add_argument("--expected-snapshots", help="comma-separated snapshot IDs from the confirmed inventory")
     _json_option(snapshot_remove)
     snapshot = commands.add_parser("snapshot")
+    homebrew = commands.add_parser("homebrew")
+    homebrew_commands = homebrew.add_subparsers(dest="homebrew_command", required=True)
+    for action in ("plan-restore", "restore"):
+        command = homebrew_commands.add_parser(action)
+        command.add_argument("--archive", type=Path, required=True)
+        command.add_argument("--prefix", type=Path, required=True)
+        if action == "restore":
+            command.add_argument("--confirm-manifest-sha256", required=True)
+        _json_option(command)
     snapshot_commands = snapshot.add_subparsers(dest="snapshot_command", required=True)
     snapshot_create = snapshot_commands.add_parser("create")
     snapshot_create.add_argument("project")
@@ -530,6 +587,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-deletion",
         help="confirm the exact mass-deletion plan returned by snapshot preview",
     )
+    snapshot_create.add_argument("--component-plan-token", help="validate reviewed component inputs and target")
     _json_option(snapshot_create)
     snapshot_preview = snapshot_commands.add_parser("preview")
     snapshot_preview.add_argument("project")
@@ -542,7 +600,29 @@ def build_parser() -> argparse.ArgumentParser:
     for command in (snapshot_create, snapshot_preview):
         command.add_argument("--hauler-manifest", dest="hauler_manifests", type=Path, action="append", default=[])
         command.add_argument("--hauler-file", dest="hauler_files", nargs=2, action="append", default=[], metavar=("PATH", "NAME"))
+        command.add_argument("--brew-installed-prefix", type=Path, help="explicit qualified installed Homebrew closure; not a Brewfile recipe")
+        command.add_argument("--brew-formula", help="qualified installed Hello or jq with its declared library/runtime closure")
+        command.add_argument("--brew-directory", type=Path, help="Brewfile-only recipe export directory; never installed binaries")
+        command.add_argument("--component-selection", help="versioned explicit Save component selection JSON")
+        command.add_argument("--agent-selection", help="explicit history-only agent Save selection JSON")
+        command.add_argument("--agent-plan", help="bounded public reviewed agent plan from preview")
         command.add_argument("--brew-archive", type=Path, help="reuse a saved Homebrew recovery archive in the native Room Store")
+    agent_capabilities = snapshot_commands.add_parser("agent-save-status")
+    agent_capabilities.add_argument("project")
+    agent_capabilities.add_argument("--source", type=Path, required=True)
+    agent_capabilities.add_argument("--dimension", required=True)
+    # Dimension routing removes the legacy backend hint, as for native Save.
+    agent_capabilities.add_argument("--backend", choices=("minio", "s3", "r2"), default="r2")
+    _json_option(agent_capabilities)
+    installed_capabilities = snapshot_commands.add_parser("homebrew-capabilities")
+    _json_option(installed_capabilities)
+    brew_export = snapshot_commands.add_parser("export-homebrew")
+    brew_export.add_argument("project")
+    brew_export.add_argument("--snapshot", required=True)
+    brew_export.add_argument("--dimension", required=True)
+    brew_export.add_argument("--backend", choices=("r2","minio","s3"), default="minio")
+    brew_export.add_argument("--output", type=Path, required=True)
+    _json_option(brew_export)
     for action in ("inspect", "export", "serve", "extract"):
         snapshot_action = snapshot_commands.add_parser(action)
         snapshot_action.add_argument("project")
@@ -553,6 +633,7 @@ def build_parser() -> argparse.ArgumentParser:
             snapshot_action.add_argument("--output", type=Path, required=True)
         elif action == "serve":
             snapshot_action.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+            _add_serve_options(snapshot_action)
         elif action == "extract":
             snapshot_action.add_argument("reference")
             snapshot_action.add_argument("--destination", type=Path, required=True)
@@ -585,7 +666,31 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--snapshot", default="latest")
     serve.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     serve.add_argument("--dimension")
+    _add_serve_options(serve)
     _json_option(serve)
+    recovery = commands.add_parser("recovery")
+    recovery_commands = recovery.add_subparsers(dest="recovery_command", required=True)
+    for action in ("tree", "inspect", "diff", "extract"):
+        command = recovery_commands.add_parser(action)
+        command.add_argument("--namespace", help="explicit composition namespace for a committed child Room pin")
+        command.add_argument("--expected-domain", help="verify the current child marker encryption domain")
+        command.add_argument("project")
+        command.add_argument("--dimension", required=True)
+        command.add_argument("--snapshot", required=True)
+        command.add_argument("--path", default=".")
+        if action == "tree":
+            command.add_argument("--offset", type=int, default=0)
+            command.add_argument("--limit", type=int, default=100)
+        if action in {"inspect", "diff"}:
+            command.add_argument("--include-text", action="store_true")
+        if action == "diff":
+            comparison = command.add_mutually_exclusive_group(required=True)
+            comparison.add_argument("--compare-snapshot")
+            comparison.add_argument("--workspace", type=Path)
+        if action == "extract":
+            command.add_argument("--destination", type=Path, required=True)
+            command.add_argument("--dry-run", action="store_true")
+        _json_option(command)
     room_store = commands.add_parser("room-store")
     room_store_commands = room_store.add_subparsers(dest="room_store_command", required=True)
     for action in ("verify", "optimize", "reconcile"):
@@ -625,6 +730,7 @@ def build_parser() -> argparse.ArgumentParser:
     jat_serve = jat_commands.add_parser("serve")
     jat_serve.add_argument("--haul", type=Path, required=True)
     jat_serve.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+    _add_serve_options(jat_serve)
     _json_option(jat_serve)
     jat_export = jat_commands.add_parser("export")
     jat_export.add_argument("--haul", type=Path, required=True)
@@ -663,16 +769,60 @@ def build_parser() -> argparse.ArgumentParser:
     device_remove = device_commands.add_parser("remove-local", help="remove local enrollment and native-store secrets")
     device_remove.add_argument("--profile")
     _json_option(device_remove)
+    view = commands.add_parser(
+        "view",
+        help="localhost read-only Room View dashboard and single-file offline HTML export",
+    )
+    view_commands = view.add_subparsers(dest="view_command", required=True)
+    view_serve = view_commands.add_parser("serve", help="serve a localhost-only read-only Room View dashboard")
+    view_serve.add_argument(
+        "--provider",
+        required=True,
+        help="provider name (room, capsule-manifest, synthetic-unix, synthetic, entry point, or module:attr)",
+    )
+    view_serve.add_argument("--port", type=int, default=0, help="localhost port (0 = auto)")
+    view_serve.add_argument("--interval", type=float, default=5.0, help="poll interval in seconds")
+    view_serve.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also sensitivity policy)")
+    view_serve.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
+    view_serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
+    view_serve.add_argument("--max-seconds", type=float, help=argparse.SUPPRESS)
+    _json_option(view_serve)
+    view_export = view_commands.add_parser("export", help="export a single self-contained offline HTML view snapshot")
+    view_source = view_export.add_mutually_exclusive_group(required=True)
+    view_source.add_argument(
+        "--provider",
+        help="provider name (room, capsule-manifest, synthetic-unix, synthetic, entry point, or module:attr)",
+    )
+    view_source.add_argument("--from-state", type=Path, dest="from_state", help="offline/CI state JSON file")
+    view_export.add_argument("--attachments-dir", type=Path, dest="attachments_dir", help="attachments directory for --from-state")
+    view_export.add_argument("--output", type=Path, required=True, help="destination .html file path")
+    view_export.add_argument("--no-attachments", action="store_true", help="omit attachment payloads")
+    view_export.add_argument("--max-size", default="50MB", help="maximum allowed HTML snapshot size (e.g. 50MB)")
+    view_export.add_argument("--sensitivity-ack", action="store_true", help="acknowledge exporting sensitive Room data")
+    view_export.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also sensitivity policy)")
+    view_export.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
+    view_export.add_argument("--room-id", dest="room_id", help="optional sanitized Room identifier")
+    _json_option(view_export)
+    view_inspect = view_commands.add_parser("inspect", help="inspect an offline view snapshot without rendering")
+    view_inspect.add_argument("file", type=Path, help="exported .html view snapshot")
+    _json_option(view_inspect)
     return parser
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:1] == ["composition"]:
+    if argv[:1] == ["agents"]:
+        from .native_agents_cli import main as agents_main
+
+        return agents_main(argv[1:])
+    if argv[:1] == ["composition"] and argv[1:2] not in (
+        ["save"], ["restore-parent"], ["enter-child"], ["plan-child-save"],
+        ["save-child"], ["plan-parent-refresh"], ["refresh-parent-pins"],
+    ):
         args = build_parser().parse_args(argv)
         try:
             result = dispatch(args, Path("."))
-        except (OSError, ValueError):
+        except (OSError, RuntimeError, TypeError, ValueError):
             result = {"ok": False, "error": "Composition preview refused unsafe or unavailable input"}
         result = _bounded_json_result(result)
         _write_runtime_result(result)
@@ -687,6 +837,35 @@ def main(argv=None):
         return _exit_code(result)
     initialize_system_trust()
     args = build_parser().parse_args(argv)
+    if args.command == "homebrew":
+        import tarfile
+
+        import zstandard
+
+        from .homebrew_prefix import PrefixError, plan_restore, restore
+
+        try:
+            with sigterm_cancellation():
+                if args.homebrew_command == "plan-restore":
+                    value = plan_restore(args.archive, args.prefix)
+                else:
+                    value = restore(
+                        args.archive, args.prefix,
+                        expected_manifest_sha256=args.confirm_manifest_sha256,
+                    )
+        except (KeyboardInterrupt, CLICancelled):
+            value = {"ok": False, "status": "cancelled"}
+        except PrefixError as error:
+            value = {"ok": False, "error": "installed-homebrew-unavailable", "reason": str(error)}
+        except (OSError, ValueError, TypeError, RuntimeError, tarfile.TarError, zstandard.ZstdError):
+            value = {"ok": False, "error": "installed Homebrew restore refused invalid, incompatible or colliding input"}
+        emit(value, getattr(args, "json", False))
+        return 0 if value.get("ok") else 1
+    if args.command == "snapshot" and args.snapshot_command == "homebrew-capabilities":
+        from .homebrew_prefix import capabilities
+
+        emit({"ok": True, "homebrew_installed": capabilities()}, getattr(args, "json", False))
+        return 0
     if args.command == "snapshot" and args.snapshot_command in {"create", "preview"}:
         from .composition import require_uncomposed_workspace
         try:
@@ -709,7 +888,7 @@ def main(argv=None):
                     return _exit_code(preflight)
                 runtime_loaded = False
                 scoped_minio = _uses_minio_encryption(args)
-                identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook"}
+                identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook", "view"}
                 identity_context = nullcontext() if args.command in identity_free_commands or scoped_minio else _identity_environment()
                 with _provider_error_boundary(args), identity_context:
                     if args.command not in identity_free_commands and not scoped_minio:
@@ -751,6 +930,9 @@ def main(argv=None):
         for line in lines:
             print(line)
         return _exit_code(result)
+    if getattr(args, "command", None) == "view" and getattr(args, "view_command", None) == "serve" and result.get("ok"):
+        _write_runtime_result(_bounded_json_result(result))
+        return 0
     result = _bounded_json_result(result)
     _write_runtime_result(result)
     emit(result, getattr(args, "json", False))
@@ -789,6 +971,8 @@ def _write_runtime_result(result):
     target_value = os.environ.get("JOSH_ROOM_RESULT_FILE")
     if not target_value:
         return
+    from .recovery_text import without_text_envelopes
+    result = without_text_envelopes(result)
     target = Path(target_value)
     if target.is_symlink():
         raise RuntimeError("runtime result path must not be a symlink")
@@ -829,7 +1013,7 @@ def _requires_oauth(args) -> bool:
             return any(dimension.provider == "r2" for dimension in registry.dimensions.values())
         except ValueError:
             return getattr(args, "backend", "r2") == "r2"
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition", "recovery"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         source_dimension = _copy_source_dimension(args)
@@ -863,7 +1047,7 @@ def _provider_error_boundary(args):
             selected = connection_configs(private_config() or {}).get(args.connection)
         elif args.command in {
             "encryption", "doctor", "projects", "rooms", "snapshots", "snapshot",
-            "hydrate", "enter", "serve", "link", "repair", "room-store",
+            "hydrate", "enter", "serve", "link", "repair", "room-store", "composition", "recovery",
         }:
             selected = _effective_dimension(args)
         else:
@@ -876,7 +1060,7 @@ def _provider_error_boundary(args):
 def _requires_encryption(args) -> bool:
     if args.command == "dimensions":
         return getattr(args, "with_hierarchy", False) and (_dimensions_have_provider(args, "minio") or _dimensions_have_provider(args, "s3"))
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition", "recovery"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         return False
@@ -926,7 +1110,10 @@ def _selected_encryption_environment(args, instance: Path):
     backend = _backend_for_args(args, instance)
     handoff = os.environ.get("JOSH_ROOM_ENCRYPTION_MATERIAL")
     if handoff:
-        material = resolve_encryption_material(selected, backend, identity_path=Path(handoff), allow_initialize=False)
+        material = resolve_encryption_material(
+            selected, backend, identity_path=Path(handoff),
+            require_existing_identity=True, allow_initialize=False,
+        )
         with _encryption_material_environment(material):
             yield material
         return
@@ -1010,9 +1197,15 @@ def _encryption_material_ready() -> bool:
         return False
     try:
         path = Path(identity)
-        identity_ready = path.is_file() and not path.is_symlink() and not (path.stat().st_mode & 0o077) \
-            and _valid_identity(path.read_text())
-    except OSError:
+        identity_ready = path.is_file() and not path.is_symlink()
+        if identity_ready:
+            if os.name == "nt":
+                from .private_paths import verify_private_path
+                verify_private_path(path, directory=False)
+            else:
+                identity_ready = not (path.stat().st_mode & 0o077)
+        identity_ready = identity_ready and _valid_identity(path.read_text())
+    except (OSError, RuntimeError):
         identity_ready = False
     recipients = _recipients()
     return identity_ready and len(recipients) >= 2 and len(set(recipients)) >= 2
@@ -1609,6 +1802,64 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
+        if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
+            from .composition_lifecycle import provider_runtime
+            from .composition_updates import refresh_parent, save_child
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
+                raise ValueError('composition requires an explicit provider Dimension')
+            try:
+                with provider_runtime(instance, dimension, getattr(args, '_selected_encryption_material', None), args.namespace) as (authority, factory, private):
+                    if args.composition_command in ('plan-child-save', 'save-child'):
+                        return save_child(args.workspace, dimension, args.namespace, args.room, args.child_snapshot,
+                            args.operation_id, authority, factory, private, approval=getattr(args, 'approve', None))
+                    pins = {}
+                    for value in args.set_child:
+                        path, separator, snapshot = value.rpartition('=')
+                        if not separator or path in pins:
+                            raise ValueError('select distinct child-path=exact-pin entries')
+                        pins[path] = snapshot
+                    return refresh_parent(dimension, args.namespace, args.parent_room, args.parent_snapshot,
+                        args.operation_id, pins, authority, factory, private, approval=getattr(args, 'approve', None))
+            except Exception:  # noqa: BLE001 - bounded credential-free provider failure boundary.
+                raise ValueError('Composition update could not be verified; preserve source and retry the same operation ID') from None
+        if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
+            from .composition_lifecycle import (
+                capture_plan,
+                hydrate_composition,
+                provider_runtime,
+                save_composition,
+            )
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
+                raise ValueError('composition requires an explicit provider Dimension')
+            if getattr(args, 'expected_domain', None):
+                from dataclasses import replace
+                dimension = replace(dimension, encryption_domain_id=args.expected_domain)
+            if args.composition_command in ('capture-plan', 'save'):
+                assignments = []
+                for value in args.assign:
+                    path, separator, outcome = value.rpartition('=')
+                    if not separator:
+                        raise ValueError('capture assignment requires path=outcome')
+                    assignments.append({'path': path, 'outcome': outcome})
+                preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
+                if args.composition_command == 'capture-plan':
+                    return preview
+                if args.approve != preview['approval_sha256']:
+                    raise ValueError('capture approval is stale or missing')
+                if preview['local_only_acknowledgement_required'] and not args.ack_local_only:
+                    raise ValueError('explicit acknowledgement of unprotected local-only content is required')
+            try:
+                with provider_runtime(instance, dimension, getattr(args, '_selected_encryption_material', None), args.namespace) as (authority, factory, private):
+                    if args.composition_command == 'save':
+                        return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
+                                                args.approve, authority, factory, private)
+                    return hydrate_composition(dimension, args.namespace, args.parent_room, args.parent_snapshot,
+                                               args.workspace if args.composition_command == 'enter-child' else args.destination,
+                                               authority, factory, private, child_path=getattr(args, 'child_path', None))
+            except Exception:  # noqa: BLE001 - never expose provider or identity diagnostics from composition transport.
+                raise ValueError('Composition operation could not be verified; preserve source and resume using the same namespace') from None
         if args.composition_command == "inventory":
             from .directory_inventory import serve
             serve(args.workspace, sys.stdin, sys.stdout)
@@ -2251,6 +2502,19 @@ def dispatch(args, instance: Path) -> dict:
         dimension_id = catalog.dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
         return {"ok": True, "dimension_id": dimension_id, "revision": catalog.body["revision"], "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
+        if args.snapshot_command == "export-homebrew":
+            if args.snapshot == "latest":
+                raise ValueError("Homebrew component export requires an immutable snapshot identity")
+            from .room_store_export import materialize_components
+            with _open_room_store_context(args, instance, project_id=args.project, snapshot_id=args.snapshot) as context:
+                if context.selected_descriptor is None:
+                    raise ValueError("selected logical snapshot is unavailable")
+                with materialize_components(context.selected_descriptor, context.store, context.private_dir) as material:
+                    if material.brew_archive is None:
+                        raise ValueError("selected snapshot has no Homebrew recovery component")
+                    from .homebrew_prefix import export_archive
+
+                    return export_archive(material.brew_archive, args.output)
         if args.snapshot_command in {"inspect", "export", "serve", "extract"}:
             jat_root = _jat_root()
             with _open_room_store_context(
@@ -2270,7 +2534,7 @@ def dispatch(args, instance: Path) -> dict:
                         output=args.output,
                     )
                 if args.snapshot_command == "serve":
-                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode)
+                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode, **_serve_options(args))
                 return extract_logical_jat(
                     context,
                     args.reference,
@@ -2395,6 +2659,9 @@ def dispatch(args, instance: Path) -> dict:
         if dimension is not None and dimension.provider in {"minio", "s3", "r2"}:
             if dimension.provider in {"minio", "s3"} and selected_material is None:
                 raise ValueError("selected MinIO encryption material is required for native Save")
+            if args.snapshot_command == "agent-save-status":
+                from .native_agent_save import status as agent_save_status
+                return agent_save_status(instance, dimension, selected_material, project_id, source)
             components = _native_component_inputs(args, source)
             capture_options = _native_capture_options(args)
             if args.snapshot_command == "preview":
@@ -2407,8 +2674,10 @@ def dispatch(args, instance: Path) -> dict:
                     components=components,
                     **capture_options,
                 )
-                if (Path(source) / "robot.yaml").is_file():
+                if not capture_options.get("component_selection") and (Path(source) / "robot.yaml").is_file():
                     result["rcc_capture_pending"] = True
+                if result.get("agent_plan") is not None:
+                    result["project_id"] = project_id
                 return result
             return save_room_store(
                 instance,
@@ -2420,6 +2689,7 @@ def dispatch(args, instance: Path) -> dict:
                 display_name=display_name,
                 confirmation_token=getattr(args, "confirm_deletion", None),
                 preflight_scan=getattr(args, "_local_workspace_evidence", None),
+                component_plan_token=getattr(args, "component_plan_token", None),
                 rcc_runtime=(
                     os.environ.get("JOSH_ROOM_RCC_EXE")
                     if os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1"
@@ -2429,6 +2699,15 @@ def dispatch(args, instance: Path) -> dict:
                 **capture_options,
                 **({"jat_root": _jat_root()} if capture_options else {}),
             )
+        if args.snapshot_command == "agent-save-status":
+            raise ValueError("agent Save status requires a native Room Store Dimension")
+        if any(
+            getattr(args, name, None) is not None
+            for name in ("agent_selection", "agent_plan")
+        ):
+            raise ValueError("agent history Save requires a native Room Store backend")
+        if getattr(args, "component_selection", None) is not None:
+            raise ValueError("explicit component selection requires a native Room Store backend")
         if args.snapshot_command == "preview":
             raise ValueError("snapshot preview is available for native Room Store saves")
         recipients = _recipients()
@@ -2489,8 +2768,42 @@ def dispatch(args, instance: Path) -> dict:
                 Path(identity),
                 _jat_root(),
                 _backend_for_args(args, instance),
+                **_serve_options(args),
             ),
         }
+    if args.command == "recovery":
+        from .recovery import run_recovery
+        if args.namespace is not None:
+            from .composition_authority import namespace_prefix
+            from .composition_lifecycle import provider_runtime
+            from .recovery import recover_namespace_child
+
+            namespace_prefix(args.namespace)
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in {"minio", "s3", "r2"}:
+                raise ValueError("child recovery requires an explicit object-store Dimension")
+            material = getattr(args, "_selected_encryption_material", None)
+            with sdk_error_boundary(dimension), provider_runtime(
+                instance, dimension, material, args.namespace
+            ) as (authority, factory, _private):
+                return recover_namespace_child(args, dimension, authority, factory)
+        if args.expected_domain is not None:
+            raise ValueError("a child marker domain requires an explicit namespace")
+        if args.snapshot == "latest":
+            raise ValueError("historical recovery requires an exact recovery point")
+        with _open_room_store_context(args, instance, project_id=args.project,
+                                      snapshot_id=args.snapshot) as context:
+            if args.recovery_command == "diff" and args.compare_snapshot:
+                from .recovery import Recovery
+                if args.compare_snapshot == "latest":
+                    raise ValueError("comparison requires an exact recovery point")
+                with _open_room_store_context(args, instance, project_id=args.project,
+                                              snapshot_id=args.compare_snapshot) as other:
+                    if (context.selected_record.get("snapshot_id") != args.snapshot
+                            or other.selected_record.get("snapshot_id") != args.compare_snapshot):
+                        raise ValueError("historical comparison identity mismatch")
+                    return Recovery(context).diff(args.path, other=Recovery(other), include_text=args.include_text)
+            return run_recovery(context, args)
     if args.command == "room-store":
         config = private_config() or {}
         dimension = DimensionRegistry(config).select(args.dimension)
@@ -2529,7 +2842,7 @@ def dispatch(args, instance: Path) -> dict:
         if args.jat_command == "extract":
             return {"ok": True, **run_extract(jat_root, args.haul, args.reference, args.destination)}
         if args.jat_command == "serve":
-            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode)}
+            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode, **_serve_options(args))}
         if args.jat_command == "export":
             return {"ok": True, **run_export(jat_root, args.haul, args.output)}
         if args.jat_command == "copy":
@@ -2544,6 +2857,10 @@ def dispatch(args, instance: Path) -> dict:
                     insecure=args.insecure,
                 ),
             }
+    if args.command == "view":
+        from .view.cli_entry import dispatch_view
+
+        return dispatch_view(args)
     if args.command == "setup":
         credentials = json.load(sys.stdin)
         required = {
@@ -2761,6 +3078,8 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
 
 
 def _local_save_preflight(args, instance: Path) -> dict | None:
+    if getattr(args, "agent_selection", None) is not None:
+        return None
     if args.command != "snapshot" or args.snapshot_command != "create":
         return None
     from .local_save_receipt import invalidate, read_noop
@@ -2799,16 +3118,52 @@ def _native_capture_options(args) -> dict:
     files = [(Path(path), name) for path, name in (getattr(args, "hauler_files", ()) or ())]
     if images and all_images:
         raise ValueError("select explicit local images or all local images, not both")
-    options = {}
+    from .component_selection import selection_request
+    request = selection_request(getattr(args, "component_selection", None))
+    if getattr(args, "component_plan_token", None) is not None and request is None:
+        raise ValueError("a component plan token requires an explicit component selection")
+    options = {"component_selection": request} if request is not None else {}
+    from .native_agent_save import reviewed_plan
+    from .native_agent_save import selection_request as agent_request
+    agents = agent_request(getattr(args, "agent_selection", None))
+    agent_plan = reviewed_plan(getattr(args, "agent_plan", None), agents)
+    if agent_plan is not None and agents is None:
+        raise ValueError("agent plan requires explicit agent selection")
+    if agents is not None:
+        if request is None:
+            raise ValueError("agent Save requires explicit workspace component selection")
+        if getattr(args, "snapshot_command", None) == "create" and (agent_plan is None or not getattr(args, "component_plan_token", None)):
+            raise ValueError("agent Save requires the reviewed plan and approval token")
+        if getattr(args, "snapshot_command", None) == "preview" and agent_plan is not None:
+            raise ValueError("preview produces an agent plan, not consumes one")
+        options["agent_selection"] = agents
+        if agent_plan is not None:
+            options["agent_plan"] = agent_plan
+
     if images or all_images or manifests or files:
         options["hauler_selection"] = {"images": images, "all_images": all_images, "manifests": manifests, "files": files}
     homebrew = getattr(args, "brew_archive", None)
-    if homebrew is None:
+    if homebrew is None and request is None:
         configured = (private_config() or {}).get("homebrew_recovery")
         if isinstance(configured, dict) and configured.get("archive"):
             homebrew = Path(configured["archive"])
+    installed_prefix = getattr(args, "brew_installed_prefix", None)
+    installed_formula = getattr(args, "brew_formula", None)
+    if (installed_prefix is None) != (installed_formula is None):
+        raise ValueError("installed Homebrew selection requires prefix and formula")
+    if installed_prefix is not None:
+        if not request or request["components"]["homebrew_recovery"] != "refresh":
+            raise ValueError("installed Homebrew capture requires explicit refresh selection")
+        options["homebrew_installed"] = {"prefix": installed_prefix, "formula": installed_formula}
+    directory = getattr(args, "brew_directory", None)
+    if directory is not None:
+        if homebrew is not None:
+            raise ValueError("select a Homebrew archive or recipe directory")
+        options["homebrew_directory"] = directory
     if homebrew is not None:
         options["homebrew_archive"] = homebrew
+    if sum(value is not None for value in (homebrew, directory, installed_prefix)) > 1:
+        raise ValueError("select only one Homebrew recipe, archive or installed closure input")
     return options
 
 
@@ -3358,6 +3713,8 @@ def _json_safe(value, *, key="", depth=0):
     if depth > 8:
         return "<result depth limit>"
     lowered = key.lower()
+    if key == "component_plan_token":
+        return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else "<redacted>"
     if lowered not in _JSON_PUBLIC_CONFIRMATION_KEYS and (
         lowered in _JSON_SENSITIVE_KEYS
         or any(part in lowered for part in ("secret", "password", "token"))
@@ -3406,7 +3763,24 @@ def emit(result: dict, json_mode: bool) -> None:
     if json_mode:
         print(json.dumps(_bounded_json_result(result), sort_keys=True))
     elif result.get("ok") and result.get("status") == "already-saved":
-        print("Already saved — 0 bytes uploaded")
+        agent_result = result.get("agent_result")
+        entries = agent_result.get("entries") if isinstance(agent_result, dict) else None
+        if agent_result is None:
+            print("Already saved — no new backup data")
+        elif isinstance(entries, list) and entries and all(
+            isinstance(entry, dict)
+            and type(entry.get("data_uploaded")) is int
+            and entry["data_uploaded"] >= 0
+            and not entry.get("upload_uncertain")
+            for entry in entries
+        ):
+            uploaded = sum(entry["data_uploaded"] for entry in entries)
+            if uploaded:
+                print(f"Workspace already saved — {uploaded} bytes uploaded for agent history")
+            else:
+                print("Already saved — no new backup data")
+        else:
+            print("Workspace already saved — agent history upload size unknown")
     elif result.get("ok") and "deleted_paths" in result:
         print(f"Preview: {result.get('current_entry_count', 0)} entries, {result.get('scanned_bytes', 0)} bytes scanned")
         if result.get("rcc_capture_pending"):

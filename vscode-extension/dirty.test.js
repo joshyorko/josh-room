@@ -233,3 +233,14 @@ test("wide-directory fingerprinting does not collect the complete directory with
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("escaped leading hash is an exclusion after actual policy reload", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-hash-policy-"));
+  try {
+    fs.writeFileSync(path.join(root, ".josh-roomignore"), "\\#reports/**\n# comment remains a comment\n");
+    const policy = loadCapturePolicy(root);
+    assert.equal(policy.isExcluded("#reports/future.txt"), true);
+    assert.equal(policy.isExcluded("nested/#reports/future.txt"), false);
+    assert.equal(policy.isExcluded("comment remains a comment"), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

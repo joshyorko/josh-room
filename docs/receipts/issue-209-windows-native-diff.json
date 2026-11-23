@@ -1,0 +1,28 @@
+{
+  "state": "PARTIAL",
+  "source_head": "4f8036992e3a783fc481a4e077bb6fb09557c6f7",
+  "tested_merge": "b1f08966f1ce9678f5f6a5eff8983db3f6ebd478",
+  "run": 45064309827,
+  "job": 137336958343,
+  "artifact": 14769939132,
+  "artifact_sha256": "048ca23b8438d5af55a5a0f51f101f80580fd1c7afc485dea545d32dee3c6d5e",
+  "vsix_sha256": "e38fde3833d17eb235d3c369a5a69ad1cc5c9c8cc7de615ef126406e45a0b397",
+  "installed_files_compared": 115,
+  "runtime": "installed-source-Python-fallback-not-immutable-RCC",
+  "provider": "real-loopback-MinIO",
+  "native_credential_custody": "PASS",
+  "real_secret_storage_seed": "PASS",
+  "registered_pinned_tree_and_diff_with_existing_private_handoffs": "PASS",
+  "native_modified_editor_focus": "PASS",
+  "native_CDP_typing_rejected": "PASS",
+  "whitespace_and_Unicode_preserved": "PASS",
+  "opaque_readonly_provider_URIs": "PASS",
+  "workspace_and_marker_preserved": "PASS",
+  "owned_native_credentials_cleanup": "PASS",
+  "registered_selective_extraction": "FAIL: native Save dialog did not submit; no extract CLI call",
+  "unproven": [
+    "registered selective extraction and subsequent cancellation",
+    "immutable RCC feature artifact",
+    "other providers and integrated release qualification"
+  ]
+}

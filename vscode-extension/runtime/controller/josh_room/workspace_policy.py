@@ -153,7 +153,11 @@ def _user_patterns(contents: bytes | None) -> tuple[tuple[str, ...], ...]:
     patterns: list[tuple[str, ...]] = []
     for line in contents.decode("utf-8").split("\n"):
         rule = line.strip()
-        if not rule or rule.startswith("#"):
+        if not rule:
+            continue
+        if rule.startswith("\\#"):
+            rule = rule[1:]
+        elif rule.startswith("#"):
             continue
         if rule.startswith("!"):
             raise ValueError("workspace ignore rules cannot reinclude paths")
