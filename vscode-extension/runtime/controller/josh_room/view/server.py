@@ -141,6 +141,11 @@ class ViewCollector:
         with self._lock:
             self._last_ok = sanitized.taken_at
             self._state = sanitized
+            self._clear_invalid_binding_locked()
+
+    def _clear_invalid_binding_locked(self) -> None:
+        if getattr(self._provider, "binding_invalidated", False) is True:
+            self._state = self._empty_stale_state("workspace-binding-changed")
 
     def _mark_stale_locked(self, reason: str) -> None:
         current = self._state
@@ -159,6 +164,7 @@ class ViewCollector:
     def lookup_preview(self, object_id: str, slot: str) -> dict[str, object] | None:
         """Return an already-sanitized read-only preview slot from the active snapshot."""
         with self._lock:
+            self._clear_invalid_binding_locked()
             for node in self._state.nodes:
                 if node.id == object_id:
                     for prev in node.previews:
@@ -173,6 +179,7 @@ class ViewCollector:
 
     def current_payload(self) -> dict[str, object]:
         with self._lock:
+            self._clear_invalid_binding_locked()
             return {
                 "descriptor": self._descriptor.to_dict(),
                 "state": self._state.to_dict(),
@@ -206,6 +213,7 @@ class _SnapshotProviderAdapter:
     def __init__(self, collector: ViewCollector) -> None:
         self._collector = collector
         with collector._lock:
+            collector._clear_invalid_binding_locked()
             self._descriptor = collector._descriptor
             self._state = collector._state
 

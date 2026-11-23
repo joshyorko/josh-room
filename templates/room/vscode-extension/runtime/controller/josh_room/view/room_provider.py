@@ -461,10 +461,30 @@ class RoomWorkspaceProvider:
         with self._lock:
             if (self._binding_invalidated or (info.st_dev, info.st_ino) != self._root_identity
                     or self._binding_identity(context) != self._binding):
-                self._binding_invalidated = True
-                self._attachment_index.clear()
-                raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+                raise self._invalidate_binding()
         return context
+
+    @property
+    def binding_invalidated(self) -> bool:
+        with self._lock:
+            return self._binding_invalidated
+
+    def _invalidate_binding(self) -> ViewValidationError:
+        with self._lock:
+            self._binding_invalidated = True
+            self._attachment_index.clear()
+        return ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+
+    def _open_bound_root(self) -> tuple[int, dict]:
+        try:
+            fd = _directory(self._root)
+        except OSError as error:
+            raise self._invalidate_binding() from error
+        try:
+            return fd, self._assert_binding(fd)
+        except (OSError, ValueError) as error:
+            os.close(fd)
+            raise self._invalidate_binding() from error
 
     def _capture_policy(self, directory_fd: int) -> CapturePolicy:
         # Managed RCC always sets ROBOCORP_HOME. Descriptor-bound policy cannot
@@ -809,10 +829,7 @@ class RoomWorkspaceProvider:
         started = time.monotonic()
         deadline = started + self._max_seconds
         now_iso = _utc_now_iso()
-        try:
-            root_fd = _directory(self._root)
-        except OSError as error:
-            raise ViewValidationError("workspace-unavailable", "workspace root is unavailable or unsafe") from error
+        root_fd, ctx = self._open_bound_root()
 
         omissions: set[str] = set()
         new_attachments: dict[tuple[str, str], _AttachmentRecord] = {}
@@ -822,7 +839,6 @@ class RoomWorkspaceProvider:
             root_dev = root_stat.st_dev
             root_stamp = stamp(root_stat)
             root_mount = _safe_mount_id(root_fd)
-            ctx = self._assert_binding(root_fd)
             policy = self._capture_policy(root_fd)
 
             nodes_list: list[NodeState] = []
@@ -1312,14 +1328,11 @@ class RoomWorkspaceProvider:
         if record is None:
             return None
         try:
-            root_fd = _directory(self._root)
-        except OSError:
+            root_fd, _ = self._open_bound_root()
+        except (OSError, ValueError):
             return None
         try:
             root_stat = os.fstat(root_fd)
-            if (root_stat.st_dev, root_stat.st_ino) != record.root_identity:
-                return None
-            self._assert_binding(root_fd)
             policy = self._capture_policy(root_fd)
             if policy.sha256 != record.policy_sha256 or policy.is_excluded("/".join(record.rel_parts)):
                 return None

@@ -1263,6 +1263,44 @@ def test_rebind_invalidates_even_when_new_capture_policy_is_invalid(tmp_path):
     assert not collector.current_payload()["state"]["items"]
 
 
+@pytest.mark.parametrize("observe_via", ["poll", "attachment"])
+@pytest.mark.parametrize("replace_root", [False, True])
+def test_observed_root_loss_permanently_revokes_state_previews_and_attachments(tmp_path, observe_via, replace_root):
+    from josh_room.view.server import ViewCollector
+    from josh_room.workspace_state import write_workspace_marker
+
+    root = tmp_path / "room"
+    root.mkdir()
+    write_workspace_marker(root, dimension_id="alpha", project_id="demo", display_name="Synthetic",
+                           snapshot_id="snap", workspace_fingerprint="a" * 64)
+    (root / "example.txt").write_text("synthetic preview")
+    (root / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(root)
+    collector = ViewCollector(provider, workspace=root)
+    image = next(item for item in collector.current_payload()["state"]["items"] if item["label"] == "diagram.png")
+    attachment = image["attachments"][0]
+    preview_item = next(item for item in collector.current_payload()["state"]["items"] if item.get("previews"))
+    slot = preview_item["previews"][0]["slot"]
+    assert collector.lookup_preview(preview_item["id"], slot) is not None
+    moved = tmp_path / "moved"
+    root.rename(moved)
+    if replace_root:
+        root.mkdir()
+    if observe_via == "poll":
+        collector.poll_once()
+    else:
+        assert provider.attachment(image["id"], attachment["name"]) is None
+    assert not collector.current_payload()["state"]["items"]
+    assert collector.lookup_preview(preview_item["id"], slot) is None
+    if replace_root:
+        root.rmdir()
+    moved.rename(root)
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+    assert provider.attachment(image["id"], attachment["name"]) is None
+    assert not provider._attachment_index
+
+
 def test_controller_startup_checks_selected_domain_namespace_and_directory(tmp_path):
     from josh_room.workspace_state import write_stat_workspace_marker
 
