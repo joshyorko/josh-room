@@ -265,10 +265,11 @@ test('manual camera pose follows authorized node identity through navigation and
   }
   scene.setLayout(makeLayout(['a','b','c','d']), { preserveCamera: true });
   assert.ok(scene.camPos.clone().sub(anchor(scene.layout.nodeById.get('node/a'))).distanceTo(eye) < 1e-6);
-  scene.setSearchMatches(['a','a-file','missing'], 'a-file');
+  scene.setSearchMatches(['a','a-file','missing'], 'a-file', [['missing', ['root','b','unseen']]]);
   const marker = scene.searchLines;
   const count = marker.geometry.getAttribute('position').count;
-  assert.equal(count, 16, 'one outline per admitted matching object');
+  assert.equal(count, 18, 'two direct match outlines and one front edge for an observed descendant');
+  assert.equal(scene.searchBranches.has('b'), true);
   assert.equal(marker.isLight, undefined);
   scene.setLayout(makeLayout(['a','b']), { preserveCamera: true });
   assert.notEqual(scene.searchLines, marker);

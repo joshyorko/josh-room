@@ -148,9 +148,10 @@ test('a return to the file revalidates both sides and restores reading position 
   panel.find('pre').scrollLeft = 8;
   const position = view.capture();
   assert.equal(JSON.stringify(position).includes(receipt.unified_diff), false);
+  view.select({...file, objectId: 'other-file'});
   view.select(null);
   panel.scrollTop = 0;
-  view.select(file, position);
+  view.select(file);
   view.open();
   await tick();
   assert.deepEqual(calls.map(call => [...call]), [

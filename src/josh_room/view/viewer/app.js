@@ -185,8 +185,12 @@
         const stageScene = this.scene3d && this.viewMode === '3d' && previousPage;
         let destinationContext = [];
         if (stageScene) {
-          destinationContext = await this.data.sceneNeighborhood(page, request.signal,
-            this._neighborCandidates(page));
+          try {
+            destinationContext = await this.data.sceneNeighborhood(page, request.signal,
+              this._neighborCandidates(page));
+          } catch (error) {
+            if (request.signal.aborted || ![413, 429, 503].includes(error.status)) throw error;
+          }
           if (request.signal.aborted) return;
           // Navigation performs its authoritative query first. Revalidate before
           // publishing the selected content if the later samples took time.
@@ -792,6 +796,7 @@
       } else if (this.data.filesystem && node.nodeKind === 'directory') {
         const coverage = node.coverage || 'not-examined';
         mEl.textContent = `Directory · ${coverage} · open for current listing`;
+        if (this.scene3d?.searchBranches?.has(node.objectId)) mEl.textContent += ' · contains an observed search match';
       } else if (node.counts) {
         mEl.textContent = global.RoomViewLayout.formatCountsSummary(node.counts, this.data.descriptor);
       }
@@ -1019,7 +1024,7 @@
           }, signal),
           inspect: (id, generation, signal) => this.data.queryFilesystem('inspect', { id, generation }, signal),
           select: hit => this._openFilesystem(hit.id, { kind: hit.node_kind }),
-          onMatches: (ids, active) => this.scene3d?.setSearchMatches(ids, active),
+          onMatches: (ids, active, routes) => this.scene3d?.setSearchMatches(ids, active, routes),
           directory: () => this.fsPage?.directory.id || 'root',
           root: () => 'root',
           generation: () => this.data.fsGeneration,

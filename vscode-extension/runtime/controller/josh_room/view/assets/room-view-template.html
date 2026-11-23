@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;75b68a6d2a1e30abbf91986943a9f7a9a4578d4dc389d1c64a0294c651052119&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;f9366c33cb34a9bcd6476b94fce0d87a6c74bb28dd4493d927392042e7d78c03&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -17678,7 +17678,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
       const notchCrownGeo = createNotchCrownGeometry(THREE, bw);
       const notchCrownMesh = makeInstanced(notchCrownGeo, notchCrownMat, notchBlocks, 'notch-crown');
-      if (notchCrownMesh) notchCrownMesh.castShadow = false;
+      if (notchCrownMesh) {
+        notchCrownMesh.castShadow = false;
+        this.pickables.push(notchCrownMesh);
+      }
 
       const hollowPostsGeo = createHollowPostsGeometry(THREE, bw);
       const hollowPostsMesh = makeInstanced(hollowPostsGeo, hollowMat, hollowBlocks, 'hollow');
@@ -17697,14 +17700,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const lodPlaneGeo = new THREE.PlaneGeometry(bw * 0.9, 1.0);
       lodPlaneGeo.translate(0, 0.5, 0);
       const lodPlaneMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-      const lodPlaneMesh = layout.blocks.length
-        ? new THREE.InstancedMesh(lodPlaneGeo, lodPlaneMat, layout.blocks.length)
-        : null;
+      const lodPlaneMesh = makeInstanced(lodPlaneGeo, lodPlaneMat, layout.blocks, 'far');
       if (lodPlaneMesh) {
-        lodPlaneMesh.frustumCulled = false;
         lodPlaneMesh.castShadow = false;
         lodPlaneMesh.receiveShadow = false;
-        this.worldGroup.add(lodPlaneMesh);
+        this.pickables.push(lodPlaneMesh);
       }
 
       // 4. SpaceTree Summary / "+N more" Stacked Outcome Towers (honors EVERY declared legend kind!)
@@ -17782,6 +17782,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const dummy = new THREE.Object3D();
       const zeroScale = new THREE.Matrix4().makeScale(0, 0, 0);
       const camPos = this.camera.position;
+      let lodChanged = false;
 
       const updateList = (list, primaryMesh, onExtra) => {
         if (!list || !list.length || !primaryMesh) return;
@@ -17789,9 +17790,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           const b = list[i];
           const dist = Math.hypot(camPos.x - b.x, camPos.y - (b.y + b.height * 0.5), camPos.z - b.z);
           const prevLod = this._blockLodState.get(b.id) || 0;
-          let lod = prevLod;
-          if (prevLod === 0 && dist > 54) lod = 1;
-          else if (prevLod === 1 && dist < 46) lod = 0;
+          const far = prevLod === 0 ? dist > 54 : dist >= 46;
+          const lod = far ? (Math.hypot(camPos.x - b.x, camPos.z - b.z) > 84 ? 2 : 1) : 0;
+          if (lod !== prevLod) lodChanged = true;
           this._blockLodState.set(b.id, lod);
 
           const h = b.height;
@@ -17855,9 +17856,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         for (let i = 0; i < all.length; i += 1) {
           const b = all[i];
           const lod = this._blockLodState.get(b.id) || 0;
-          if (lod === 1) {
-            const dist = Math.hypot(camPos.x - b.x, camPos.z - b.z);
-            const widthScale = dist > 84 ? 0.24 : 1.0;
+          if (lod > 0) {
+            const widthScale = lod === 2 ? 0.24 : 1.0;
             dummy.position.set(b.x, b.y, b.z);
             dummy.rotation.set(0, 0, 0);
             dummy.scale.set(widthScale, b.height, 1);
@@ -17871,6 +17871,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         }
         refs.lodPlaneMesh.instanceMatrix.needsUpdate = true;
         if (refs.lodPlaneMesh.instanceColor) refs.lodPlaneMesh.instanceColor.needsUpdate = true;
+      }
+
+      // Three caches instance bounds across setMatrixAt calls. A model or proxy
+      // that becomes visible must participate in the next raycast.
+      if (lodChanged) {
+        for (const mesh of this.pickables) {
+          if (mesh.isInstancedMesh) mesh.boundingSphere = null;
+        }
       }
 
       for (const [pedId, vis] of this.pedestalVisuals.entries()) {
@@ -17920,8 +17928,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       return set;
     }
 
-    setSearchMatches(ids, activeId = null) {
+    setSearchMatches(ids, activeId = null, routes = []) {
       this.searchMatches = new Set(ids);
+      this.searchRoutes = routes;
       this.activeSearchId = this.searchMatches.has(activeId) ? activeId : null;
       this._drawSearchMatches();
       this.requestRender();
@@ -17935,19 +17944,34 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.searchLines.material.dispose();
       }
       this.searchLines = null;
+      this.searchBranches = new Set();
       if (!this.layout || !this.searchMatches.size) return;
       const vertices = [];
       const colors = [];
       const warm = new this.THREE.Color(0xffc774);
       const secondary = new this.THREE.Color(this.themeKey === 'grass' ? 0x286268 : 0x81b7c1);
-      for (const node of [...this.layout.pedestals, ...this.layout.blocks]) {
-        if (!this.searchMatches.has(node.objectId)) continue;
+      const objects = [...this.layout.pedestals, ...this.layout.blocks];
+      const visible = new Set(objects.map(node => node.objectId));
+      for (const [id, ancestors] of this.searchRoutes || []) {
+        if (visible.has(id)) continue;
+        const branch = ancestors.findLast(parent => parent !== 'root' && visible.has(parent));
+        if (branch) this.searchBranches.add(branch);
+      }
+      for (const node of objects) {
+        const direct = this.searchMatches.has(node.objectId);
+        if (!direct && !this.searchBranches.has(node.objectId)) continue;
         const active = node.objectId === this.activeSearchId;
         const color = active ? warm : secondary;
         const y = node.y + node.height + 0.035;
         const x = node.width / 2 + 0.045;
         const z = node.depth / 2 + 0.045;
         const corners = [[-x, -z], [x, -z], [x, z], [-x, z]];
+        if (!direct) {
+          // A short front-edge mark denotes an observed descendant off this deck.
+          vertices.push(node.x - x * 0.55, y, node.z + z, node.x + x * 0.55, y, node.z + z);
+          colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+          continue;
+        }
         for (let i = 0; i < 4; i++) {
           const [ax, az] = corners[i];
           const [bx, bz] = corners[(i + 1) % 4];
@@ -19197,6 +19221,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.target = null;
       this.pending = null;
       this.active = false;
+      this.positions = new Map();
     }
 
     capture() {
@@ -19216,7 +19241,15 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.tab.hidden = !id || !generation;
       if (!this.tab.hidden && this.target?.id === id && this.target.generation === generation) return;
       this.close();
-      this.intent = id && reading?.id === id ? reading : null;
+      if (this.generation !== generation) this.positions.clear();
+      this.generation = generation;
+      if (this.target?.generation === generation) {
+        this.positions.delete(this.target.id);
+        if (this.intent) this.positions.set(this.target.id, this.intent);
+        if (this.positions.size > 16) this.positions.delete(this.positions.keys().next().value);
+      }
+      this.intent = id && reading?.id === id && reading.generation === generation
+        ? reading : this.positions.get(id) || null;
       this.target = this.tab.hidden ? null : { id, generation };
     }
 
@@ -19310,7 +19343,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const output = element('div');
       output.className = 'saved-comparison-result';
       const remember = point => point && {
-        id: this.target.id, point: { id: point.id, snapshot: point.snapshot, date: point.date },
+        ...this.target, point: { id: point.id, snapshot: point.snapshot, date: point.date },
         compared: false, top: 0, diffLeft: 0, expanded: false,
       };
       select.addEventListener('change', () => {
@@ -19338,7 +19371,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const identity = verified ? JSON.stringify([receipt.workspace_snapshot_id, receipt.tree_id,
           receipt.saved?.sha256 || null, receipt.live.sha256, receipt.change, receipt.path, receipt.diff_status]) : null;
         if (restore && (!identity || identity !== restore.identity)) {
-          status.textContent = 'The previous comparison could not be verified unchanged. Compare again to read the current result.';
+          status.textContent = !identity
+            ? 'The available digests are insufficient to confirm the previous result. Compare again for current metadata.'
+            : 'The previous comparison could not be verified unchanged. Compare again to read the current result.';
           return;
         }
         this.intent = { ...this.intent, compared: true, identity };
@@ -19664,9 +19699,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     const right = document.createElement('span');
     right.className = 'muted-text';
     right.style.fontFamily = 'var(--font-mono)';
-    const exitStr = run.exit_code != null ? `exit ${run.exit_code}` : (run.status || '');
-    const durStr = run.duration_ms != null ? ` · ${run.duration_ms} ms` : '';
-    right.textContent = `${exitStr}${durStr}`;
+    right.textContent = [run.status && 'Reported ' + run.status, run.exit_code != null && 'exit ' + run.exit_code,
+      run.duration_ms != null && run.duration_ms + ' ms'].filter(Boolean).join(' · ');
     header.append(left, right);
     card.appendChild(header);
 
@@ -19689,11 +19723,13 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       card.appendChild(heading);
       for (const st of run.steps) {
         if (!st || typeof st !== 'object') continue;
-        const isFail = st.status === 'fail' || st.status === 'failed' || st.status === 'error';
+        const state = String(st.status || '').toLowerCase();
+        const isFail = ['fail', 'failed', 'error', 'timeout', 'timed out'].includes(state);
+        const isPass = ['pass', 'passed', 'success'].includes(state);
         const row = document.createElement('div');
-        row.className = 'run-step-row' + (isFail ? ' run-step-fail' : st.status === 'pass' ? ' run-step-pass' : '');
+        row.className = 'run-step-row' + (isFail ? ' run-step-fail' : isPass ? ' run-step-pass' : '');
         const name = document.createElement('span');
-        name.textContent = `${isFail ? '×' : '●'} ${st.name}`;
+        name.textContent = `${isFail ? '×' : isPass ? '✓' : '–'} ${st.name}`;
         const meta = document.createElement('span');
         meta.className = 'muted-text';
         meta.textContent = `${st.status || 'Status unavailable'}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
@@ -19726,8 +19762,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (execution) {
         try {
           const run = JSON.parse(execution.body);
-          const failed = Array.isArray(run?.steps) && run.steps.find(step => ['failed', 'fail', 'error'].includes(step?.status));
-          detail = [run?.status, failed?.name, run?.exit_code != null && 'exit ' + run.exit_code].filter(Boolean).join(' · ') || detail;
+          const failed = Array.isArray(run?.steps) && run.steps.find(step =>
+            ['failed', 'fail', 'error', 'timeout', 'timed out'].includes(String(step?.status || '').toLowerCase()));
+          detail = [run?.status && 'Reported ' + run.status, failed?.name && 'First failed step: ' + failed.name,
+            run?.exit_code != null && 'exit ' + run.exit_code].filter(Boolean).join(' · ') || detail;
         } catch { /* The content view displays the admitted text. */ }
       }
       return { label: 'Investigate run', tab: execution ? 'content' : 'timeline', slot: execution?.slot, detail };
@@ -19866,9 +19904,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.summaryReading = { ...(this.activeTab === 'compare' && this.readingBeforeCompare || current),
           comparison: current.comparison, summary: true, tab: this.readTab };
         this.readingBeforeCompare = null;
-        this.readingPositions.delete(this.currentObjectId);
-        this.readingPositions.set(this.currentObjectId, this.summaryReading);
-        if (this.readingPositions.size > 16) this.readingPositions.delete(this.readingPositions.keys().next().value);
+        this._rememberPosition(this.summaryReading);
         this.comparison.close();
         this.fileSummary.hidden = false;
         this.readerBack.hidden = true;
@@ -19939,7 +19975,15 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       return (target.objectId || target.id) === position.id && await position.digest === await this._contentDigest(target);
     }
 
+    _rememberPosition(position) {
+      if (!position || !this.currentObjectId) return;
+      this.readingPositions.delete(this.currentObjectId);
+      this.readingPositions.set(this.currentObjectId, position);
+      if (this.readingPositions.size > 16) this.readingPositions.delete(this.readingPositions.keys().next().value);
+    }
+
     hide() {
+      if (this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(null);
       this.reader = false;
       this.readingBeforeCompare = null;
@@ -19973,9 +20017,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
+      const sameObject = this.currentObjectId === (target.objectId || target.id);
+      if (!sameObject && this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(target, reading?.comparison);
       if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
-      const sameObject = this.currentObjectId === (target.objectId || target.id);
       if (!sameObject) { this.summaryReading = null; this.readingBeforeCompare = null; }
       const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
       this.reader = ['file', 'artifact', 'run'].includes(target.nodeKind);
@@ -20917,17 +20962,31 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const hits = this.matches.splice(0, 16);
       for (let pages = 0; this.pending.length && pages < 8 && hits.length < 16; pages++) {
         let result;
+        const reopening = this.reopenIndex != null;
+        const directory = reopening ? this.reopenChain[this.reopenIndex] : this.pending[0];
         try {
-          result = await this.list(this.pending[0], this.generation, this.cursor, signal);
+          result = await this.list(directory, this.generation, this.cursor, signal);
         } catch (error) {
           if (error.status === 429 && !signal.aborted) break;
           throw error;
         }
         signal.throwIfAborted();
         if (result.generation !== this.generation) throw new Error('Observation changed');
+        if (reopening) {
+          const next = this.reopenChain[this.reopenIndex + 1];
+          if (result.entries.some(node => node.id === next && node.node_kind === 'directory')) {
+            this.cursor = null;
+            if (++this.reopenIndex === this.reopenChain.length - 1) this.reopenIndex = null;
+          } else if (result.cursor) this.cursor = result.cursor;
+          else throw Object.assign(new Error('Original search folder unavailable'), { scopeLost: true });
+          continue;
+        }
         const ancestors = [...result.ancestors, result.directory];
         const path = ancestors.map(node => node.label).filter(label => label && label !== '/');
-        if (this.startPath === null) this.startPath = '/' + path.join('/');
+        if (this.startPath === null) {
+          this.startPath = '/' + path.join('/');
+          this.startChain = ancestors.map(node => node.id);
+        }
         const matches = [];
         this.cursor = result.cursor;
         if (!this.cursor) {
@@ -20965,7 +21024,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.scope = document.getElementById('fs-search-scope');
       this.scope.hidden = false;
       this.input.placeholder = 'Search by name or path';
-      this.input.addEventListener('input', () => this.start(this.walk?.start));
+      this.input.addEventListener('input', () => this.start());
       this.scope.addEventListener('change', () => this.start());
       this.input.addEventListener('keydown', event => {
         if (event.key === 'Escape') {
@@ -20992,11 +21051,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
     observationLost() {
       if (!this.walk) return;
-      const start = this.walk.start;
+      const chain = this.walk.startChain || this.walk.reopenChain;
       this.invalidate();
       this.bar.hidden = false;
       this.status('Search results changed. Recheck the original scope to search again.');
-      this.button('Restart search', () => this.start(start));
+      this.button('Restart search', () => this.start(chain?.at(-1), chain));
     }
 
     async validateDisplayed() {
@@ -21021,19 +21080,23 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
     }
 
-    start(boundStart) {
+    start(boundStart, chain) {
       this.invalidate();
       const query = this.input.value.trim();
       if (!query) return;
       this.bar.hidden = false;
       if (!this.generation()) {
         this.status('Waiting for this folder to load.');
-        this.button('Retry search', () => this.start(boundStart));
+        this.button('Retry search', () => this.start(boundStart, chain));
         return;
       }
       const start = boundStart ?? (this.scope.value === 'workspace' ? this.root() : this.directory());
       this.scopeTitle = this.scope.selectedOptions[0].textContent;
       this.walk = new SearchWalk(this.list, start, this.generation(), this.scope.value !== 'directory', query);
+      if (chain?.length > 1) {
+        this.walk.reopenChain = chain;
+        this.walk.reopenIndex = 0;
+      }
       this.controller = new AbortController();
       return this.advance();
     }
@@ -21085,7 +21148,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         return button;
       };
       const prev = action('Previous match', () => this.jump(index - 1), index <= 0);
-      const next = action('Next match', () => {
+      const nextLabel = active && index < 0 && this.displayed.length
+        ? `Jump to retained match ${this.displayed[0].ordinal}` : 'Next match';
+      const next = action(nextLabel, () => {
         if (index + 1 < this.displayed.length) this.jump(index + 1);
         else this.advance(true);
       }, index + 1 >= this.displayed.length && !this.more);
@@ -21111,7 +21176,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
       const ids = this.displayed.map(hit => hit.node.id);
       if (active && index < 0) ids.unshift(active.node.id);
-      this.onMatches?.(ids, active?.node.id ?? null);
+      const routes = [...this.displayed, ...(active && index < 0 ? [active] : [])]
+        .map(hit => [hit.node.id, hit.ancestors.map(node => node.id)]);
+      this.onMatches?.(ids, active?.node.id ?? null, routes);
       if (focused) {
         const same = Array.from(controls.children).find(button => !button.disabled && button.textContent === focused);
         (same || (!next.disabled ? next : !prev.disabled ? prev : controls.lastChild)).focus();
@@ -21146,8 +21213,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.busy = false;
         if (jumpToNext && hits.length) return this.jump(this.displayed.length - hits.length);
         this.render();
-      } catch {
-        if (!signal.aborted) this.observationLost();
+      } catch (error) {
+        if (signal.aborted) return;
+        if (error.scopeLost) {
+          this.invalidate();
+          this.bar.hidden = false;
+          this.status('The original search folder is unavailable. Choose a new search scope.');
+          this.button('Search from here', () => this.start());
+        } else this.observationLost();
       }
     }
   }
@@ -21345,8 +21418,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const stageScene = this.scene3d && this.viewMode === '3d' && previousPage;
         let destinationContext = [];
         if (stageScene) {
-          destinationContext = await this.data.sceneNeighborhood(page, request.signal,
-            this._neighborCandidates(page));
+          try {
+            destinationContext = await this.data.sceneNeighborhood(page, request.signal,
+              this._neighborCandidates(page));
+          } catch (error) {
+            if (request.signal.aborted || ![413, 429, 503].includes(error.status)) throw error;
+          }
           if (request.signal.aborted) return;
           // Navigation performs its authoritative query first. Revalidate before
           // publishing the selected content if the later samples took time.
@@ -21952,6 +22029,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       } else if (this.data.filesystem && node.nodeKind === 'directory') {
         const coverage = node.coverage || 'not-examined';
         mEl.textContent = `Directory · ${coverage} · open for current listing`;
+        if (this.scene3d?.searchBranches?.has(node.objectId)) mEl.textContent += ' · contains an observed search match';
       } else if (node.counts) {
         mEl.textContent = global.RoomViewLayout.formatCountsSummary(node.counts, this.data.descriptor);
       }
@@ -22179,7 +22257,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           }, signal),
           inspect: (id, generation, signal) => this.data.queryFilesystem('inspect', { id, generation }, signal),
           select: hit => this._openFilesystem(hit.id, { kind: hit.node_kind }),
-          onMatches: (ids, active) => this.scene3d?.setSearchMatches(ids, active),
+          onMatches: (ids, active, routes) => this.scene3d?.setSearchMatches(ids, active, routes),
           directory: () => this.fsPage?.directory.id || 'root',
           root: () => 'root',
           generation: () => this.data.fsGeneration,

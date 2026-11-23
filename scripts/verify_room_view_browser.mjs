@@ -189,6 +189,7 @@ async function main() {
       await sleep(220);
       await cdpLive.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('run-var-gate-verify', true, true);
+        document.getElementById('btn-read-file').click();
       })()`);
       await sleep(300);
       // Verify live /content/<id>/<slot> endpoint + PDF evidence + SQL + live inspector refresh
@@ -198,7 +199,7 @@ async function main() {
         return { status: r.status, slot: data?.preview?.slot || null, media: data?.preview?.media_type || null };
       })()`);
       await cdpLive.evalJs(`(() => {
-        window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
+        document.querySelector('.tab-btn[data-tab="evidence"]').click();
       })()`);
       const liveCheck = await cdpLive.evalJs(`(async () => {
         const pdfCanvases = () => document.querySelectorAll('#tab-evidence .pdf-page-slot canvas').length;
@@ -352,6 +353,7 @@ async function main() {
       await cdp.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
         window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-src-scheduler', true, true);
+        document.getElementById('btn-read-file').click();
         document.querySelector('#tab-content [data-preview-slot="source"]')?.click();
       })()`);
       await sleep(220);
@@ -379,7 +381,10 @@ async function main() {
       // 6. Click producer -> /var/runs/gate-verify relationship link chip to jump across branches!
       await cdp.evalJs(`(() => {
         const chip = document.querySelector('#tab-content .link-chip[data-link-target="run-var-gate-verify"]');
-        if (chip) chip.click();
+        if (chip) {
+          chip.click();
+          document.getElementById('btn-read-file').click();
+        }
         window.__JOSH_ROOM_VIEW_DEBUG__.settle();
       })()`);
       await sleep(240);
@@ -398,6 +403,7 @@ async function main() {
       // 7. Inspect collapsible JSON tree (/etc/policy.json) & explicit REDACTED card (/etc/vault.policy)
       await cdp.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-etc-policy-json', true, true);
+        document.getElementById('btn-read-file').click();
       })()`);
       await sleep(200);
       const jsonCheck = await cdp.evalJs(`(() => ({
@@ -410,6 +416,7 @@ async function main() {
 
       await cdp.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-etc-vault-policy', true, true);
+        document.getElementById('btn-read-file').click();
       })()`);
       await sleep(160);
       const redactedCheck = await cdp.evalJs(`(() => ({
@@ -420,7 +427,8 @@ async function main() {
       // 8. Click through to /var/artifacts/report.html -> verify PDF + Inert HTML XSS safety on UNIX fixture!
       await cdp.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-var-report-html', true, true);
-        window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
+        document.getElementById('btn-read-file').click();
+        document.querySelector('.tab-btn[data-tab="evidence"]').click();
       })()`);
       let unixPdfInfo = { canvasCount: 0, firstPageMs: -1 };
       for (let attempt = 0; attempt < 25; attempt += 1) {
@@ -621,7 +629,8 @@ async function main() {
     await cdp.evalJs(`(() => {
       window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
       window.__JOSH_ROOM_VIEW_DEBUG__.selectItem(${JSON.stringify(targetFailId)}, true, true);
-      window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
+      document.getElementById('btn-read-file').click();
+      document.querySelector('.tab-btn[data-tab="evidence"]').click();
       const pdfBtn = Array.from(document.querySelectorAll('#tab-evidence .att-pill')).find((b) => b.dataset.attachmentName === 'evidence-report.pdf');
       if (pdfBtn) pdfBtn.click();
     })()`);
@@ -653,7 +662,8 @@ async function main() {
     // Inert HTML attachment XSS safety probe
     await cdp.evalJs(`(() => {
       window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('item-0001', true, true);
-      window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
+      document.getElementById('btn-read-file').click();
+      document.querySelector('.tab-btn[data-tab="evidence"]').click();
       const htmlBtn = Array.from(document.querySelectorAll('#tab-evidence .att-pill')).find((b) => b.dataset.attachmentName === 'comparison.html');
       if (htmlBtn) htmlBtn.click();
     })()`);

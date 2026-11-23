@@ -15,6 +15,7 @@
       this.target = null;
       this.pending = null;
       this.active = false;
+      this.positions = new Map();
     }
 
     capture() {
@@ -34,7 +35,15 @@
       this.tab.hidden = !id || !generation;
       if (!this.tab.hidden && this.target?.id === id && this.target.generation === generation) return;
       this.close();
-      this.intent = id && reading?.id === id ? reading : null;
+      if (this.generation !== generation) this.positions.clear();
+      this.generation = generation;
+      if (this.target?.generation === generation) {
+        this.positions.delete(this.target.id);
+        if (this.intent) this.positions.set(this.target.id, this.intent);
+        if (this.positions.size > 16) this.positions.delete(this.positions.keys().next().value);
+      }
+      this.intent = id && reading?.id === id && reading.generation === generation
+        ? reading : this.positions.get(id) || null;
       this.target = this.tab.hidden ? null : { id, generation };
     }
 
@@ -128,7 +137,7 @@
       const output = element('div');
       output.className = 'saved-comparison-result';
       const remember = point => point && {
-        id: this.target.id, point: { id: point.id, snapshot: point.snapshot, date: point.date },
+        ...this.target, point: { id: point.id, snapshot: point.snapshot, date: point.date },
         compared: false, top: 0, diffLeft: 0, expanded: false,
       };
       select.addEventListener('change', () => {
@@ -156,7 +165,9 @@
         const identity = verified ? JSON.stringify([receipt.workspace_snapshot_id, receipt.tree_id,
           receipt.saved?.sha256 || null, receipt.live.sha256, receipt.change, receipt.path, receipt.diff_status]) : null;
         if (restore && (!identity || identity !== restore.identity)) {
-          status.textContent = 'The previous comparison could not be verified unchanged. Compare again to read the current result.';
+          status.textContent = !identity
+            ? 'The available digests are insufficient to confirm the previous result. Compare again for current metadata.'
+            : 'The previous comparison could not be verified unchanged. Compare again to read the current result.';
           return;
         }
         this.intent = { ...this.intent, compared: true, identity };

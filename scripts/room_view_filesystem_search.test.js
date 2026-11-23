@@ -26,6 +26,24 @@ test('direct search resumes incomplete sibling admission and stops before descen
   assert.equal(more, false);
 });
 
+test('restart reacquires the original folder by identity across pages, rejecting a same-name replacement', async () => {
+  const start = async replaced => {
+    const calls = [];
+    const walk = new SearchWalk(async (id, generation, cursor) => {
+      calls.push([id, cursor]);
+      if (id === src.id) return page(src, [root], [file('exact')]);
+      return cursor ? page(root, [], [replaced ? {...src, id: 'new-id'} : src]) : page(root, [], [], 'more', 'partial');
+    }, src.id, 'g1', false, 'exact');
+    walk.reopenChain = [root.id, src.id];
+    walk.reopenIndex = 0;
+    if (replaced) await assert.rejects(walk.advance(signal), {scopeLost: true});
+    else assert.equal((await walk.advance(signal)).hits[0].fullPath, '/src/exact');
+    assert.equal(calls.length, replaced ? 2 : 3);
+  };
+  await start(false);
+  await start(true);
+});
+
 test('recursive search returns target and ancestry in one hit and bounds each continuation', async () => {
   const folders = Array.from({length: 15}, (_, i) => dir('folder-' + i));
   const calls = [];

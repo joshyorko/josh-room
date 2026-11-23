@@ -22,17 +22,31 @@
       const hits = this.matches.splice(0, 16);
       for (let pages = 0; this.pending.length && pages < 8 && hits.length < 16; pages++) {
         let result;
+        const reopening = this.reopenIndex != null;
+        const directory = reopening ? this.reopenChain[this.reopenIndex] : this.pending[0];
         try {
-          result = await this.list(this.pending[0], this.generation, this.cursor, signal);
+          result = await this.list(directory, this.generation, this.cursor, signal);
         } catch (error) {
           if (error.status === 429 && !signal.aborted) break;
           throw error;
         }
         signal.throwIfAborted();
         if (result.generation !== this.generation) throw new Error('Observation changed');
+        if (reopening) {
+          const next = this.reopenChain[this.reopenIndex + 1];
+          if (result.entries.some(node => node.id === next && node.node_kind === 'directory')) {
+            this.cursor = null;
+            if (++this.reopenIndex === this.reopenChain.length - 1) this.reopenIndex = null;
+          } else if (result.cursor) this.cursor = result.cursor;
+          else throw Object.assign(new Error('Original search folder unavailable'), { scopeLost: true });
+          continue;
+        }
         const ancestors = [...result.ancestors, result.directory];
         const path = ancestors.map(node => node.label).filter(label => label && label !== '/');
-        if (this.startPath === null) this.startPath = '/' + path.join('/');
+        if (this.startPath === null) {
+          this.startPath = '/' + path.join('/');
+          this.startChain = ancestors.map(node => node.id);
+        }
         const matches = [];
         this.cursor = result.cursor;
         if (!this.cursor) {
@@ -70,7 +84,7 @@
       this.scope = document.getElementById('fs-search-scope');
       this.scope.hidden = false;
       this.input.placeholder = 'Search by name or path';
-      this.input.addEventListener('input', () => this.start(this.walk?.start));
+      this.input.addEventListener('input', () => this.start());
       this.scope.addEventListener('change', () => this.start());
       this.input.addEventListener('keydown', event => {
         if (event.key === 'Escape') {
@@ -97,11 +111,11 @@
 
     observationLost() {
       if (!this.walk) return;
-      const start = this.walk.start;
+      const chain = this.walk.startChain || this.walk.reopenChain;
       this.invalidate();
       this.bar.hidden = false;
       this.status('Search results changed. Recheck the original scope to search again.');
-      this.button('Restart search', () => this.start(start));
+      this.button('Restart search', () => this.start(chain?.at(-1), chain));
     }
 
     async validateDisplayed() {
@@ -126,19 +140,23 @@
       }
     }
 
-    start(boundStart) {
+    start(boundStart, chain) {
       this.invalidate();
       const query = this.input.value.trim();
       if (!query) return;
       this.bar.hidden = false;
       if (!this.generation()) {
         this.status('Waiting for this folder to load.');
-        this.button('Retry search', () => this.start(boundStart));
+        this.button('Retry search', () => this.start(boundStart, chain));
         return;
       }
       const start = boundStart ?? (this.scope.value === 'workspace' ? this.root() : this.directory());
       this.scopeTitle = this.scope.selectedOptions[0].textContent;
       this.walk = new SearchWalk(this.list, start, this.generation(), this.scope.value !== 'directory', query);
+      if (chain?.length > 1) {
+        this.walk.reopenChain = chain;
+        this.walk.reopenIndex = 0;
+      }
       this.controller = new AbortController();
       return this.advance();
     }
@@ -190,7 +208,9 @@
         return button;
       };
       const prev = action('Previous match', () => this.jump(index - 1), index <= 0);
-      const next = action('Next match', () => {
+      const nextLabel = active && index < 0 && this.displayed.length
+        ? `Jump to retained match ${this.displayed[0].ordinal}` : 'Next match';
+      const next = action(nextLabel, () => {
         if (index + 1 < this.displayed.length) this.jump(index + 1);
         else this.advance(true);
       }, index + 1 >= this.displayed.length && !this.more);
@@ -216,7 +236,9 @@
       }
       const ids = this.displayed.map(hit => hit.node.id);
       if (active && index < 0) ids.unshift(active.node.id);
-      this.onMatches?.(ids, active?.node.id ?? null);
+      const routes = [...this.displayed, ...(active && index < 0 ? [active] : [])]
+        .map(hit => [hit.node.id, hit.ancestors.map(node => node.id)]);
+      this.onMatches?.(ids, active?.node.id ?? null, routes);
       if (focused) {
         const same = Array.from(controls.children).find(button => !button.disabled && button.textContent === focused);
         (same || (!next.disabled ? next : !prev.disabled ? prev : controls.lastChild)).focus();
@@ -251,8 +273,14 @@
         this.busy = false;
         if (jumpToNext && hits.length) return this.jump(this.displayed.length - hits.length);
         this.render();
-      } catch {
-        if (!signal.aborted) this.observationLost();
+      } catch (error) {
+        if (signal.aborted) return;
+        if (error.scopeLost) {
+          this.invalidate();
+          this.bar.hidden = false;
+          this.status('The original search folder is unavailable. Choose a new search scope.');
+          this.button('Search from here', () => this.start());
+        } else this.observationLost();
       }
     }
   }

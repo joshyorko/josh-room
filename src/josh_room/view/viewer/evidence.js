@@ -235,9 +235,8 @@
     const right = document.createElement('span');
     right.className = 'muted-text';
     right.style.fontFamily = 'var(--font-mono)';
-    const exitStr = run.exit_code != null ? `exit ${run.exit_code}` : (run.status || '');
-    const durStr = run.duration_ms != null ? ` · ${run.duration_ms} ms` : '';
-    right.textContent = `${exitStr}${durStr}`;
+    right.textContent = [run.status && 'Reported ' + run.status, run.exit_code != null && 'exit ' + run.exit_code,
+      run.duration_ms != null && run.duration_ms + ' ms'].filter(Boolean).join(' · ');
     header.append(left, right);
     card.appendChild(header);
 
@@ -260,11 +259,13 @@
       card.appendChild(heading);
       for (const st of run.steps) {
         if (!st || typeof st !== 'object') continue;
-        const isFail = st.status === 'fail' || st.status === 'failed' || st.status === 'error';
+        const state = String(st.status || '').toLowerCase();
+        const isFail = ['fail', 'failed', 'error', 'timeout', 'timed out'].includes(state);
+        const isPass = ['pass', 'passed', 'success'].includes(state);
         const row = document.createElement('div');
-        row.className = 'run-step-row' + (isFail ? ' run-step-fail' : st.status === 'pass' ? ' run-step-pass' : '');
+        row.className = 'run-step-row' + (isFail ? ' run-step-fail' : isPass ? ' run-step-pass' : '');
         const name = document.createElement('span');
-        name.textContent = `${isFail ? '×' : '●'} ${st.name}`;
+        name.textContent = `${isFail ? '×' : isPass ? '✓' : '–'} ${st.name}`;
         const meta = document.createElement('span');
         meta.className = 'muted-text';
         meta.textContent = `${st.status || 'Status unavailable'}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
@@ -297,8 +298,10 @@
       if (execution) {
         try {
           const run = JSON.parse(execution.body);
-          const failed = Array.isArray(run?.steps) && run.steps.find(step => ['failed', 'fail', 'error'].includes(step?.status));
-          detail = [run?.status, failed?.name, run?.exit_code != null && 'exit ' + run.exit_code].filter(Boolean).join(' · ') || detail;
+          const failed = Array.isArray(run?.steps) && run.steps.find(step =>
+            ['failed', 'fail', 'error', 'timeout', 'timed out'].includes(String(step?.status || '').toLowerCase()));
+          detail = [run?.status && 'Reported ' + run.status, failed?.name && 'First failed step: ' + failed.name,
+            run?.exit_code != null && 'exit ' + run.exit_code].filter(Boolean).join(' · ') || detail;
         } catch { /* The content view displays the admitted text. */ }
       }
       return { label: 'Investigate run', tab: execution ? 'content' : 'timeline', slot: execution?.slot, detail };
@@ -437,9 +440,7 @@
         this.summaryReading = { ...(this.activeTab === 'compare' && this.readingBeforeCompare || current),
           comparison: current.comparison, summary: true, tab: this.readTab };
         this.readingBeforeCompare = null;
-        this.readingPositions.delete(this.currentObjectId);
-        this.readingPositions.set(this.currentObjectId, this.summaryReading);
-        if (this.readingPositions.size > 16) this.readingPositions.delete(this.readingPositions.keys().next().value);
+        this._rememberPosition(this.summaryReading);
         this.comparison.close();
         this.fileSummary.hidden = false;
         this.readerBack.hidden = true;
@@ -510,7 +511,15 @@
       return (target.objectId || target.id) === position.id && await position.digest === await this._contentDigest(target);
     }
 
+    _rememberPosition(position) {
+      if (!position || !this.currentObjectId) return;
+      this.readingPositions.delete(this.currentObjectId);
+      this.readingPositions.set(this.currentObjectId, position);
+      if (this.readingPositions.size > 16) this.readingPositions.delete(this.readingPositions.keys().next().value);
+    }
+
     hide() {
+      if (this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(null);
       this.reader = false;
       this.readingBeforeCompare = null;
@@ -544,9 +553,10 @@
     }
 
     showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
+      const sameObject = this.currentObjectId === (target.objectId || target.id);
+      if (!sameObject && this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(target, reading?.comparison);
       if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
-      const sameObject = this.currentObjectId === (target.objectId || target.id);
       if (!sameObject) { this.summaryReading = null; this.readingBeforeCompare = null; }
       const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
       this.reader = ['file', 'artifact', 'run'].includes(target.nodeKind);

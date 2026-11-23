@@ -1299,7 +1299,10 @@
 
       const notchCrownGeo = createNotchCrownGeometry(THREE, bw);
       const notchCrownMesh = makeInstanced(notchCrownGeo, notchCrownMat, notchBlocks, 'notch-crown');
-      if (notchCrownMesh) notchCrownMesh.castShadow = false;
+      if (notchCrownMesh) {
+        notchCrownMesh.castShadow = false;
+        this.pickables.push(notchCrownMesh);
+      }
 
       const hollowPostsGeo = createHollowPostsGeometry(THREE, bw);
       const hollowPostsMesh = makeInstanced(hollowPostsGeo, hollowMat, hollowBlocks, 'hollow');
@@ -1318,14 +1321,11 @@
       const lodPlaneGeo = new THREE.PlaneGeometry(bw * 0.9, 1.0);
       lodPlaneGeo.translate(0, 0.5, 0);
       const lodPlaneMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-      const lodPlaneMesh = layout.blocks.length
-        ? new THREE.InstancedMesh(lodPlaneGeo, lodPlaneMat, layout.blocks.length)
-        : null;
+      const lodPlaneMesh = makeInstanced(lodPlaneGeo, lodPlaneMat, layout.blocks, 'far');
       if (lodPlaneMesh) {
-        lodPlaneMesh.frustumCulled = false;
         lodPlaneMesh.castShadow = false;
         lodPlaneMesh.receiveShadow = false;
-        this.worldGroup.add(lodPlaneMesh);
+        this.pickables.push(lodPlaneMesh);
       }
 
       // 4. SpaceTree Summary / "+N more" Stacked Outcome Towers (honors EVERY declared legend kind!)
@@ -1403,6 +1403,7 @@
       const dummy = new THREE.Object3D();
       const zeroScale = new THREE.Matrix4().makeScale(0, 0, 0);
       const camPos = this.camera.position;
+      let lodChanged = false;
 
       const updateList = (list, primaryMesh, onExtra) => {
         if (!list || !list.length || !primaryMesh) return;
@@ -1410,9 +1411,9 @@
           const b = list[i];
           const dist = Math.hypot(camPos.x - b.x, camPos.y - (b.y + b.height * 0.5), camPos.z - b.z);
           const prevLod = this._blockLodState.get(b.id) || 0;
-          let lod = prevLod;
-          if (prevLod === 0 && dist > 54) lod = 1;
-          else if (prevLod === 1 && dist < 46) lod = 0;
+          const far = prevLod === 0 ? dist > 54 : dist >= 46;
+          const lod = far ? (Math.hypot(camPos.x - b.x, camPos.z - b.z) > 84 ? 2 : 1) : 0;
+          if (lod !== prevLod) lodChanged = true;
           this._blockLodState.set(b.id, lod);
 
           const h = b.height;
@@ -1476,9 +1477,8 @@
         for (let i = 0; i < all.length; i += 1) {
           const b = all[i];
           const lod = this._blockLodState.get(b.id) || 0;
-          if (lod === 1) {
-            const dist = Math.hypot(camPos.x - b.x, camPos.z - b.z);
-            const widthScale = dist > 84 ? 0.24 : 1.0;
+          if (lod > 0) {
+            const widthScale = lod === 2 ? 0.24 : 1.0;
             dummy.position.set(b.x, b.y, b.z);
             dummy.rotation.set(0, 0, 0);
             dummy.scale.set(widthScale, b.height, 1);
@@ -1492,6 +1492,14 @@
         }
         refs.lodPlaneMesh.instanceMatrix.needsUpdate = true;
         if (refs.lodPlaneMesh.instanceColor) refs.lodPlaneMesh.instanceColor.needsUpdate = true;
+      }
+
+      // Three caches instance bounds across setMatrixAt calls. A model or proxy
+      // that becomes visible must participate in the next raycast.
+      if (lodChanged) {
+        for (const mesh of this.pickables) {
+          if (mesh.isInstancedMesh) mesh.boundingSphere = null;
+        }
       }
 
       for (const [pedId, vis] of this.pedestalVisuals.entries()) {
@@ -1541,8 +1549,9 @@
       return set;
     }
 
-    setSearchMatches(ids, activeId = null) {
+    setSearchMatches(ids, activeId = null, routes = []) {
       this.searchMatches = new Set(ids);
+      this.searchRoutes = routes;
       this.activeSearchId = this.searchMatches.has(activeId) ? activeId : null;
       this._drawSearchMatches();
       this.requestRender();
@@ -1556,19 +1565,34 @@
         this.searchLines.material.dispose();
       }
       this.searchLines = null;
+      this.searchBranches = new Set();
       if (!this.layout || !this.searchMatches.size) return;
       const vertices = [];
       const colors = [];
       const warm = new this.THREE.Color(0xffc774);
       const secondary = new this.THREE.Color(this.themeKey === 'grass' ? 0x286268 : 0x81b7c1);
-      for (const node of [...this.layout.pedestals, ...this.layout.blocks]) {
-        if (!this.searchMatches.has(node.objectId)) continue;
+      const objects = [...this.layout.pedestals, ...this.layout.blocks];
+      const visible = new Set(objects.map(node => node.objectId));
+      for (const [id, ancestors] of this.searchRoutes || []) {
+        if (visible.has(id)) continue;
+        const branch = ancestors.findLast(parent => parent !== 'root' && visible.has(parent));
+        if (branch) this.searchBranches.add(branch);
+      }
+      for (const node of objects) {
+        const direct = this.searchMatches.has(node.objectId);
+        if (!direct && !this.searchBranches.has(node.objectId)) continue;
         const active = node.objectId === this.activeSearchId;
         const color = active ? warm : secondary;
         const y = node.y + node.height + 0.035;
         const x = node.width / 2 + 0.045;
         const z = node.depth / 2 + 0.045;
         const corners = [[-x, -z], [x, -z], [x, z], [-x, z]];
+        if (!direct) {
+          // A short front-edge mark denotes an observed descendant off this deck.
+          vertices.push(node.x - x * 0.55, y, node.z + z, node.x + x * 0.55, y, node.z + z);
+          colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+          continue;
+        }
         for (let i = 0; i < 4; i++) {
           const [ax, az] = corners[i];
           const [bx, bz] = corners[(i + 1) % 4];
