@@ -102,3 +102,31 @@ def test_legacy_reserved_update_refuses_resume_before_payload_or_authority_write
     authority = SimpleNamespace(namespace='1' * 32, read=lambda: ({'state': legacy}, 'etag'))
     with pytest.raises(ValueError, match='legacy child update digest requires reconciliation'):
         save_child(tmp_path, None, '1' * 32, 'child', 'jat-child', 'update', authority, None, tmp_path)
+
+
+def test_full_repository_child_update_stages_git_only_changes(tmp_path, monkeypatch):
+    import subprocess
+    from josh_room import composition_updates
+    from josh_room.workspace_policy import load_capture_policy
+
+    child, private = tmp_path / 'child', tmp_path / 'private'
+    child.mkdir()
+    private.mkdir()
+    subprocess.run(['git', 'init', '-q', '--template=', str(child)], check=True)
+    (child / '.josh-roomignore').write_text('.josh-room-split.json\n')
+    (child / '.josh-room-split.json').write_text(json.dumps({
+        'namespace': 'ns', 'room_id': 'room', 'snapshot_id': 'baseline'}))
+    monkeypatch.setattr(composition_updates, 'context_status', lambda _: {
+        'ok': True, 'composition_namespace': 'ns', 'project_id': 'room', 'snapshot_id': 'baseline'})
+    policy = load_capture_policy(child)
+
+    def stage():
+        return composition_updates._child_view(child, private, 'ns', 'room', 'baseline',
+                                                {'baseline'}, policy.sha256, 'full-repository')
+
+    original, first = stage()
+    (child / '.git/HEAD').write_text('ref: refs/heads/alternate\n')
+    current, second = stage()
+    assert first['capture_mode'] == second['capture_mode'] == 'full-repository'
+    assert first['content_sha256'] != second['content_sha256']
+    assert (original / '.git/HEAD').read_bytes() != (current / '.git/HEAD').read_bytes()

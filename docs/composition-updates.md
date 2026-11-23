@@ -14,7 +14,7 @@ reserves its exact logical output in CAS before backup; Restic receives the exac
 prior payload snapshot as parent. Completed tagged orphan snapshots are verified
 and reused. A claim without a completed snapshot still refuses automatic takeover.
 
-The state contract advances to `composition-safety-v2`, preserving all existing
+The original child Save contract uses `composition-safety-v2`, preserving existing
 operations, catalogs, pins and repository bindings. A separate bounded child-update
 ledger reserves and atomically publishes child records. Old v1 namespace readers
 reject this contract; their stale CAS cannot overwrite it. Legacy root repositories
@@ -44,6 +44,14 @@ Review conclusion: these bounded append-only transitions need no unload or
 filesystem deletion authority. Independent review and installed/native qualification
 of this extension remain separate gates; the prior installed receipt covers only
 the earlier PR #216 source revision. Release remains on owner HOLD.
+
+New Git-aware reservations bind the child path, capture mode, staged policy,
+approved inventory and source records in the versioned namespace plan. A child
+Save retains the authenticated mode. Changes to a ref, stash or index can advance
+the child pin even when its working files have identical bytes. A source-only
+baseline stays source-only. Recovering Git history requires a new capture from a
+repository that still has the objects and refs. Old parents retain their exact
+child points across updates and explicit parent refreshes.
 
 ## CLI
 

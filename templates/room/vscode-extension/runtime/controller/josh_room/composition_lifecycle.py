@@ -22,6 +22,8 @@ from .composition import (
     portable_path,
     require_uncomposed_workspace,
     validate_paths,
+    validate_payload_path,
+    validate_child_git,
 )
 from .composition_authority import (
     CompositionAuthority,
@@ -46,7 +48,7 @@ from .room_store_operations import (
     scan_workspace_for_status,
 )
 from .workspace_onboarding import _directory
-from .workspace_policy import _read_ignore, load_capture_policy
+from .workspace_policy import _read_ignore, load_capture_policy, policy_for_ignore
 from .workspace_state import context_status, write_stat_workspace_marker
 
 
@@ -61,6 +63,56 @@ def _outcome(path, assignments):
     if not matches:
         raise ValueError("every captured path needs an explicit subtree assignment")
     return max(matches)[1]
+
+
+def _parent_scan(source, policy, children):
+    return _scan_workspace(source, replace(policy, capture_mode="source-only"),
+                           opaque_directories=frozenset(children))
+
+
+def _has_git(directory):
+    return os.path.lexists(directory / ".git") or (
+        (directory / "HEAD").is_file() and (directory / "objects").is_dir()
+        and (directory / "config").is_file()
+    )
+
+
+def _child_inventory(source, child, root_policy, selection):
+    original = source / child
+    raw = _read_ignore(original)
+    local = policy_for_ignore(raw)
+    mode = selection or local.capture_mode
+    if "source-only" in (local.capture_mode, root_policy.capture_mode):
+        if selection == "full-repository" or (
+            root_policy.capture_mode == "source-only" and selection is None
+            and local.capture_mode == "full-repository"
+            and any(line.strip().startswith(b"# josh-room capture-mode:") for line in (raw or b"").splitlines())
+        ):
+            raise ValueError("full repository selection conflicts with source-only policy")
+        mode = "source-only"
+    lines = [line for line in (raw or b"").decode("utf-8").splitlines()
+             if not line.strip().startswith("# josh-room capture-mode:")]
+    rules = [".josh-room-split.json", *_inherited_exclusions(root_policy, child)]
+    lines.append(f"# josh-room capture-mode: {mode}")
+    lines.extend("\\" + rule if rule.startswith("#") else rule for rule in rules)
+    generated = ("\n".join(lines) + "\n").encode("utf-8")
+    effective = policy_for_ignore(generated)
+    if effective.is_excluded(".josh-roomignore"):
+        raise ValueError("the generated child policy must include .josh-roomignore")
+    scan = _scan_workspace(original, effective)
+    for path in scan.paths:
+        if path != ".josh-roomignore":
+            validate_payload_path(path)
+    validate_child_git(original, scan.paths, mode)
+    evidence = {
+        "signature": scan.signature,
+        "policy_sha256": local.sha256,
+        "effective_policy_sha256": effective.sha256,
+        "approved_paths_sha256": plan_digest(sorted(scan.paths | {".josh-roomignore"})),
+        "capture_mode": mode,
+        "records_sha256": plan_digest(_records(original, scan.paths)),
+    }
+    return scan, evidence, generated
 
 
 def capture_plan(workspace, dimension, namespace, parent_room, assignments):
@@ -83,7 +135,9 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
     for row in assignments:
         if (
             not isinstance(row, dict)
-            or set(row) != {"path", "outcome"}
+            or not {"path", "outcome"} <= set(row) <= {"path", "outcome", "capture_mode"}
+            or ("capture_mode" in row and (row["outcome"] != "child"
+                or row["capture_mode"] not in ("full-repository", "source-only")))
             or row["outcome"] not in ("child", "parent", "local-only")
         ):
             raise ValueError("invalid capture assignment")
@@ -123,42 +177,40 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
         if not (workspace / child).is_dir():
             raise ValueError("child assignment must select a directory")
     policy = load_capture_policy(workspace)
-    # Explicit catalog mode always separates parent Git history. Source bytes
-    # and policy remain untouched; only the private parent capture view changes.
-    scan = _scan_workspace(workspace, replace(policy, capture_mode="source-only"))
+    # A parent is deliberately source-only. A cohesive Git source needs an
+    # explicit source-only policy before its history can be left behind.
+    if policy.capture_mode != "source-only" and (_has_git(workspace) or any(
+        (directory / ".git").is_file() or (directory / ".git/HEAD").is_file()
+        for directory in workspace.parents
+    )):
+        raise ValueError("save the cohesive Git repository as one Room or explicitly select a source-only root policy")
+    scan = _parent_scan(workspace, policy, children)
     for path in scan.paths:
-        if path == ".josh-roomignore" or path in {
-            child + "/.josh-roomignore" for child in children
-        }:
+        if path == ".josh-roomignore":
             continue
-        portable_path(path)
-        if (workspace / path).is_symlink():
+        validate_payload_path(path)
+        location = workspace / path
+        if location.is_symlink():
             raise ValueError("linked capture sources are unsupported in catalog mode")
-        _outcome(path, rows)
+        outcome = _outcome(path, rows)
+        if (policy.capture_mode != "source-only" and path not in children
+                and location.is_dir() and _has_git(location)
+                and (outcome == "parent" or any(
+                    row["outcome"] != "local-only" and row["path"].startswith(path + "/")
+                    for row in rows))):
+            raise ValueError("save the cohesive Git repository as one Room or assign its entire directory to a child")
     if any(child not in scan.paths or policy.is_excluded(child) for child in children):
         raise ValueError("selected child is excluded or unavailable")
     rows.sort(key=lambda row: row["path"])
     if not dimension.encryption_domain_id:
         raise ValueError("select an initialized encryption domain before planning")
     child_evidence = {}
-    for child in children:
-        child_policy = load_capture_policy(workspace / child)
-        child_scan = _scan_workspace(
-            workspace / child, replace(child_policy, capture_mode="source-only")
-        )
-        allowed = sorted(
-            path for path in child_scan.paths if child + "/" + path in scan.paths
-        )
-        child_evidence[child] = {
-            "signature": child_scan.signature,
-            "policy_sha256": child_policy.sha256,
-            "approved_paths_sha256": plan_digest(allowed),
-            "capture_mode": "source-only",
-            "records_sha256": plan_digest(
-                _records(workspace / child, child_scan.paths)
-            ),
-        }
+    for row in rows:
+        if row["outcome"] == "child":
+            _, evidence, _ = _child_inventory(workspace, row["path"], policy, row.get("capture_mode"))
+            child_evidence[row["path"]] = evidence
     request = {
+        "plan_version": 3,
         "namespace": namespace,
         "source_identity": source_identity,
         "source_records_sha256": plan_digest(_records(workspace, scan.paths)),
@@ -313,6 +365,11 @@ def _content_digest(root):
     for relative in sorted(scan.paths):
         path = root / relative
         info = path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            target = os.fsencode(os.readlink(path))
+            header = canonical([relative, "symlink", stat.S_IMODE(info.st_mode), len(target)])
+            digest.update(len(header).to_bytes(8, "big") + header + target)
+            continue
         kind = "file" if stat.S_ISREG(info.st_mode) else "directory"
         header = canonical([relative, kind, stat.S_IMODE(info.st_mode),
                             info.st_size if kind == "file" else 0])
@@ -456,6 +513,11 @@ def _copy_paths(source, target, paths, *, source_fd=None, records=None):
                 if stat.S_ISDIR(info.st_mode):
                     destination.mkdir(exist_ok=True, mode=0o700)
                     modes.append((destination, stat.S_IMODE(info.st_mode)))
+                elif stat.S_ISLNK(info.st_mode):
+                    link = os.readlink(parts[-1], dir_fd=fd)
+                    if _record_stat(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)) != records[relative]:
+                        raise ValueError("approved symlink changed during capture")
+                    destination.symlink_to(link)
                 elif stat.S_ISREG(info.st_mode):
                     opened = os.open(
                         parts[-1],
@@ -548,38 +610,17 @@ def _inherited_exclusions(policy, child):
 
 def _build_child_view(source, child, target, request, source_fd):
     root_policy = load_capture_policy(source)
-    root_scan = _scan_workspace(
-        source, replace(root_policy, capture_mode="source-only")
-    )
+    root_scan = _parent_scan(source, root_policy, request["child_evidence"])
     original = source / child
-    child_policy = load_capture_policy(original)
-    child_scan = _scan_workspace(
-        original, replace(child_policy, capture_mode="source-only")
-    )
-    allowed = {
-        path for path in child_scan.paths if child + "/" + path in root_scan.paths
-    }
-    evidence = {
-        "signature": child_scan.signature,
-        "policy_sha256": child_policy.sha256,
-        "approved_paths_sha256": plan_digest(sorted(allowed)),
-        "capture_mode": "source-only",
-        "records_sha256": plan_digest(_records(original, child_scan.paths)),
-    }
+    row = next(row for row in request["assignments"] if row["path"] == child)
+    child_scan, evidence, generated = _child_inventory(source, child, root_policy, row.get("capture_mode"))
+    allowed = child_scan.paths
     if (
         evidence != request["child_evidence"][child]
         or root_scan.signature != request["source_signature"]
         or root_policy.sha256 != request["capture_policy_sha256"]
     ):
         raise ValueError("approved child inventory changed before capture")
-    omitted = sorted(set(child_scan.paths) - allowed)
-    exclusions = [
-        path
-        for path in omitted
-        if not any(
-            path.startswith(parent + "/") for parent in omitted if parent != path
-        )
-    ]
     target.mkdir(mode=0o700)
     root_records = _records(source, root_scan.paths, source_fd)
     if plan_digest(root_records) != request["source_records_sha256"]:
@@ -600,30 +641,15 @@ def _build_child_view(source, child, target, request, source_fd):
         child_records = _records(original, child_scan.paths, child_fd)
         if plan_digest(child_records) != evidence["records_sha256"]:
             raise ValueError("approved child records changed before staging")
-        original_ignore, modes = _copy_paths(
+        _, modes = _copy_paths(
             original, target, allowed, source_fd=child_fd, records=child_records
         )
     finally:
         os.close(child_fd)
-    lines = [
-        line
-        for line in original_ignore.splitlines()
-        if not line.strip().startswith("# josh-room capture-mode:")
-    ]
-    rules = [".josh-room-split.json", *_inherited_exclusions(root_policy, child),
-             *[path + "/**" for path in exclusions]]
-    # Only generated patterns need escaping; original comments retain their role.
-    lines.extend(["# josh-room capture-mode: source-only",
-                  *["\\" + rule if rule.startswith("#") else rule for rule in rules]])
-    (target / ".josh-roomignore").write_text("\n".join(lines) + "\n")
+    (target / ".josh-roomignore").write_bytes(generated)
     _finish_view(target, allowed | {".josh-roomignore"}, modes)
-    after = _scan_workspace(
-        original, replace(load_capture_policy(original), capture_mode="source-only")
-    )
-    if (
-        after.signature != evidence["signature"]
-        or after.capture_policy_sha256 != evidence["policy_sha256"]
-    ):
+    _, after, _ = _child_inventory(source, child, root_policy, row.get("capture_mode"))
+    if after != evidence:
         raise ValueError("child source changed during private staging")
     return target
 
@@ -636,7 +662,7 @@ def _parent_view(source, target, assignments, manifest, request):
 def _build_parent_view(source, target, assignments, manifest, request, source_fd):
     target.mkdir(mode=0o700)
     policy = load_capture_policy(source)
-    scan = _scan_workspace(source, replace(policy, capture_mode="source-only"))
+    scan = _parent_scan(source, policy, request["child_evidence"])
     if (
         scan.signature != request["source_signature"]
         or policy.sha256 != request["capture_policy_sha256"]
@@ -671,9 +697,7 @@ def _build_parent_view(source, target, assignments, manifest, request, source_fd
     (target / ".josh-roomignore").write_text("\n".join(lines) + "\n")
     (target / MANIFEST).write_bytes(canonical(manifest))
     _finish_view(target, allowed | {".josh-roomignore", MANIFEST}, modes)
-    after = _scan_workspace(
-        source, replace(load_capture_policy(source), capture_mode="source-only")
-    )
+    after = _parent_scan(source, load_capture_policy(source), request["child_evidence"])
     if (
         after.signature != request["source_signature"]
         or after.capture_policy_sha256 != request["capture_policy_sha256"]
@@ -738,9 +762,14 @@ def save_composition(
                 dimension.dimension_id, authority.binding["encryption_domain_id"]
             ).body
             catalog["format_version"] = 3
+            child_evidence = request["child_evidence"]
             children = [
                 {
                     "path": row["path"],
+                    "capture_mode": child_evidence[row["path"]]["capture_mode"],
+                    "capture_policy_sha256": child_evidence[row["path"]]["effective_policy_sha256"],
+                    "approved_paths_sha256": child_evidence[row["path"]]["approved_paths_sha256"],
+                    "source_records_sha256": child_evidence[row["path"]]["records_sha256"],
                     "room_id": "child-" + _slot(namespace, row["path"]),
                     "logical_jat_id": "jat-"
                     + _slot(namespace, "capture:" + row["path"]),
@@ -758,6 +787,7 @@ def save_composition(
                 )
             }
             plan.update(
+                plan_version=request["plan_version"],
                 parent_logical_jat_id="jat-" + _slot(namespace, "parent"),
                 expected_parent_logical_jat_id=None,
                 children=children,
@@ -811,6 +841,8 @@ def save_composition(
                 claim=lambda slot=slot: claim(slot),
                 inherited_policy=INHERITED_POLICY,
             )
+            if plan_digest(sorted(scan.paths)) != slot["approved_paths_sha256"]:
+                raise ValueError("captured inventory differs from the reserved child")
             ref = authority.put_descriptor(descriptor)
             state = record_child(
                 state,
@@ -822,6 +854,10 @@ def save_composition(
                 workspace_signature=scan.signature,
                 display_name="Child Room",
             )
+            row = next(row for row in request["assignments"] if row["path"] == slot["path"])
+            _, current, _ = _child_inventory(workspace, slot["path"], load_capture_policy(workspace), row.get("capture_mode"))
+            if current != request["child_evidence"][slot["path"]]:
+                raise ValueError("child source changed before publication")
             envelope, etag = _commit(authority, envelope, etag, state)
         manifest = manifest_for(state, namespace, approved)
         parent = private / ("parent-view-" + uuid.uuid4().hex)
@@ -880,6 +916,15 @@ def save_composition(
                 display_name="Catalog Room",
             )
             envelope, etag = _commit(authority, envelope, etag, state)
+        catalog = Catalog.from_body(state.to_dict()["dimension_catalog"])
+        saved_children = []
+        for child in manifest["children"]:
+            record = catalog.resolve_snapshot(child["room_id"], child["snapshot_id"])
+            saved_children.append({
+                "path": child["path"], "snapshot_id": child["snapshot_id"],
+                "capture_mode": request["child_evidence"][child["path"]]["capture_mode"],
+                "components": sorted(name for name, ref in record["component_refs"].items() if ref),
+            })
         return {
             "ok": True,
             "status": "saved",
@@ -887,9 +932,21 @@ def save_composition(
             "parent_room_id": parent_room,
             "parent_snapshot_id": operation["plan"]["parent_logical_jat_id"],
             "child_count": len(manifest["children"]),
+            "children": saved_children,
             "source_modified": False,
             "retention": "append-only-composition-namespace",
         }
+
+
+def _verify_descriptor_contract(state, descriptor):
+    from .composition_safety import snapshot_capture_contract
+
+    value = descriptor.to_dict()
+    mode, policy_digest = snapshot_capture_contract(state, value["room_id"], value["logical_jat_id"])
+    if value.get("capture_mode") != mode or (
+        policy_digest is not None and value["capture_policy_sha256"] != policy_digest
+    ):
+        raise ValueError("descriptor mode or policy differs from authenticated capture")
 
 
 def _restore(
@@ -937,7 +994,10 @@ def _restore(
                     )
                 )
         scan = scan_workspace_for_status(stage)
-        if scan.capture_policy_sha256 != metadata["capture_policy_sha256"]:
+        if child_namespace:
+            validate_child_git(stage, scan.paths, metadata["capture_mode"])
+        if (load_capture_policy(stage).capture_mode != metadata["capture_mode"]
+                or scan.capture_policy_sha256 != metadata["capture_policy_sha256"]):
             raise ValueError("restored policy differs from descriptor")
         write_stat_workspace_marker(
             stage,
@@ -1013,6 +1073,7 @@ def hydrate_composition(
     parent_record = catalog.resolve_snapshot(room, snapshot)
     parent_descriptor = authority.descriptor(parent_record)
     corroborate_logical_snapshot(room, parent_record, parent_descriptor)
+    _verify_descriptor_contract(state, parent_descriptor)
     with store_factory(envelope["secret"]) as store:
         repository = store.open_existing()
         if repository.repository_id != envelope["repository_id"]:
@@ -1104,6 +1165,12 @@ def hydrate_composition(
                 raise ValueError(
                     "child destination must be absent or an exact clean materialization"
                 )
+            record = catalog.resolve_snapshot(child["room_id"], child["snapshot_id"])
+            if record["ciphertext_sha256"] != pin["descriptor_sha256"]:
+                raise ValueError("child descriptor differs from historical pin")
+            descriptor = authority.descriptor(record)
+            corroborate_logical_snapshot(child["room_id"], record, descriptor)
+            _verify_descriptor_contract(state, descriptor)
             if target.exists():
                 existing = context_status(target)
                 guard_fd = _directory(target)
@@ -1144,6 +1211,7 @@ def hydrate_composition(
                     or existing.get("encryption_domain_id")
                     != authority.binding["encryption_domain_id"]
                     or existing.get("workspace_signature") != scan.signature
+                    or scan.capture_policy_sha256 != descriptor.to_dict()["capture_policy_sha256"]
                     or existing.get("capture_policy_sha256")
                     != scan.capture_policy_sha256
                 ):
@@ -1159,11 +1227,6 @@ def hydrate_composition(
                     "marker_verified": True,
                     "unit": "whole-child",
                 }
-            record = catalog.resolve_snapshot(child["room_id"], child["snapshot_id"])
-            if record["ciphertext_sha256"] != pin["descriptor_sha256"]:
-                raise ValueError("child descriptor differs from historical pin")
-            descriptor = authority.descriptor(record)
-            corroborate_logical_snapshot(child["room_id"], record, descriptor)
             result = _restore(
                 store,
                 repository,

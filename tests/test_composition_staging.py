@@ -61,7 +61,7 @@ def test_local_policy_at_child_root_is_supported_and_bound(tmp_path):
     (source / "child/.josh-roomignore").write_text("generated/**\n")
     preview = capture_plan(source, dimension, "1" * 32, "parent", assignments)
     assert (
-        preview["request"]["child_evidence"]["child"]["capture_mode"] == "source-only"
+        preview["request"]["child_evidence"]["child"]["capture_mode"] == "full-repository"
     )
     changed = capture_plan(
         source,
@@ -248,3 +248,46 @@ def test_inherited_leading_hash_is_serialized_as_rule_and_reloaded(tmp_path, pre
     assert reloaded.is_excluded('#reports/future.txt')
     assert not reloaded.is_excluded('nested/#reports/future.txt')
     assert not (view / '#reports').exists()
+
+
+def test_child_captures_owned_git_and_parent_does_not_scan_its_contents(tmp_path):
+    import subprocess
+
+    source, dimension, assignments, _ = fixture(tmp_path)
+    child = source / "child"
+    (child / "link").symlink_to("sub/file.txt")
+    subprocess.run(["git", "init", "-q", child], check=True)
+    subprocess.run(["git", "-C", child, "add", "."], check=True)
+    subprocess.run(["git", "-C", child, "-c", "user.name=Synthetic",
+                    "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"], check=True)
+    subprocess.run(["git", "-C", child, "branch", "venv"], check=True)
+    preview = capture_plan(source, dimension, "1" * 32, "parent", assignments)
+    assert preview["request"]["child_evidence"]["child"]["capture_mode"] == "full-repository"
+    view = _child_view(source, "child", tmp_path / "view", preview["request"])
+    assert (view / "link").is_symlink()
+    assert (view / ".git/refs/heads/venv").read_bytes() == (child / ".git/refs/heads/venv").read_bytes()
+    subprocess.run(["git", "-C", view, "fsck", "--full"], check=True)
+    (child / ".git/index.lock").touch()
+    with pytest.raises(ValueError, match="lock"):
+        capture_plan(source, dimension, "1" * 32, "parent", assignments)
+    (child / ".git/index.lock").unlink()
+    assignments[1]["capture_mode"] = "source-only"
+    source_plan = capture_plan(source, dimension, "1" * 32, "parent", assignments)
+    source_view = _child_view(source, "child", tmp_path / "source-view", source_plan["request"])
+    assert not (source_view / ".git").exists()
+    subprocess.run(["git", "init", "-q", source], check=True)
+    with pytest.raises(ValueError, match="one Room"):
+        capture_plan(source, dimension, "1" * 32, "parent", assignments)
+
+
+
+def test_local_only_repository_cannot_lend_one_parent_file(tmp_path):
+    import subprocess
+
+    source, dimension, assignments, _ = fixture(tmp_path)
+    repository = source / "other"
+    subprocess.run(["git", "init", "-q", repository], check=True)
+    (repository / "readme").write_text("parent selection")
+    assignments.append({"path": "other/readme", "outcome": "parent"})
+    with pytest.raises(ValueError, match="one Room"):
+        capture_plan(source, dimension, "1" * 32, "parent", assignments)

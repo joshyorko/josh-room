@@ -26,6 +26,8 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z")
 _PHASES = ("reserved", "children-recorded", "parent-prepared", "committed")
+_CONTRACTS = ("composition-safety-v1", "composition-safety-v2", "composition-safety-v3")
+_MODES = ("source-only", "full-repository")
 
 
 def _object(value, fields):
@@ -52,6 +54,36 @@ def plan_digest(plan: dict) -> str:
     return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
 
 
+def _versioned_plan(body, plan):
+    if not isinstance(plan, dict):
+        raise ValueError("invalid composition plan")
+    if "plan_version" not in plan:
+        return False
+    if body["contract"] != "composition-safety-v3" or type(plan["plan_version"]) is not int or plan["plan_version"] != 3:
+        raise ValueError("unsupported composition plan version")
+    return True
+
+
+def _snapshot_contract(body, room, snapshot):
+    for update in body.get("child_updates", {}).values():
+        plan = update["plan"]
+        if update["phase"] == "committed" and (plan["room_id"], plan["logical_jat_id"]) == (room, snapshot):
+            return plan["capture_mode"], plan["capture_policy_sha256"]
+    for op in body["operations"].values():
+        plan = op["plan"]
+        if op["phase"] == "committed" and (plan["parent_room_id"], plan["parent_logical_jat_id"]) == (room, snapshot):
+            return "source-only", op["parent_policy_sha256"]
+        if plan["expected_parent_logical_jat_id"] is None or body["contract"] in _CONTRACTS[:2]:
+            for slot in plan["children"]:
+                if slot["path"] in op["child_pins"] and (slot["room_id"], slot["logical_jat_id"]) == (room, snapshot):
+                    return slot.get("capture_mode", "source-only"), slot.get("capture_policy_sha256")
+    raise ValueError("snapshot lacks a reserved capture contract")
+
+
+def snapshot_capture_contract(state, room, snapshot):
+    return _snapshot_contract(state.to_dict(), room, snapshot)
+
+
 def _pin(pin, catalog, room_id, logical_id):
     _object(pin, "room_id logical_jat_id descriptor_sha256")
     _identifier(logical_id)
@@ -76,9 +108,9 @@ class CompositionSafetyState:
 
     @classmethod
     def from_dict(cls, body):
-        version2 = isinstance(body, dict) and body.get('contract') == 'composition-safety-v2'
+        version2 = isinstance(body, dict) and body.get('contract') in _CONTRACTS[1:]
         _object(body, "format_version contract scope revision dimension_catalog operations" + (' child_updates' if version2 else ''))
-        if type(body["format_version"]) is not int or body["format_version"] != 4 or body["contract"] not in ("composition-safety-v1", "composition-safety-v2"):
+        if type(body["format_version"]) is not int or body["format_version"] != 4 or body["contract"] not in _CONTRACTS:
             raise ValueError("unsupported composition safety version")
         scope = body["scope"]
         _object(scope, "provider connection_id dimension_id encryption_domain_id repository_id catalog_key")
@@ -117,7 +149,8 @@ class CompositionSafetyState:
             _identifier(operation_id)
             _object(operation, "plan plan_sha256 phase child_pins parent_pin manifest_sha256 parent_policy_sha256")
             plan = operation["plan"]
-            _object(plan, "source_path_sha256 capture_policy_sha256 parent_room_id parent_logical_jat_id expected_parent_logical_jat_id capture_mode children")
+            versioned = _versioned_plan(body, plan)
+            _object(plan, "source_path_sha256 capture_policy_sha256 parent_room_id parent_logical_jat_id expected_parent_logical_jat_id capture_mode children" + (" plan_version" if versioned else ""))
             for field in ("source_path_sha256", "capture_policy_sha256"):
                 _digest(plan[field])
             for field in ("parent_room_id", "parent_logical_jat_id"):
@@ -139,7 +172,12 @@ class CompositionSafetyState:
             if not isinstance(children, list) or not 1 <= len(children) <= 32:
                 raise ValueError("invalid composition child slots")
             for row in children:
-                _object(row, "path room_id logical_jat_id")
+                _object(row, "path room_id logical_jat_id" + (" capture_mode capture_policy_sha256 approved_paths_sha256 source_records_sha256" if versioned else ""))
+                if versioned:
+                    if row["capture_mode"] not in _MODES:
+                        raise ValueError("unsupported child capture mode")
+                    for field in ("capture_policy_sha256", "approved_paths_sha256", "source_records_sha256"):
+                        _digest(row[field])
                 _identifier(row["room_id"])
                 _identifier(row["logical_jat_id"])
             validate_paths(row["path"] for row in children)
@@ -196,6 +234,11 @@ class CompositionSafetyState:
                 _object(update, 'plan plan_sha256 phase pin')
                 plan = update['plan']
                 fields = 'room_id logical_jat_id expected_logical_jat_id source_path_sha256 source_records_sha256 source_identity source_signature capture_policy_sha256 content_sha256 capture_mode'
+                versioned = _versioned_plan(body, plan)
+                if versioned:
+                    fields += ' plan_version'
+                    if plan.get('content_digest_algorithm') != 'sha256-framed-v2':
+                        raise ValueError('unsupported child content digest algorithm')
                 if isinstance(plan, dict) and 'content_digest_algorithm' in plan:
                     fields += ' content_digest_algorithm'
                     if plan['content_digest_algorithm'] != 'sha256-framed-v2':
@@ -208,7 +251,7 @@ class CompositionSafetyState:
                 identity = plan['source_identity']
                 if not isinstance(identity, list) or len(identity) != 2 or any(type(n) is not int or n < 0 for n in identity):
                     raise ValueError('invalid child source identity')
-                if plan['capture_mode'] != 'source-only' or update['plan_sha256'] != plan_digest(plan):
+                if plan['capture_mode'] not in (_MODES if versioned else ('source-only',)) or update['plan_sha256'] != plan_digest(plan):
                     raise ValueError('invalid child update approval')
                 room, output, baseline = (plan[k] for k in ('room_id', 'logical_jat_id', 'expected_logical_jat_id'))
                 if room not in child_rooms or output == baseline or (room, output) in outputs:
@@ -225,6 +268,14 @@ class CompositionSafetyState:
                     _pin(update['pin'], catalog, room, output)
                 else:
                     raise ValueError('invalid child update phase')
+            for update in updates.values():
+                plan = update['plan']
+                if 'plan_version' in plan:
+                    room, baseline = plan['room_id'], plan['expected_logical_jat_id']
+                    mode, _ = _snapshot_contract(body, room, baseline)
+                    baseline_record = catalog.resolve_snapshot(room, baseline)
+                    if mode != plan['capture_mode'] or baseline_record['capture_policy_sha256'] != plan['capture_policy_sha256']:
+                        raise ValueError('child update differs from baseline capture contract')
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         if len(canonical) > MAX_BYTES:
             raise ValueError("composition state exceeds size limit")
@@ -251,6 +302,14 @@ def reconcile(state, descriptors, repository, inventory, *, expected_scope):
             if object_evidence.setdefault(record["object_key"], evidence) != evidence:
                 raise ValueError("composition ciphertext evidence is inconsistent")
     report = compare_restic_inventory(index, repository, inventory)
+    pins = [pin for op in body["operations"].values() for pin in op["child_pins"].values()]
+    pins.extend(update["pin"] for update in body.get("child_updates", {}).values() if update["phase"] == "committed")
+    for pin in pins:
+        key = pin["room_id"], pin["logical_jat_id"]
+        child = descriptors[key].to_dict()
+        mode, digest = _snapshot_contract(body, *key)
+        if child.get("capture_mode", "full-repository") != mode or (digest and child["capture_policy_sha256"] != digest):
+            raise ValueError("child capture contract differs from reservation")
     for operation in body["operations"].values():
         if operation["phase"] == "committed":
             plan = operation["plan"]

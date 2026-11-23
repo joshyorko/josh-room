@@ -58,6 +58,41 @@ def portable_path(value: str) -> tuple[str, ...]:
     return tuple(unicodedata.normalize("NFC", p.casefold()) for p in parts)
 
 
+def validate_payload_path(value: str) -> None:
+    """Apply ordinary restore name checks, reserving composition control files."""
+    from .room_store_operations import _relative_parts
+
+    parts = _relative_parts(value)
+    for part in parts:
+        if part == ".git":
+            # Git refs and objects are ordinary payload, never selection identities.
+            return
+        if part.casefold() == ".git" or part.casefold().startswith(".josh-room"):
+            raise ValueError("reserved composition payload path")
+
+
+def validate_child_git(root: Path, paths, mode: str) -> None:
+    """Qualify standalone repositories after the ordinary storage validator."""
+    if mode != "full-repository":
+        return
+    for path in paths:
+        parts = path.split("/")
+        if ".git" not in parts and parts[-1] == "HEAD":
+            candidate = (root / path).parent
+            if (candidate / "objects").is_dir() and (candidate / "config").is_file():
+                raise ValueError("bare Catalog children are unsupported; save the repository as one ordinary Room")
+        if parts[-1] == ".git" and os.path.lexists((root / path).parent / ".gitmodules"):
+            raise ValueError("Catalog child submodules are unsupported; save the repository as one ordinary Room")
+        if parts[-1] == ".gitmodules" or (parts[-1] == ".git" and not (root / path).is_dir()):
+            raise ValueError("Catalog child submodules and gitfiles are unsupported; save the repository as one ordinary Room")
+        if ".git" in parts:
+            index = parts.index(".git")
+            if parts[index + 1:index + 2] in (["modules"], ["worktrees"]):
+                raise ValueError("Catalog child submodules and linked worktrees are unsupported")
+            if parts[-1].endswith(".lock"):
+                raise ValueError("Git lock present; finish the Git operation before saving")
+
+
 def validate_paths(paths) -> None:
     keys = []
     spellings = {}

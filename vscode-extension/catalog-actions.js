@@ -10,6 +10,12 @@ function relativeSource(root, value) {
   return relative.split(path.sep).join("/");
 }
 
+function describeMode(mode) {
+  if (mode === "full-repository") return "full-repository (preserves supported Git storage)";
+  if (mode === "source-only") return "source-only (excludes Git history)";
+  throw new Error("The controller did not provide a supported child capture mode.");
+}
+
 async function saveCatalog(vscode, { dimensions, plan, save }) {
   const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!source?.length) return "cancelled";
@@ -17,6 +23,14 @@ async function saveCatalog(vscode, { dimensions, plan, save }) {
   const children = await vscode.window.showOpenDialog({ title: "Capture as independent child Rooms", defaultUri: source[0], canSelectFolders: true, canSelectFiles: false, canSelectMany: true });
   if (!children?.length) return "cancelled";
   const assignments = [{ path: ".", outcome: "local-only" }, ...children.map((item) => ({ path: relativeSource(root, item.fsPath), outcome: "child" }))];
+  for (const child of assignments.filter(row => row.outcome === "child")) {
+    const mode = await vscode.window.showQuickPick([
+      { id: "policy", label: "Use workspace policy", description: "Defaults to full repository" },
+      { id: "source-only", label: "Source only", description: "Exclude this child's Git history" },
+    ], { title: `Capture mode for ${child.path}` });
+    if (!mode) return "cancelled";
+    if (mode.id === "source-only") child.capture_mode = mode.id;
+  }
   const parentMode = await vscode.window.showQuickPick([{ label: "Metadata only parent", id: "metadata" }, { label: "Include selected parent-owned content", id: "content" }], { title: "Parent content — everything else stays local only" });
   if (!parentMode) return "cancelled";
   if (parentMode.id === "content") {
@@ -37,13 +51,16 @@ async function saveCatalog(vscode, { dimensions, plan, save }) {
   const parentRoom = `catalog-${namespace}`;
   const selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
   const preview = await plan(selection);
+  const childSummary = assignments.filter(row => row.outcome === "child").map(row =>
+    `${row.path} — ${describeMode(preview.request?.child_evidence?.[row.path]?.capture_mode)}`);
+  const parentSummary = assignments.filter(row => row.outcome === "parent").map(row => `Parent content: ${row.path}`);
   const approved = await vscode.window.showWarningMessage("Save this Catalog Room and its children?", {
     modal: true,
-    detail: `${children.length} independent child Rooms. ${assignments.filter((row) => row.outcome === "parent").length} parent-owned selections. All other content stays local and unprotected. All captures are source-only: Git history is excluded. Existing source files remain in place.\n\n${assignments.filter((row) => row.path !== ".").map((row) => `${row.outcome}: ${row.path}`).join("\n")}\n\nNamespace: ${namespace}`,
+    detail: `${children.length} independent child Rooms. ${assignments.filter((row) => row.outcome === "parent").length} parent-owned selections. All other content stays local and unprotected. Existing source files remain in place.\n\n${[...childSummary, ...parentSummary].join("\n")}\n\nNamespace: ${namespace}`,
   }, "Save and acknowledge local-only content");
   if (approved !== "Save and acknowledge local-only content") return "cancelled";
   const result = await save(selection, preview.approval_sha256);
-  await vscode.window.showInformationMessage(`Catalog saved. Namespace ${result.namespace}; parent recovery point ${result.parent_snapshot_id}. Source files remain in place.`);
+  await vscode.window.showInformationMessage(`Catalog saved. Namespace ${result.namespace}; parent recovery point ${result.parent_snapshot_id}. Source files remain in place.\n${childSummary.join("\n")}`);
   return result;
 }
 
@@ -84,7 +101,7 @@ async function updateRoom(vscode, { marker, kind, pending, remember, plan, save 
   if (ticket.approval && ticket.approval !== preview.approval_sha256) throw new Error("Pending approval changed. Preserve the operation receipt; do not start a blind retry.");
   const action = kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
   const approved = await vscode.window.showWarningMessage(`${action}?`, { modal: true,
-    detail: `${kind === "child" ? "Source-only child capture from disk. Editor buffers are not captured. Parent pins remain unchanged." : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
+    detail: `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
   if (approved !== action) return "cancelled";
   ticket = { ...ticket, approval: preview.approval_sha256, output: preview.snapshot_id };
   await remember(ticket);

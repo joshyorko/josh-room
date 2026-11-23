@@ -2198,7 +2198,8 @@ async function saveCatalogRoom() {
   assertWorkspaceTrusted("save a Catalog Room");
   const argsFor = (selection, command) => ["composition", command, "--workspace", selection.root,
     "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
-    "--parent-room", selection.parentRoom, "--expected-domain", selection.dimension.encryption_domain_id, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`])];
+    "--parent-room", selection.parentRoom, "--expected-domain", selection.dimension.encryption_domain_id, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
+      ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : [])])];
   return require("./catalog-actions").saveCatalog(vscode, {
     dimensions: async (root) => dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true })),
     plan: (selection) => runJoshRoom(argsFor(selection, "capture-plan"), selection.root),

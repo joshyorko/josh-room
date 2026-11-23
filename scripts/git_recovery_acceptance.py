@@ -40,8 +40,8 @@ def git(root: Path, *args: str) -> str:
     return result.stdout
 
 
-def repository(root: Path) -> None:
-    root.mkdir(parents=True)
+def repository(root: Path, *, existing: bool = False) -> None:
+    root.mkdir(parents=True, exist_ok=existing)
     git(root, "init", "-b", "main")
     if os.name == "nt":
         # RCC's private Windows temp root is long; configure only this owned
@@ -67,6 +67,16 @@ def repository(root: Path) -> None:
     hook = root / ".git" / "hooks" / "pre-commit"
     hook.write_text("#!/bin/sh\nexit 0\n")
     hook.chmod(0o755)
+
+
+def catalog_repository(root: Path) -> None:
+    """Build a detached, dirty child with packed and loose local-only refs."""
+    repository(root, existing=True)
+    git(root, "checkout", "--detach", "HEAD")
+    git(root, "branch", "node_modules")
+    # Status comparison includes every user file, excluding only Room metadata.
+    with (root / ".git/info/exclude").open("a") as stream:
+        stream.write("\n/.josh-room.json\n/.josh-room-split.json\n/.josh-roomignore\n")
 
 
 def identity(root: Path) -> dict:

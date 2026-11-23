@@ -494,6 +494,8 @@ def build_parser() -> argparse.ArgumentParser:
         if action in ('capture-plan', 'save'):
             operation.add_argument('--expected-domain', help='encryption domain from the existing enrollment receipt; required if not cached in config')
             operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--child-source-only', action='append', default=[], metavar='CHILD',
+                                   help='exclude Git history for this selected child; otherwise use its capture policy')
             operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice, no implicit default')
         if action == 'save':
             operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
@@ -1847,6 +1849,13 @@ def dispatch(args, instance: Path) -> dict:
                     if not separator:
                         raise ValueError('capture assignment requires path=outcome')
                     assignments.append({'path': path, 'outcome': outcome})
+                overrides = set(args.child_source_only)
+                children = {row['path'] for row in assignments if row['outcome'] == 'child'}
+                if len(overrides) != len(args.child_source_only) or not overrides <= children:
+                    raise ValueError('--child-source-only requires distinct selected child paths')
+                for row in assignments:
+                    if row['path'] in overrides:
+                        row['capture_mode'] = 'source-only'
                 preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
                 if args.composition_command == 'capture-plan':
                     return preview

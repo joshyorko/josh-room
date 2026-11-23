@@ -28,6 +28,7 @@ def test_source_only_multi_repo_capture_excludes_child_git_history(runtime):
            'GIT_AUTHOR_EMAIL': 'synthetic@example.invalid', 'GIT_COMMITTER_EMAIL': 'synthetic@example.invalid'}
     for name in ('a', 'b'):
         repo = r.source / name
+        (repo / '.josh-roomignore').write_text('# josh-room capture-mode: source-only\n')
         subprocess.run(['git', '-C', str(repo), 'init', '-q'], env=env, check=True)
         (repo / 'past.txt').write_text('synthetic history-only bytes')
         subprocess.run(['git', '-C', str(repo), 'add', '.'], env=env, check=True)

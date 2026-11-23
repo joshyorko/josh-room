@@ -28,9 +28,12 @@ Recovery points show Latest and Open separately; the tooltip contains the full
 ID. Settings, recovery and maintenance are available from the relevant
 Dimension's context menu. Show Details opens the sanitized Save receipt.
 
-`Josh: Split Workspace into Rooms (Preview Only)` offers an explicit folder
-checkbox preview. It does not save, exclude or unload children. Publication is
-blocked pending pin retention and crash-consistent orchestration; see the
+`Josh: Save Catalog Room` saves selected independent children to exact recovery
+points. Review each child's Git capture mode before approving. Use **Enter Child
+Room** to restore one child, **Save Child Room** to save subsequent changes, and
+**Refresh Catalog Child Pins** to publish a parent that references an updated
+child. **Split Workspace into Rooms (Preview Only)** is a separate discovery
+command. See the
 [composition contract](https://github.com/joshyorko/josh-room/blob/main/docs/room-composition.md).
 
 ## Explore an entered Room in 3D
