@@ -3082,6 +3082,13 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
 
 
 def _local_save_preflight(args, instance: Path) -> dict | None:
+    if args.command == "snapshot" and args.snapshot_command == "agent-save-status":
+        from .native_agent_save import admission_preflight
+
+        dimension = _effective_dimension(args)
+        if dimension is not None:
+            room, _display_name = _room_identity(args.project)
+            return admission_preflight(dimension, room, args.source or Path.cwd())
     if getattr(args, "agent_selection", None) is not None:
         return None
     if args.command != "snapshot" or args.snapshot_command != "create":
