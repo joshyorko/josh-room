@@ -85,7 +85,7 @@ class _PreviewStore:
         return SimpleNamespace(tree_id="0" * 64)
 
 
-def _resolve(workspace, dimension, room, policy_sha256, options, previous, *, source, store, expected=None):
+def _resolve(workspace, dimension, room, policy_sha256, options, previous, *, source, store, expected=None, admitted_paths=None):
     from .cli import _jat_root
 
     parsed = _options(options, previous)
@@ -121,17 +121,21 @@ def _resolve(workspace, dimension, room, policy_sha256, options, previous, *, so
         if modes["rcc_environment"] == "refresh":
             if not (source / "robot.yaml").is_file():
                 raise ValueError("selected RCC robot is unavailable")
-            for name, data in _source_files(source).items():
+            closure = _source_files(source)
+            if admitted_paths is not None and not closure.keys() <= admitted_paths:
+                raise ValueError("selected RCC environment needs excluded workspace inputs")
+            for name, data in closure.items():
                 target = robot_source / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
+        from .composition_oci import canonicalize_oci_archive
         prepare, resolve = bridge._component_hooks(
             robot_source, private, modes, component_value=dict.fromkeys(COMPONENTS),
             required_components=[name for name, mode in modes.items() if mode == "refresh"],
             check_component_plan=check, installed_capture=installed_capture,
             homebrew_archive=inputs["homebrew_archive"], homebrew_directory=inputs["homebrew_directory"],
             hauler_selection=inputs["hauler_selection"], jat_root=_jat_root(),
-            rcc_runtime=os.environ.get("JOSH_ROOM_RCC_EXE"), cancellation=None,
+            rcc_runtime=os.environ.get("JOSH_ROOM_RCC_EXE"), cancellation=None, normalize_hauler=canonicalize_oci_archive,
         )
         prepare(previous)
         components = resolve(store, previous)
@@ -141,10 +145,10 @@ def _resolve(workspace, dimension, room, policy_sha256, options, previous, *, so
         return plan, components
 
 
-def component_plan(workspace, dimension, room, policy_sha256, options, previous=None, *, source=None):
+def component_plan(workspace, dimension, room, policy_sha256, options, previous=None, *, source=None, admitted_paths=None):
     workspace = Path(workspace)
     plan, _ = _resolve(workspace, dimension, room, policy_sha256, options, previous,
-                       source=source or workspace, store=_PreviewStore(previous))
+                       source=source or workspace, store=_PreviewStore(previous), admitted_paths=admitted_paths)
     return plan
 
 
@@ -157,14 +161,13 @@ class _CaptureStore:
         self.logical_id = logical_id
         self.claim = claim
         self.private = private
-        self.recovered_hauler = None
 
     def backup(self, stage, *, parent, cancellation):
         from .composition_lifecycle import _content_digest
         from .room_store_export import _COMPONENT_FILES
         from .room_store_operations import _validate_snapshot_entries
 
-        candidate = _verify_hauler_stage(stage)
+        _verify_hauler_stage(stage)
         names = {p.name for p in stage.iterdir()}
         name = next((name for name, files in _COMPONENT_FILES.items() if names == set(files)), None)
         if name is None or not callable(self.claim):
@@ -184,14 +187,7 @@ class _CaptureStore:
         with tempfile.TemporaryDirectory(dir=self.private) as temp:
             restored = Path(temp) / "component"
             self.store.restore(snapshot.snapshot_id, restored)
-            if candidate is not None:
-                actual = _verify_hauler_stage(restored)
-                transport = {"archive_sha256", "archive_size"}
-                if not actual or ({k: v for k, v in actual.items() if k not in transport}
-                                  != {k: v for k, v in candidate.items() if k not in transport}):
-                    raise ValueError("interrupted Hauler content differs from approval")
-                self.recovered_hauler = {k: actual[k] for k in transport}
-            elif _content_digest(restored) != _content_digest(stage):
+            if _content_digest(restored) != _content_digest(stage):
                 raise ValueError("interrupted namespace component bytes differ from approval")
         return snapshot
 
@@ -207,6 +203,4 @@ def capture_components(workspace, source, dimension, slot, policy_sha256, option
     _, components = _resolve(Path(workspace), dimension, slot["room_id"], policy_sha256, options,
                              previous, source=source, store=capture_store,
                              expected=expected)
-    if capture_store.recovered_hauler:
-        components["hauler_content"].update(capture_store.recovered_hauler)
     return components

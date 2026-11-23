@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -218,3 +219,20 @@ def test_native_rcc_and_hauler_on_independent_children(runtime, monkeypatch):
                     assert files.rcc_archive.is_file() and files.rcc_metadata.is_file()
                 else:
                     assert files.hauler_archive.is_file()
+                    consumer = r.private / "hauler-consumer"
+                    consumer.mkdir(mode=0o700)
+                    for command, flags in (("load", ["--filename", str(files.hauler_archive)]), ("info", [])):
+                        receipt_path = consumer / (command + ".json")
+                        result = subprocess.run([
+                            os.environ["JOSH_ROOM_JAT_RCC_EXE"], "--no-build", "env", "exec",
+                            "--artifact", os.environ["JOSH_ROOM_JAT_ARTIFACT"], "--permissive-local",
+                            "--inherit-streams", "--receipt-file", str(receipt_path), "--json", "--",
+                            "hauler", "store", command, "--store", str(consumer / "store"),
+                            "--tempdir", str(consumer), *flags,
+                        ], cwd=os.environ["JOSH_ROOM_JAT_ROOT"], check=True, timeout=120,
+                            capture_output=True, text=True)
+                        receipt = json.loads(receipt_path.read_text())
+                        assert receipt["artifactDigest"] == os.environ["JOSH_ROOM_JAT_ARTIFACT"]
+                        assert receipt["exitCode"] == 0
+                        if command == "info":
+                            assert "hauler/synthetic-file:latest" in result.stdout

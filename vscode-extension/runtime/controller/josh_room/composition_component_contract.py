@@ -80,8 +80,5 @@ def artifacts_digest(components):
         if component is None:
             identities[name] = None
             continue
-        # Hauler emits new store UUIDs, audit records and tar timestamps.
-        # Its verified content-addressed OCI graph identifies the approved payload.
-        transport = {"snapshot", "archive_sha256", "archive_size"} if name == "hauler_content" else {"snapshot"}
-        identities[name] = {key: value for key, value in component.items() if key not in transport}
+        identities[name] = {key: value for key, value in component.items() if key != "snapshot"}
     return hashlib.sha256(json.dumps(identities, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

@@ -212,14 +212,14 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
     child_evidence = {}
     for row in rows:
         if row["outcome"] == "child":
-            _, evidence, _ = _child_inventory(workspace, row["path"], policy, row.get("capture_mode"))
+            child_scan, evidence, _ = _child_inventory(workspace, row["path"], policy, row.get("capture_mode"))
             child = row["path"]
             if child in component_options:
                 from .composition_components import component_plan
 
                 evidence["component_plan"] = component_plan(
                     workspace / child, dimension, "child-" + _slot(namespace, child),
-                    evidence["effective_policy_sha256"], component_options[child],
+                    evidence["effective_policy_sha256"], component_options[child], admitted_paths=child_scan.paths,
                 )
             child_evidence[child] = evidence
     request = {

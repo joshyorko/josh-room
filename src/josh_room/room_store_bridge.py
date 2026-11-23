@@ -1404,7 +1404,7 @@ def _component_inputs(workspace, modes, *, homebrew_archive, homebrew_directory,
 
 def _component_hooks(workspace, runtime_dir, modes, *, component_value, required_components,
                      check_component_plan, installed_capture, homebrew_archive, homebrew_directory,
-                     hauler_selection, rcc_runtime, jat_root, cancellation):
+                     hauler_selection, rcc_runtime, jat_root, cancellation, normalize_hauler=None):
     """Prepare local artifacts and resolve them against the caller's open repository."""
     prepared_rcc: RccComponentPreparation | None = None
 
@@ -1502,6 +1502,7 @@ def _component_hooks(workspace, runtime_dir, modes, *, component_value, required
                     restic=opened_store, hauler=selected_adapter, hauler_version=selected_adapter.hauler_version,
                     local_images=local_images, manifests=hauler_selection["manifests"],
                     files=hauler_selection["files"], cancellation=cancellation,
+                    **({"normalize_archive": normalize_hauler} if normalize_hauler else {}),
                 )
                 if local_images != (selected_adapter.local_images(
                     hauler_selection["images"], all_images=hauler_selection["all_images"],

@@ -104,16 +104,11 @@ The initial default is workspace only. For a selected child, Catalog Save can
 request the ordinary RCC environment, Homebrew recovery or Hauler content
 producer. The parent and sibling children have independent selections. Review
 the effective Git mode, component actions and artifact digest before approving.
-Selection inputs are local to the invoking machine. RCC and Homebrew approval
-digests cover the prepared archive. Hauler approval covers the selected OCI
-manifest digests and the referenced content. Hauler generates new export
-bookkeeping on each run, so the committed descriptor separately pins the exact
-saved archive bytes. RCC and Homebrew approval
-binds the exact archive digest. Hauler writes a new store ID and timestamped
-audit data on every export. Its approval binds the OCI manifest digests and
-verified transitive blob inventory. The committed descriptor additionally binds
-the SHA-256 and size of the exported archive. Entry verifies both the saved
-archive and its OCI contents before promotion.
+Selection inputs are local to the invoking machine. Approval binds exact archive
+digests for all three components. For Hauler, Catalog Save packages the OCI
+layout, approved manifest names and content-addressed blobs. Hauler's local
+audit log, staging paths and store identifiers stay outside the archive. Entry
+checks the archive digest and verifies the manifest graph before promotion.
 
 For example, append the following arguments to both `capture-plan` and `save`
 to select a synthetic Homebrew recovery recipe for one child:
