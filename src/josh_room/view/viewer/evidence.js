@@ -672,13 +672,13 @@
       const metricName = descriptor.metric ? descriptor.metric.name : 'metric';
       const entry = global.RoomViewLayout.getLegendEntry(descriptor, target.kind);
       const rows = [
-        ['ID', target.objectId || target.id],
         ['Path', target.path || '—'],
         ['Type', target.nodeKind || 'file'],
         [global.RoomViewLayout.isWorkspace(descriptor) ? 'Kind' : 'Outcome', target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`],
         [metricName, target.metric != null ? `${target.metric}${unit}${quantileBin ? ` (Bin ${quantileBin}/5)` : ''}` : '—'],
         ['Updated', target.updated_at || '—'],
       ];
+      if (!global.RoomViewLayout.isWorkspace(descriptor)) rows.unshift(['ID', target.objectId || target.id]);
       if (target.group) rows.push([descriptor.group_label || 'Group', target.group]);
       if (target.stage) rows.push(['Stage', target.stage]);
       for (const [k, v] of Object.entries(target.fields || {})) {

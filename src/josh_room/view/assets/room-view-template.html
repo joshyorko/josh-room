@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;6f606bf2fdccce66cdcd77ef5e6c6dccc4bfc150d8d12ae7e88b1ffb1c7626cc&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;b1dff7453ac0152f8c7232c006118d487be20403769407615332195b2ec660a8&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -1142,6 +1142,8 @@ kbd {
   .print-sheet th, .print-sheet td { border: 1px solid #999; padding: 4px 6px; text-align: left; }
 }
 
+body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-bottom { display: none; }
+
   </style>
 </head>
 <body>
@@ -1202,6 +1204,7 @@ kbd {
     <div id="stale-banner" class="banner banner-stale" role="status" hidden></div>
     <div class="filesystem-status">
       <span id="fs-coverage" role="status" hidden></span>
+      <button id="fs-details" class="hud-btn" type="button" hidden>Directory details</button>
       <button id="fs-continue" class="hud-btn" type="button" hidden>Load more</button>
     </div>
     <div id="search-results-bar" class="search-results-bar" hidden></div>
@@ -19903,13 +19906,13 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const metricName = descriptor.metric ? descriptor.metric.name : 'metric';
       const entry = global.RoomViewLayout.getLegendEntry(descriptor, target.kind);
       const rows = [
-        ['ID', target.objectId || target.id],
         ['Path', target.path || '—'],
         ['Type', target.nodeKind || 'file'],
         [global.RoomViewLayout.isWorkspace(descriptor) ? 'Kind' : 'Outcome', target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`],
         [metricName, target.metric != null ? `${target.metric}${unit}${quantileBin ? ` (Bin ${quantileBin}/5)` : ''}` : '—'],
         ['Updated', target.updated_at || '—'],
       ];
+      if (!global.RoomViewLayout.isWorkspace(descriptor)) rows.unshift(['ID', target.objectId || target.id]);
       if (target.group) rows.push([descriptor.group_label || 'Group', target.group]);
       if (target.stage) rows.push(['Stage', target.stage]);
       for (const [k, v] of Object.entries(target.fields || {})) {
@@ -20754,6 +20757,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       document.getElementById('btn-up').disabled = this.currentNodeId === 'root';
       const badge = document.getElementById('fs-coverage');
       const more = document.getElementById('fs-continue');
+      document.getElementById('fs-details').hidden = !this.fsPage || this.currentNodeId !== this._treeId(this.fsPage.directory);
       badge.hidden = !this.fsCoverage;
       if (this.fsCoverage) badge.textContent = this.fsCoverage;
       more.hidden = !this.data.filesystem || !(this.fsRetry || this.fsResume || this.fsPage?.cursor);
@@ -20834,7 +20838,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.scene3d?.focusNode(selectedId, { instant, moveCamera });
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
-        if (target && ((!refresh && (!cursor || wasReading) && (file || id !== 'root')) || (refresh && wasReading))) {
+        if (target && ((!refresh && file && (!cursor || wasReading)) || (refresh && wasReading))) {
           const restoring = reading && target.objectId === reading.id;
           const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
           if (request.signal.aborted) return;
@@ -21491,6 +21495,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.handleNodeSelect(this.forward.pop(), { pushHistory: false });
       });
       document.getElementById('btn-up').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('fs-details').addEventListener('click', () => {
+        const target = this.layout.allTreeNodesById.get(this.currentNodeId);
+        if (target) this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout);
+      });
       document.getElementById('fs-continue').addEventListener('click', () => {
         if (this.fsResume) this.fsResume();
         else if (this.fsRetry) this._openFilesystem('root', { pushHistory: false });
