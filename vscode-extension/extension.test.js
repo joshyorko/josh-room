@@ -1834,6 +1834,8 @@ test("native Save probes ordinary sessions independently without adding a captur
   assert.equal(await fixture.extension.__test__.saveRoom(), 'saved');
   const probe = fixture.spawnHarness.calls.find(call => call.args[0] === 'agents' && call.args[1] === 'inventory');
   assert.deepEqual(probe.args, ['agents', 'inventory', '--workspace', root, '--json']);
+  const statusCall = fixture.spawnHarness.calls.find(call => call.args[0] === 'snapshot' && call.args[1] === 'agent-save-status');
+  assert.ok(statusCall?.options?.env?.JOSH_ROOM_ENCRYPTION_MATERIAL);
   const saves = fixture.spawnHarness.calls.filter(call => call.args[0] === 'snapshot' && ['preview', 'create'].includes(call.args[1]));
   assert.equal(saves.length, 2);
   assert.ok(saves.every(call => !call.args.includes('--agent-selection')));

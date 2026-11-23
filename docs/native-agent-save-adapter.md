@@ -52,29 +52,45 @@ session IDs, auth stores, or raw errors are returned to VS Code. No provider
 process, model request, recovery grant, database backup or capture is created.
 The existing offline `agents room-status` contract remains profile-only.
 All T3 metadata queries share one read transaction, including mixed legacy/v2
-identity filtering. Workspace and session aliases resolve to the same canonical
+identity filtering. `projection_projects` must be a real SQLite table (never a
+view), and empty-string `worktreePath`/`worktree_path` values fall back to
+`workspace_root`. Workspace and session aliases resolve to the same canonical
 folder. A missing/invalid session cwd makes the scan incomplete rather than
 claiming that no sessions exist.
 
-Closed databases without a WAL use an immutable main-file observation, fenced
-by file identity/size/timestamps and journal/WAL absence. Live WAL reads use
-SQLite's normal read-only connection and read locks. SQLite may update/create
-WAL/SHM bookkeeping, including during server shutdown; this is not a guarantee
-of byte-for-byte filesystem immutability. Application tables are never written,
-and no database or provider home is copied. A changing main file or rollback
-journal refuses the observation rather than showing unverified counts.
+Closed databases without a WAL or SHM use an immutable main-file observation,
+fenced by file identity/size/timestamps and journal/WAL/SHM absence. All
+SQLite sidecars (`-wal`, `-shm`, `-journal`) are checked as owner-owned regular
+single-link files before opening and at the post-read fence; links, FIFOs,
+special files, or hardlinked sidecars fail closed immediately. The post-read
+fence runs even when an entry/time bound stops iteration, and a disappearing
+database resets counts to zero rather than returning unverified numbers. Live
+WAL reads use SQLite's normal read-only connection and read locks. SQLite may
+update/create WAL/SHM bookkeeping, including during server shutdown; this is
+not a guarantee of byte-for-byte filesystem immutability. Application tables
+are never written, and no database or provider home is copied. A changing main
+file or rollback journal refuses the observation rather than showing unverified
+counts.
 
 Each tool is limited to 4,096 entries/rows and one second; Codex headers have a
-256 KiB per-record and 8 MiB total read limit. Linked roots/entries, special
-files, compressed/unknown records, inaccessible databases, unsupported schemas,
-and exhausted bounds report unavailable/unsupported/incomplete discovery, not
-proof that no history exists. A complete scan with zero matches is shown
-separately. Detection remains visible when recovery admission fails.
+256 KiB per-record and 8 MiB total read limit, and the extension bounds the
+inventory subprocess with a timeout. Per-entry Codex limits, deep branches,
+unreadable/raced entries, and linked/special entries mark the scan incomplete
+(`partial`) while continuing over remaining valid sessions. Linked roots,
+inaccessible databases, unsupported schemas, and exhausted global bounds report
+unavailable/unsupported/incomplete discovery, never proof that no history
+exists, and `unavailable`/`unsupported` rows never carry non-zero counts. A
+complete scan with zero matches is shown separately. Detection remains visible
+when recovery admission fails.
 
-Missing host authority now retains its bounded reason through Save status,
-without opening storage or scanning workspace contents when there are no
-granted profiles. This early check runs in the actual snapshot status CLI before
-encryption-material resolution, including a private managed result receipt.
+Missing host authority, work-only grants, and non-room-reference grants now
+retain their bounded reason through Save status offline preflight, without
+opening storage or scanning workspace contents when no eligible granted
+profiles exist. When eligible profiles do exist, their admission failure
+reasons are not overwritten by unrelated ineligible profiles. This early check
+runs in the actual snapshot status CLI before encryption-material resolution,
+including a private managed result receipt; when live MinIO admission is
+needed, the extension forwards its loaded encryption material.
 The picker explains missing/unreadable host admission,
 unmatched profiles, changed/failed grants, work-scope denial and unsupported
 platform/provider gates. Existing shared-home adoption and original T3 recovery

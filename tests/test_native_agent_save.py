@@ -131,6 +131,82 @@ def test_actual_status_cli_missing_authority_never_resolves_storage(tmp_path, mo
     assert json.loads((tmp_path / "result.json").read_text()) == result
 
 
+@pytest.mark.parametrize(
+    ("profiles", "expected_reason"),
+    [
+        (
+            [{"room_reference_allowed": True, "scope": "work", "tools": ["codex"], "profile_ref": "a" * 64}],
+            "native-save-work-scope-unqualified",
+        ),
+        (
+            [{"room_reference_allowed": False, "scope": "personal", "tools": ["codex"], "profile_ref": "b" * 64}],
+            "native-save-room-reference-not-authorized",
+        ),
+    ],
+)
+def test_ineligible_only_grants_return_offline_without_scanning_workspace_or_storage(
+    tmp_path, monkeypatch, profiles, expected_reason
+):
+    from josh_room import (
+        native_agent_discovery,
+        room_store_operations,
+        workspace_policy,
+    )
+
+    monkeypatch.setattr(save.sys, "platform", "linux")
+    monkeypatch.setattr(native_agent_discovery, "room_status", lambda **_: {"profiles": profiles})
+    monkeypatch.setattr(workspace_policy, "load_capture_policy", lambda *_: pytest.fail("scanned policy for ineligible grant"))
+    monkeypatch.setattr(room_store_operations, "scan_workspace_for_status", lambda *_: pytest.fail("scanned workspace for ineligible grant"))
+    monkeypatch.setattr(save, "open_scope", lambda *a, **k: pytest.fail("opened storage for ineligible grant"))
+    dim = SimpleNamespace(provider="minio", dimension_id="synthetic")
+    preflight = save.admission_preflight(dim, "room", tmp_path)
+    assert preflight is not None
+    assert preflight["agent_save"]["reason"] == expected_reason
+    result = save.status(None, dim, None, "room", tmp_path)
+    assert result["agent_save"]["available"] is False
+    assert result["agent_save"]["reason"] == expected_reason
+
+
+@pytest.mark.parametrize("order", ["work-then-failing-personal", "changed-personal-then-work"])
+def test_ineligible_work_grant_never_clobbers_eligible_profile_failure_reason(tmp_path, monkeypatch, order):
+    from josh_room import (
+        native_agent_discovery,
+        native_agent_reference,
+        room_store_operations,
+        workspace_policy,
+    )
+
+    monkeypatch.setattr(save.sys, "platform", "linux")
+    monkeypatch.setattr(workspace_policy, "load_capture_policy", lambda *_: SimpleNamespace(sha256="a" * 64))
+    monkeypatch.setattr(room_store_operations, "scan_workspace_for_status", lambda *_: SimpleNamespace(signature="b" * 64))
+
+    @contextmanager
+    def opened(*_):
+        yield SimpleNamespace(context="opened-current-authority")
+
+    monkeypatch.setattr(save, "open_scope", opened)
+    work = {"room_reference_allowed": True, "scope": "work", "tools": ["codex"], "profile_ref": "1" * 64}
+    personal = {"room_reference_allowed": True, "scope": "personal", "tools": ["codex"], "profile_ref": "2" * 64}
+    profiles = [work, personal] if order == "work-then-failing-personal" else [personal, work]
+    monkeypatch.setattr(native_agent_discovery, "room_status", lambda **_: {"profiles": profiles})
+    resolved = {"profile": "personal-profile", "scope": "personal"}
+    monkeypatch.setattr(native_agent_discovery, "resolve_profile", lambda **_: dict(resolved))
+
+    def grant(*_):
+        if order == "work-then-failing-personal":
+            raise ValueError("stale personal grant")
+        return {**resolved, "scope": "homelab"}, None, None
+
+    monkeypatch.setattr(native_agent_reference, "_grant", grant)
+    result = save.status(None, SimpleNamespace(provider="minio", dimension_id="synthetic"), None, "room", tmp_path)["agent_save"]
+    assert result["available"] is False
+    assert result["reason"] == (
+        "native-save-profile-admission-failed"
+        if order == "work-then-failing-personal"
+        else "native-save-profile-changed"
+    )
+
+
 def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypatch):
     monkeypatch.setattr(save, "SAVE_ADAPTER_QUALIFIED", False)
     monkeypatch.setattr(save, "open_scope", lambda *a, **k: pytest.fail("disabled admission"))

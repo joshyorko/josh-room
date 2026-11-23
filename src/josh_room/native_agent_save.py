@@ -913,27 +913,46 @@ def _profile_status(dimension, room, workspace):
             "native-save-unsupported-platform" if sys.platform != "linux" else
             "native-save-unsupported-provider"
         )
-        return result, {"profiles": []}
+        return result, []
     from .native_agent_discovery import room_status
 
     discovery = room_status(dimension=dimension.dimension_id, room=room, workspace=workspace)
-    if not discovery["profiles"]:
+    profiles = discovery.get("profiles") or []
+    if not profiles:
         reason = discovery.get("reason")
         result["agent_save"]["reason"] = reason if reason in {
             "native-room-authority-unavailable", "native-room-profile-unavailable"
         } else "native-save-admission-unavailable"
-    return result, discovery
+        return result, []
+    eligible = [
+        candidate for candidate in profiles
+        if candidate.get("room_reference_allowed")
+        and candidate.get("scope") in {"personal", "oss", "homelab"}
+        and any(tool in {"codex", "claude"} for tool in candidate.get("tools", ()))
+    ]
+    if not eligible:
+        if any(candidate.get("scope") == "work" for candidate in profiles):
+            result["agent_save"]["reason"] = "native-save-work-scope-unqualified"
+        elif any(
+            not candidate.get("room_reference_allowed")
+            or candidate.get("scope") not in {"personal", "oss", "homelab"}
+            for candidate in profiles
+        ):
+            result["agent_save"]["reason"] = "native-save-room-reference-not-authorized"
+        else:
+            result["agent_save"]["reason"] = "native-save-profile-admission-failed"
+    return result, eligible
 
 
 def admission_preflight(dimension, room, workspace):
-    result, discovery = _profile_status(dimension, room, workspace)
-    return result if not discovery["profiles"] else None
+    result, eligible = _profile_status(dimension, room, workspace)
+    return result if not eligible else None
 
 
 def status(instance, dimension, material, room, workspace):
     """Metadata-only narrow availability. Global producer capabilities stay false."""
-    result, discovery = _profile_status(dimension, room, workspace)
-    if not discovery["profiles"]:
+    result, eligible = _profile_status(dimension, room, workspace)
+    if not eligible:
         return result
     from .native_agent_discovery import resolve_profile
     from .native_agent_reference import _grant
@@ -946,15 +965,7 @@ def status(instance, dimension, material, room, workspace):
     with open_scope(
         instance, dimension, material, room, workspace, policy.sha256, scan.signature
     ) as scope:
-        for candidate in discovery["profiles"]:
-            if not candidate.get("room_reference_allowed") or candidate.get("scope") not in {
-                "personal", "oss", "homelab"
-            }:
-                result["agent_save"]["reason"] = (
-                    "native-save-work-scope-unqualified" if candidate.get("scope") == "work"
-                    else "native-save-room-reference-not-authorized"
-                )
-                continue
+        for candidate in eligible:
             for tool in candidate["tools"]:
                 if tool not in {"codex", "claude"}:
                     continue

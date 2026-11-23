@@ -111,10 +111,35 @@ test('admission failure does not suppress independent session detection', async 
 test('no history, unsupported format, incomplete scan and failure stay distinct', async () => {
   for (const [state, expected] of [['complete', /No matching sessions found/], ['unsupported', /format or platform is unsupported/], ['partial', /discovery is incomplete/], ['unavailable', /discovery failed/]]) {
     const v = mock([[]]);
-    await pickComponents(v, '/synthetic/source', undefined, undefined, async () => noGrant, async () => ({ session_inventory: { contract_version: 1, tools: { codex: { state, exact: 0, descendant: 0, reason: '/private/error' } } } }));
+    const row = state === 'complete' ? { state, exact: 0, descendant: 0 } : { state, exact: 0, descendant: 0, reason: '/private/error' };
+    await pickComponents(v, '/synthetic/source', undefined, undefined, async () => noGrant, async () => ({ session_inventory: { contract_version: 1, tools: { codex: row } } }));
     const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
     assert.match(detail, expected);
     assert.doesNotMatch(detail, /private/);
+  }
+});
+
+test('malformed agent_save structure and contradictory inventory rows fail closed', async () => {
+  for (const badAgent of [
+    { contract_version: 1, mode: 'history-only', available: true, profiles: [{ tool: 't3', profile_ref: 'a'.repeat(64), scope: 'personal', admitted: true }] },
+    { contract_version: 1, mode: 'history-only', available: true, profiles: [] },
+    { contract_version: 1, mode: 'history-only', available: false, profiles: [{ tool: 'codex', profile_ref: 'a'.repeat(64), scope: 'personal', admitted: true }] },
+    { contract_version: 1, mode: 'history-only', available: 'yes', profiles: [] },
+  ]) {
+    const v = mock([[]]);
+    await pickComponents(v, '/synthetic/source', undefined, undefined, async () => ({ agent_save: badAgent }));
+    const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
+    assert.match(detail, /Recovery admission could not be checked/);
+  }
+  for (const badRow of [
+    { state: 'complete', exact: 0, descendant: 0, reason: 'discovery-failed' },
+    { state: 'unavailable', exact: 2, descendant: 0, reason: 'discovery-failed' },
+    { state: 'unsupported', exact: 0, descendant: 1, reason: 'unsupported-format' },
+  ]) {
+    const v = mock([[]]);
+    await pickComponents(v, '/synthetic/source', undefined, undefined, async () => noGrant, async () => ({ session_inventory: { contract_version: 1, tools: { codex: badRow } } }));
+    const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
+    assert.match(detail, /Session detection unavailable; session absence is not established/);
   }
 });
 

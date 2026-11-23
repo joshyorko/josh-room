@@ -17,7 +17,9 @@ function sessionSummary(inventory, tool) {
   const row = inventory?.contract_version === 1 ? inventory.tools?.[tool] : undefined;
   if (!row || !['complete', 'partial', 'unavailable', 'unsupported'].includes(row.state)
     || ![row.exact, row.descendant].every(n => Number.isInteger(n) && n >= 0 && n <= 4096)
-    || row.exact + row.descendant > 4096) return 'Session detection unavailable; session absence is not established.';
+    || row.exact + row.descendant > 4096
+    || (row.state === 'complete' && row.reason !== undefined)
+    || (['unavailable', 'unsupported'].includes(row.state) && (row.exact !== 0 || row.descendant !== 0))) return 'Session detection unavailable; session absence is not established.';
   const counts = row.exact + row.descendant
     ? `${row.exact} session(s) in this folder; ${row.descendant} in child folders. Detection only; not included.`
     : row.state === 'complete' ? 'No matching sessions found in scanned metadata.' : 'No matching sessions confirmed; discovery is incomplete.';
@@ -28,6 +30,13 @@ function sessionSummary(inventory, tool) {
   return counts + status;
 }
 
+function validAgentProfile(profile) {
+  return profile?.admitted === true
+    && ['codex', 'claude'].includes(profile.tool)
+    && /^[0-9a-f]{64}$/.test(profile.profile_ref)
+    && ['personal', 'oss', 'homelab'].includes(profile.scope);
+}
+
 // This selection is a request, never storage or source authorization.
 async function pickComponents(vscode, source, previous, discoverInstalled, discoverAgents, discoverSessions) {
   let agentProfiles = [];
@@ -35,12 +44,18 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
   if (discoverAgents) {
     try {
       const candidate = (await discoverAgents())?.agent_save;
-      if (candidate?.contract_version === 1 && candidate.mode === 'history-only') {
+      const validStructure = candidate?.contract_version === 1
+        && candidate.mode === 'history-only'
+        && typeof candidate.available === 'boolean'
+        && Array.isArray(candidate.profiles)
+        && candidate.profiles.length <= 128
+        && (candidate.available
+          ? candidate.profiles.length > 0 && candidate.profiles.every(validAgentProfile)
+          : candidate.profiles.length === 0);
+      if (validStructure) {
         agentReason = Object.hasOwn(admissionMessages, candidate.reason) ? admissionMessages[candidate.reason] : 'No currently admitted recovery profile; existing shared-home adoption needs #188.';
+        if (candidate.available) agentProfiles = candidate.profiles;
       }
-      if (candidate?.contract_version === 1 && candidate.mode === "history-only" && candidate.available === true
-        && Array.isArray(candidate.profiles) && candidate.profiles.length <= 128
-        && candidate.profiles.every(p => p?.admitted === true && ["codex", "claude"].includes(p.tool) && /^[0-9a-f]{64}$/.test(p.profile_ref) && ["personal", "oss", "homelab"].includes(p.scope))) agentProfiles = candidate.profiles;
     } catch (_) { /* Unavailable admission never authorizes capture. */ }
   }
   let inventory;

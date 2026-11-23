@@ -222,12 +222,14 @@ def test_live_wal_migration_uses_one_read_snapshot(homes, monkeypatch):
     writer, _path = database(homes, wal=True)
     add_thread(writer, "one", v2=False)
     connect = sqlite3.connect
+    migrated = []
 
     def migrating_reader(*args, **kwargs):
         connection = connect(*args, **kwargs)
 
         def on_query(sql):
-            if "SELECT coalesce(t.worktree_path" in sql:
+            if "FROM projection_threads" in sql and not migrated:
+                migrated.append(True)
                 add_thread(writer, "one")
 
         connection.set_trace_callback(on_query)
@@ -236,6 +238,7 @@ def test_live_wal_migration_uses_one_read_snapshot(homes, monkeypatch):
     try:
         monkeypatch.setattr(sqlite3, "connect", migrating_reader)
         assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 1, "descendant": 0}
+        assert migrated == [True]
     finally:
         writer.close()
 
@@ -281,3 +284,181 @@ def test_inventory_writes_private_managed_result_receipt(homes, capsys, monkeypa
     assert native_agents_cli.main(["inventory", "--workspace", str(homes), "--json"]) == 0
     assert json.loads(target.read_text()) == json.loads(capsys.readouterr().out)
     assert target.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "kind"),
+    [
+        ("statev2.sqlite-wal", "fifo-ro"),
+        ("statev2.sqlite-shm", "fifo-ro"),
+        ("statev2.sqlite-wal", "fifo-rw"),
+        ("statev2.sqlite-wal", "dangling-symlink"),
+        ("statev2.sqlite-journal", "dangling-symlink"),
+        ("statev2.sqlite-wal", "hardlink"),
+    ],
+)
+def test_t3_unsafe_sidecars_fail_closed_without_hanging(homes, sidecar, kind):
+    connection, path = database(homes)
+    add_thread(connection, "exact")
+    connection.close()
+    target = path.with_name(sidecar)
+    if kind == "fifo-ro":
+        os.mkfifo(target, 0o400)
+    elif kind == "fifo-rw":
+        os.mkfifo(target, 0o644)
+    elif kind == "dangling-symlink":
+        target.symlink_to(homes / "missing-sidecar")
+    else:
+        other = path.with_name("extra-hardlink")
+        other.write_bytes(b"synthetic")
+        os.link(other, target)
+    result = inventory.inventory(homes)["tools"]["t3"]
+    assert result == {"state": "unavailable", "exact": 0, "descendant": 0, "reason": "discovery-failed"}
+
+
+def test_t3_limit_still_runs_post_read_fence_and_unlink_resets_counts(homes, monkeypatch):
+    connection, path = database(homes)
+    for idx in range(3):
+        add_thread(connection, f"t-{idx}")
+    connection.close()
+    monkeypatch.setattr(inventory, "MAX_ENTRIES", 2)
+    orig_match = inventory._match
+
+    def mutate_during_limit(result, cwd, workspace):
+        orig_match(result, cwd, workspace)
+        if result["exact"] == 2:
+            path.with_name("statev2.sqlite-journal").write_bytes(b"synthetic-journal")
+
+    monkeypatch.setattr(inventory, "_match", mutate_during_limit)
+    assert inventory.inventory(homes)["tools"]["t3"] == {
+        "state": "unavailable",
+        "exact": 0,
+        "descendant": 0,
+        "reason": "discovery-failed",
+    }
+
+    path.with_name("statev2.sqlite-journal").unlink()
+    monkeypatch.setattr(inventory, "MAX_ENTRIES", 4096)
+
+    def unlink_before_fence(result, cwd, workspace):
+        orig_match(result, cwd, workspace)
+        if result["exact"] == 3 and path.exists():
+            path.unlink()
+
+    monkeypatch.setattr(inventory, "_match", unlink_before_fence)
+    assert inventory.inventory(homes)["tools"]["t3"] == {
+        "state": "unavailable",
+        "exact": 0,
+        "descendant": 0,
+        "reason": "source-changed",
+    }
+
+
+def test_t3_empty_worktree_falls_back_to_workspace_root_and_rejects_view(homes):
+    connection, path = database(homes)
+    add_thread(connection, "v2-empty", v2=True, path="")
+    add_thread(connection, "legacy-empty", v2=False, path="")
+    connection.close()
+    assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 2, "descendant": 0}
+
+    path.unlink()
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        f"""
+        CREATE TABLE real_projects(project_id TEXT, workspace_root TEXT, deleted_at TEXT);
+        CREATE VIEW projection_projects AS SELECT project_id, workspace_root, deleted_at FROM real_projects;
+        CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT, project_id TEXT, payload_json TEXT, deleted_at TEXT);
+        INSERT INTO real_projects VALUES ('p', '{homes}', NULL);
+        INSERT INTO orchestration_v2_projection_threads VALUES ('t1', 'p', '{{}}', NULL);
+        """
+    )
+    connection.close()
+    assert inventory.inventory(homes)["tools"]["t3"] == {
+        "state": "unsupported",
+        "exact": 0,
+        "descendant": 0,
+        "reason": "unsupported-format",
+    }
+
+
+def test_codex_per_entry_limits_errors_and_depth0_vanish_preserve_other_sessions(homes, monkeypatch):
+    import errno
+    import socket
+
+    # 5a: depth-0 FileNotFoundError inside walk() must not be swallowed as absent root.
+    sessions = Path(os.environ["CODEX_HOME"]) / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "z-vanish.jsonl").write_text(json.dumps({"type": "session_meta", "payload": {"id": "v", "cwd": str(homes)}}) + "\n")
+    (sessions / "a-keep.jsonl").write_text(json.dumps({"type": "session_meta", "payload": {"id": "k", "cwd": str(homes)}}) + "\n")
+    orig_scandir = os.scandir
+
+    class _VanishingEntry:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+            self.name = wrapped.name
+
+        def is_symlink(self):
+            if self.name == "z-vanish.jsonl":
+                raise FileNotFoundError
+            return self._wrapped.is_symlink()
+
+        def is_dir(self, follow_symlinks=False):
+            return self._wrapped.is_dir(follow_symlinks=follow_symlinks)
+
+    class _WrappedScandir:
+        def __init__(self, cm):
+            self._cm = cm
+
+        def __enter__(self):
+            return [_VanishingEntry(e) for e in self._cm.__enter__()]
+
+        def __exit__(self, *args):
+            return self._cm.__exit__(*args)
+
+    monkeypatch.setattr(os, "scandir", lambda fd: _WrappedScandir(orig_scandir(fd)))
+    assert inventory.inventory(homes)["tools"]["codex"] == {
+        "state": "partial",
+        "exact": 1,
+        "descendant": 0,
+        "reason": "source-changed",
+    }
+    monkeypatch.setattr(os, "scandir", orig_scandir)
+
+    # 5b1 & 5b2 & 5c1-5c4: oversized header, deep branch, unreadable file, unix socket,
+    # ELOOP race, and symlinked archived_sessions all mark partial while preserving valid sessions.
+    for p in list(sessions.iterdir()):
+        p.unlink()
+    rollout(homes, "valid-1")
+    (Path(os.environ["CODEX_HOME"]) / "sessions/2026/11/23/z-huge.jsonl").write_bytes(b"x" * (inventory.MAX_HEADER_BYTES + 10))
+    deep = Path(os.environ["CODEX_HOME"]) / "sessions/2026/11/23/d3/d4/d5"
+    deep.mkdir(parents=True)
+    unreadable = Path(os.environ["CODEX_HOME"]) / "sessions/2026/11/23/y-unreadable.jsonl"
+    unreadable.write_text("{}\n")
+    unreadable.chmod(0o000)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    monkeypatch.chdir(Path(os.environ["CODEX_HOME"]) / "sessions/2026/11/23")
+    sock.bind("x-sock.jsonl")
+    archived_link = Path(os.environ["CODEX_HOME"]) / "archived_sessions"
+    archived_link.symlink_to(homes / "missing-archive")
+    try:
+        res = inventory.inventory(homes)["tools"]["codex"]
+        assert res["state"] == "partial"
+        assert res["exact"] == 1
+        assert res["descendant"] == 0
+    finally:
+        sock.close()
+        unreadable.chmod(0o600)
+
+    # Symlink-swap ELOOP race between scandir and os.open preserves valid sessions.
+    archived_link.unlink()
+    orig_open = os.open
+
+    def eloop_on_huge(p, *args, **kwargs):
+        if p == "z-huge.jsonl":
+            raise OSError(errno.ELOOP, "Too many levels of symbolic links")
+        return orig_open(p, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", eloop_on_huge)
+    res = inventory.inventory(homes)["tools"]["codex"]
+    assert res["state"] == "partial"
+    assert res["exact"] == 1
