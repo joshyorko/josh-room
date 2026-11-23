@@ -117,6 +117,26 @@ test('seven real directory IDs acquire a bounded landscape independently of the 
   assert.equal(app.scene3d.layout.nodeById.get('node/dir1').coverage, 'not-examined');
 });
 
+test('one unavailable scene branch preserves verified neighbors while generation and binding errors discard the pass', async () => {
+  const folders = [0, 1, 2].map(n => ({ ...dir, id: 'folder-' + n }));
+  const page = listing(root, folders, 'current');
+  let code = 'filesystem-scene-entry-stale';
+  const data = Object.create(window.RoomViewData.RoomViewDataLayer.prototype);
+  data.queryFilesystem = async (_, { id }) => {
+    if (id === folders[1].id && code) throw Object.assign(new Error(code), { code });
+    return { directory: folders.find(n => n.id === id), entries: [], generation: page.generation, coverage: 'complete' };
+  };
+  const run = () => data.sceneNeighborhood(page, new AbortController().signal);
+  for (code of ['filesystem-scene-entry-stale', 'filesystem-unknown']) {
+    assert.deepEqual((await run()).map(n => n.id), ['folder-0', 'folder-2']);
+  }
+  for (code of ['filesystem-stale', 'workspace-binding-changed']) {
+    await assert.rejects(run, { code });
+  }
+  code = null;
+  assert.deepEqual((await run()).map(n => n.id), ['folder-1', 'folder-0', 'folder-2']);
+});
+
 test('late geometry from an abandoned sample cannot reappear after navigation', async () => {
   const app = appFixture();
   const page = listing(root, [dir]);

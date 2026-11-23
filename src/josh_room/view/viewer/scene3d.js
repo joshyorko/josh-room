@@ -748,7 +748,9 @@
         for (const overlay of this.frameOverlays) {
           this.frameObserver.observe(overlay);
           this.frameMutationObserver.observe(overlay, { attributes: true, attributeFilter: ['data-open', 'hidden', 'class'] });
-          overlay.addEventListener('transitionend', reframe);
+          overlay.addEventListener('transitionend', event => {
+            if (event.target === overlay && event.propertyName === 'transform') reframe();
+          });
         }
       }
       window.addEventListener('resize', () => this.resize());
@@ -1959,9 +1961,11 @@
       if (!this.layout) return '';
       const THREE = this.THREE;
       const interactive = this.camera;
+      const previousFog = this.scene.fog;
       const previousRect = this.safeRect;
       const ground = this.groundMesh.position.clone();
       try {
+        this.scene.fog = null;
         this.camera = interactive.clone();
         this.camera.clearViewOffset();
         const viewport = this.canvas.getBoundingClientRect();
@@ -1982,6 +1986,7 @@
         this.renderer.render(this.scene, this.camera);
         return this.canvas.toDataURL('image/png');
       } finally {
+        this.scene.fog = previousFog;
         this.camera = interactive;
         this.safeRect = previousRect;
         this.groundMesh.position.copy(ground);

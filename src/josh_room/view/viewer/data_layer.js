@@ -400,7 +400,7 @@
       if (!resp.ok) {
         const error = new Error(`Filesystem request failed (HTTP ${resp.status})`);
         error.status = resp.status;
-        if (operation === 'points' || operation === 'compare') {
+        if (operation === 'points' || operation === 'compare' || params?.sample === '1') {
           const detail = await resp.json().catch(() => null);
           error.code = detail?.error;
         }
@@ -418,7 +418,17 @@
         signal.throwIfAborted();
         if (!id || sampled.has(id)) return [];
         sampled.add(id);
-        const result = await this.queryFilesystem('list', { id, generation: page.generation, sample: '1' }, signal);
+        let result;
+        try {
+          result = await this.queryFilesystem('list', { id, generation: page.generation, sample: '1' }, signal);
+        } catch (error) {
+          signal.throwIfAborted();
+          if (error.code === 'filesystem-scene-entry-stale' || error.code === 'filesystem-unknown') {
+            nodes.delete(id);
+            return [];
+          }
+          throw error;
+        }
         signal.throwIfAborted();
         if (result.generation !== page.generation) throw Object.assign(new Error('Stale landscape'), { status: 409 });
         for (const n of [result.directory, ...result.entries]) {

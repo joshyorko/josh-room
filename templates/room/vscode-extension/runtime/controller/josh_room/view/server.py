@@ -507,6 +507,7 @@ class RoomViewServer:
                 except ViewValidationError as exc:
                     public_errors = {
                         "filesystem-stale": HTTPStatus.CONFLICT,
+                        "filesystem-scene-entry-stale": HTTPStatus.CONFLICT,
                         "workspace-binding-changed": HTTPStatus.CONFLICT,
                         "filesystem-unknown": HTTPStatus.NOT_FOUND,
                         "response-too-large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
