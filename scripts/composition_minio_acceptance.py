@@ -13,7 +13,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from git_recovery_acceptance import catalog_repository, contents, git, identity as git_identity
+from git_recovery_acceptance import advance_catalog_git, catalog_repository, contents, identity as git_identity
 
 from josh_room import keyring
 from josh_room.config import save_private_config
@@ -310,7 +310,7 @@ def main():
         }
         if args.qualify_updates:
             child_root = entered / 'projects/a'
-            git(child_root, "branch", "after-hydration")
+            advance_catalog_git(child_root)
             updated_git = git_identity(child_root)
             assert updated_git != original_git
             update_args = ['--dimension', 'composition-fixture', '--namespace', saved['namespace'],

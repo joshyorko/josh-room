@@ -79,6 +79,16 @@ def catalog_repository(root: Path) -> None:
         stream.write("\n/.josh-room.json\n/.josh-room-split.json\n/.josh-roomignore\n")
 
 
+def advance_catalog_git(root: Path) -> None:
+    """Advance stash, objects, refs, detached HEAD and index without a worktree edit."""
+    git(root, "add", "unstaged.txt")
+    stash = git(root, "stash", "create").strip()
+    git(root, "stash", "store", "-m", "post-hydration stash", stash)
+    git(root, "commit", "-m", "post-hydration staged changes")
+    git(root, "branch", "post-hydration-venv")
+    git(root, "add", "untracked.txt")
+
+
 def identity(root: Path) -> dict:
     return {command[0] + " ".join(command[1:]): git(root, *command) for command in (
         ("status", "--porcelain=v1", "--untracked-files=all"),
