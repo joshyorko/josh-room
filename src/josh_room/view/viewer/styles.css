@@ -1127,3 +1127,5 @@ kbd {
   .print-sheet table { width: 100%; border-collapse: collapse; font-size: 11px; }
   .print-sheet th, .print-sheet td { border: 1px solid #999; padding: 4px 6px; text-align: left; }
 }
+
+body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-bottom { display: none; }

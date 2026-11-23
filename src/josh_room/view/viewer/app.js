@@ -116,6 +116,7 @@
       document.getElementById('btn-up').disabled = this.currentNodeId === 'root';
       const badge = document.getElementById('fs-coverage');
       const more = document.getElementById('fs-continue');
+      document.getElementById('fs-details').hidden = !this.fsPage || this.currentNodeId !== this._treeId(this.fsPage.directory);
       badge.hidden = !this.fsCoverage;
       if (this.fsCoverage) badge.textContent = this.fsCoverage;
       more.hidden = !this.data.filesystem || !(this.fsRetry || this.fsResume || this.fsPage?.cursor);
@@ -196,7 +197,7 @@
           this.scene3d?.focusNode(selectedId, { instant, moveCamera });
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
-        if (target && ((!refresh && (!cursor || wasReading) && (file || id !== 'root')) || (refresh && wasReading))) {
+        if (target && ((!refresh && file && (!cursor || wasReading)) || (refresh && wasReading))) {
           const restoring = reading && target.objectId === reading.id;
           const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
           if (request.signal.aborted) return;
@@ -853,6 +854,10 @@
         this.handleNodeSelect(this.forward.pop(), { pushHistory: false });
       });
       document.getElementById('btn-up').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('fs-details').addEventListener('click', () => {
+        const target = this.layout.allTreeNodesById.get(this.currentNodeId);
+        if (target) this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout);
+      });
       document.getElementById('fs-continue').addEventListener('click', () => {
         if (this.fsResume) this.fsResume();
         else if (this.fsRetry) this._openFilesystem('root', { pushHistory: false });
