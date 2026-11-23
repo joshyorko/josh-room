@@ -349,6 +349,8 @@
       this.state = initialPayload.state;
       this.sensitivity = initialPayload.sensitivity;
       this.meta = initialPayload.meta || {};
+      this.filesystem = mode === 'live' && initialPayload.server?.filesystem === true;
+      this.fsGeneration = null;
       this._blobCache = new Map();
       this._indexAttachments();
       this._refreshSequence = 0;
@@ -387,6 +389,25 @@
       }
       const q = params.toString();
       return q ? `?${q}` : '';
+    }
+
+    async queryFilesystem(operation, params, signal) {
+      if (!this.filesystem) throw new Error('Live filesystem unavailable');
+      const resp = await fetch(`/fs/${operation}?${new URLSearchParams(params)}`, {
+        cache: 'no-store', headers: this._liveHeaders(), signal,
+      });
+      if (!resp.ok) {
+        const error = new Error(`Filesystem request failed (HTTP ${resp.status})`);
+        error.status = resp.status;
+        throw error;
+      }
+      return resp.json();
+    }
+
+    applyFilesystemNodes(nodes, generation) {
+      this.fsGeneration = generation;
+      this.state = { ...this.state, nodes, items: [], groups: [] };
+      this._indexAttachments();
     }
 
     async refreshLive() {
@@ -435,7 +456,7 @@
     }
 
     async fetchPreviewSlot(objectId, slot) {
-      if (this.mode === 'live') {
+      if (this.mode === 'live' && !this.filesystem) {
         const url = `/content/${encodeURIComponent(objectId)}/${encodeURIComponent(slot)}${this._liveQuerySuffix()}`;
         const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
         if (!resp.ok) return null;
@@ -450,7 +471,11 @@
 
     async loadAttachmentBytes(itemId, name) {
       if (this.mode === 'live') {
-        const url = `/attachments/${encodeURIComponent(itemId)}/${encodeURIComponent(name)}${this._liveQuerySuffix()}`;
+        const ref = this._blobCache.get(JSON.stringify([itemId, name]));
+        if (this.filesystem && !ref) return null;
+        const url = this.filesystem
+          ? `/fs/attachment?${new URLSearchParams({ id: itemId, name, generation: this.fsGeneration, digest: ref.digest })}`
+          : `/attachments/${encodeURIComponent(itemId)}/${encodeURIComponent(name)}${this._liveQuerySuffix()}`;
         const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
         if (!resp.ok) return null;
         const buf = await resp.arrayBuffer();

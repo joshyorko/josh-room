@@ -399,6 +399,59 @@ def sanitize_descriptor(
     )
 
 
+def sanitize_node(node: NodeState, policy: SanitizationPolicy) -> NodeState:
+    label = _check_safe_text(
+        node.label,
+        f"node.{node.id}.label",
+        max_length=policy.max_label_length,
+        max_digit_run=policy.max_digit_run,
+    )
+    summary = (
+        _check_safe_text(
+            node.summary,
+            f"node.{node.id}.summary",
+            max_length=policy.max_text_length,
+            max_digit_run=policy.max_digit_run,
+        )
+        if node.summary is not None
+        else None
+    )
+    if len(node.fields) > policy.max_fields_per_item:
+        raise ViewValidationError(
+            "too-many-fields",
+            f"node.{node.id} exceeds max fields ({policy.max_fields_per_item})",
+        )
+    clean_fields = {}
+    for key, value in node.fields.items():
+        _check_key_not_secret(key, f"node.{node.id}.fields")
+        if isinstance(value, str):
+            clean_fields[key] = _check_safe_text(
+                value,
+                f"node.{node.id}.fields.{key}",
+                max_length=policy.max_text_length,
+                max_digit_run=policy.max_digit_run,
+            )
+        else:
+            clean_fields[key] = value
+    clean_previews = _sanitize_previews(node.previews, f"node.{node.id}", policy)
+    clean_links = _sanitize_links(node.links, f"node.{node.id}", policy)
+    return NodeState(
+        id=node.id,
+        parent_id=node.parent_id,
+        node_kind=node.node_kind,
+        label=label,
+        updated_at=node.updated_at,
+        kind=node.kind,
+        metric=node.metric,
+        summary=summary,
+        order=node.order,
+        attachments=node.attachments,
+        previews=clean_previews,
+        links=clean_links,
+        fields=MappingProxyType(clean_fields),
+    )
+
+
 def _apply_base_state_sanitization(
     descriptor: ViewDescriptor,
     state: ViewState,
@@ -463,60 +516,7 @@ def _apply_base_state_sanitization(
             )
         )
 
-    sanitized_nodes: list[NodeState] = []
-    for node in state.nodes:
-        label = _check_safe_text(
-            node.label,
-            f"node.{node.id}.label",
-            max_length=policy.max_label_length,
-            max_digit_run=policy.max_digit_run,
-        )
-        summary = (
-            _check_safe_text(
-                node.summary,
-                f"node.{node.id}.summary",
-                max_length=policy.max_text_length,
-                max_digit_run=policy.max_digit_run,
-            )
-            if node.summary is not None
-            else None
-        )
-        if len(node.fields) > policy.max_fields_per_item:
-            raise ViewValidationError(
-                "too-many-fields",
-                f"node.{node.id} exceeds max fields ({policy.max_fields_per_item})",
-            )
-        clean_fields = {}
-        for key, value in node.fields.items():
-            _check_key_not_secret(key, f"node.{node.id}.fields")
-            if isinstance(value, str):
-                clean_fields[key] = _check_safe_text(
-                    value,
-                    f"node.{node.id}.fields.{key}",
-                    max_length=policy.max_text_length,
-                    max_digit_run=policy.max_digit_run,
-                )
-            else:
-                clean_fields[key] = value
-        clean_previews = _sanitize_previews(node.previews, f"node.{node.id}", policy)
-        clean_links = _sanitize_links(node.links, f"node.{node.id}", policy)
-        sanitized_nodes.append(
-            NodeState(
-                id=node.id,
-                parent_id=node.parent_id,
-                node_kind=node.node_kind,
-                label=label,
-                updated_at=node.updated_at,
-                kind=node.kind,
-                metric=node.metric,
-                summary=summary,
-                order=node.order,
-                attachments=node.attachments,
-                previews=clean_previews,
-                links=clean_links,
-                fields=MappingProxyType(clean_fields),
-            )
-        )
+    sanitized_nodes = [sanitize_node(node, policy) for node in state.nodes]
 
     steps = tuple(
         StepState(

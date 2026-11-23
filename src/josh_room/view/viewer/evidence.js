@@ -301,6 +301,7 @@
       this.lightboxCaption = document.getElementById('lightbox-caption');
 
       this.currentItem = null;
+      this.contentFingerprint = null;
       this.currentObjectId = null;
       this.activeTab = 'content';
       this.activePreviewSlot = null;
@@ -347,8 +348,16 @@
     }
 
     hide() {
+      this._attRequestSeq++;
       this._teardownPdf();
+      this.lightboxEl.hidden = true;
+      this.lightboxImg.removeAttribute('src');
+      this.lightboxCaption.textContent = '';
+      for (const el of [this.tabContentEl, this.tabDetailsEl, this.tabEvidenceEl, this.tabTimelineEl, this.titleEl, this.pathEl]) {
+        el.textContent = '';
+      }
       this.currentItem = null;
+      this.contentFingerprint = null;
       this.currentObjectId = null;
       this.activePreviewSlot = null;
       this.drawerEl.hidden = true;
@@ -359,13 +368,26 @@
     }
 
     showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false } = {}) {
+      const sameObject = this.currentObjectId === (target.objectId || target.id);
+      const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
+      if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {
+        this.currentItem = target;
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        return;
+      }
+      const changed = preserveTab && sameObject && this.contentFingerprint !== fingerprint;
+      this._attRequestSeq++;
       this._teardownPdf();
+      this.lightboxEl.hidden = true;
+      this.lightboxImg.removeAttribute('src');
+      this.contentFingerprint = fingerprint;
+      if (!sameObject) this.activePreviewSlot = null;
       this.currentItem = target;
       this.currentObjectId = target.objectId || target.id;
       this.drawerEl.hidden = false;
 
       const entry = global.RoomViewLayout.getLegendEntry(descriptor, target.kind);
-      this.badgeEl.textContent = `${entry.symbol} ${entry.label}`;
+      this.badgeEl.textContent = target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`;
       this.badgeEl.style.color = entry.color;
       this.badgeEl.style.borderColor = entry.color;
       this.badgeEl.style.borderStyle = entry.shape === 'hollow' ? 'dashed' : 'solid';
@@ -383,6 +405,19 @@
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
+      if (changed) {
+        this.tabContentEl.textContent = '';
+        this.tabEvidenceEl.textContent = '';
+        const reopen = document.createElement('button');
+        reopen.type = 'button';
+        reopen.textContent = 'Content changed. Open current version';
+        reopen.addEventListener('click', () => this.showTarget(this.currentItem, descriptor, state, layout, { quantileBin }));
+        this.tabContentEl.append(reopen);
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        this._renderTimeline(target, state);
+        this.switchTab('content');
+        return;
+      }
       this._renderContent(target, descriptor, layout);
       this._renderDetails(target, descriptor, layout, quantileBin);
       this._renderTimeline(target, state);
@@ -603,7 +638,7 @@
         ['ID', target.objectId || target.id],
         ['Path', target.path || '—'],
         ['Type', target.nodeKind || 'file'],
-        ['Outcome', `${entry.symbol} ${entry.label} (${target.kind})`],
+        [global.RoomViewLayout.isWorkspace(descriptor) ? 'Kind' : 'Outcome', target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`],
         [metricName, target.metric != null ? `${target.metric}${unit}${quantileBin ? ` (Bin ${quantileBin}/5)` : ''}` : '—'],
         ['Updated', target.updated_at || '—'],
       ];

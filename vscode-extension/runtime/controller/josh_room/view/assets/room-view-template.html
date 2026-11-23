@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;0484eeb3410f0f36bcc0addaf12f90f33dde148d4e366aac4fc065a6f343ae67&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;9982cbbadd3c779843f6498f8a660a133d922403b949b2e3e19f548f7909e073&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -57,6 +57,13 @@ html, body {
   font-size: 13px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
+}
+
+body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "controls" "banners" "browser" "legend";
 }
 
 .sr-only {
@@ -123,17 +130,16 @@ html, body {
 
 /* Thin Perimeter Top HUD */
 .hud-top {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 44px;
+  position: relative;
+  grid-area: controls;
+  min-height: 44px;
+  flex-wrap: wrap;
   z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 10px;
+  padding: 6px 10px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(8px);
@@ -268,12 +274,37 @@ html, body {
 .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
 .seg-btn.active { background: rgba(79, 216, 255, 0.24); color: #ffffff; font-weight: 600; }
 
+.hud-right { flex-wrap: wrap; }
+.crumb-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.advanced-hud { position: relative; }
+.advanced-hud summary { display: flex; align-items: center; list-style: none; }
+.advanced-actions {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 10rem;
+  gap: 4px;
+  padding: 6px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+}
+[data-workspace] :is(#btn-prev-fail, #btn-next-fail, .outcome-shortcut, #print-map-img) {
+  display: none !important;
+}
+@media (max-width: 760px) {
+  .hud-left { width: 100%; }
+  .breadcrumbs { flex: 1; }
+  #search-input { width: min(34vw, 165px); }
+  .advanced-actions { position: fixed; top: auto; right: 6px; margin-top: 4px; }
+}
+
 /* Banners */
 .banner-stack {
-  position: fixed;
-  top: 44px;
-  left: 0;
-  right: 0;
+  position: relative;
+  grid-area: banners;
   z-index: 29;
   pointer-events: none;
 }
@@ -291,6 +322,16 @@ html, body {
 .banner-sensitivity { background: var(--warn-bg); color: #fff6f2; border-bottom: 1px solid rgba(255, 200, 170, 0.4); }
 .banner-stale { background: var(--stale-bg); color: #fff4ed; border-bottom: 1px solid rgba(255, 180, 140, 0.5); }
 
+.filesystem-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-inline: 14px;
+  background: var(--surface);
+  pointer-events: auto;
+}
+.filesystem-status > :not([hidden]) { margin-block: 3px; }
+#webgl-fallback-notice { background: var(--surface-solid); }
 .search-results-bar {
   pointer-events: auto;
   max-width: 480px;
@@ -327,11 +368,12 @@ html, body {
 
 /* Synchronized APG ARIA Tree Panel */
 .tree-panel {
-  position: fixed;
-  top: 52px;
-  left: 10px;
-  bottom: 42px;
-  width: 310px;
+  position: relative;
+  grid-area: browser;
+  margin: 8px 10px;
+  min-height: 0;
+  justify-self: start;
+  width: min(310px, calc(100% - 20px));
   z-index: 28;
   background: var(--surface-elevated);
   border: 1px solid var(--border-strong);
@@ -383,10 +425,11 @@ html, body {
 
 /* Dismissible Inspector / Evidence Drawer (Overlay, hidden by default) */
 .inspector-drawer {
-  position: fixed;
-  top: 52px;
-  right: 10px;
-  bottom: 42px;
+  position: relative;
+  grid-area: browser;
+  margin: 8px 10px;
+  min-height: 0;
+  justify-self: end;
   width: min(500px, calc(100vw - 24px));
   z-index: 32;
   background: var(--surface-elevated);
@@ -838,15 +881,12 @@ html, body {
 
 /* 2D Grid & SQL Overlay Views */
 .overlay-view {
-  position: fixed;
-  top: 44px;
-  left: 0;
-  right: 0;
-  bottom: 32px;
+  position: relative;
+  grid-area: browser;
   z-index: 25;
   background: var(--surface-solid);
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: clamp(8px, 2vw, 20px);
 }
 
 .overlay-view[hidden] { display: none !important; }
@@ -859,6 +899,37 @@ html, body {
   gap: 10px;
   margin-bottom: 14px;
 }
+
+.directory-list {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.directory-list :is(th, td) {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.directory-list th { color: var(--text-muted); font-weight: 500; }
+.directory-list th:first-child { width: 58%; }
+.directory-list :is(th, td):last-child { text-align: right; }
+.directory-list button {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+.directory-list button:focus-visible { outline: 2px solid var(--accent); }
+.directory-list tr:hover td, .directory-list tr.selected td { background: var(--surface-elevated); }
+.grid-summary-stats { overflow-wrap: anywhere; }
+.grid-tile-head > span { min-width: 0; overflow-wrap: anywhere; }
 
 .grid-filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .filter-chip {
@@ -937,11 +1008,9 @@ html, body {
 
 /* Bottom Strip */
 .hud-bottom {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 30px;
+  position: relative;
+  grid-area: legend;
+  min-height: 30px;
   z-index: 30;
   display: flex;
   align-items: center;
@@ -1058,7 +1127,7 @@ kbd {
 /* Print stylesheet: static top-down map + printable triage table */
 .print-sheet { display: none; }
 @media print {
-  body { overflow: visible; background: #fff; color: #111; }
+  html, body { display: block; height: auto; overflow: visible; background: #fff; color: #111; }
   .world-stage, .hud-top, .hud-bottom, .banner-stack, .tree-panel, .inspector-drawer, .overlay-view, .modal-backdrop, .boot-overlay {
     display: none !important;
   }
@@ -1074,9 +1143,6 @@ kbd {
   <!-- Full-viewport 3D UNIX Filesystem World (aria-hidden; mirrored by APG role="tree") -->
   <div id="world-stage" class="world-stage">
     <canvas id="fsn-canvas" aria-hidden="true"></canvas>
-    <div id="webgl-fallback-notice" class="floating-notice" hidden>
-      WebGL unavailable — running in 2D Grid mode. Content previews, attachments, and SQL console remain active.
-    </div>
     <div id="hover-tooltip" class="hover-tooltip" role="tooltip" hidden></div>
   </div>
 
@@ -1084,6 +1150,8 @@ kbd {
   <header id="hud-top" class="hud-top" aria-label="Room View navigation and controls">
     <div class="hud-left">
       <button id="btn-back" class="hud-btn hud-icon-btn" type="button" title="Go back (Backspace)" aria-label="Go back" disabled>&#8592;</button>
+      <button id="btn-forward" class="hud-btn hud-icon-btn" type="button" title="Go forward" aria-label="Go forward" disabled>&#8594;</button>
+      <button id="btn-up" class="hud-btn hud-icon-btn" type="button" title="Go to parent folder" aria-label="Go to parent folder" disabled>&#8593;</button>
       <nav id="breadcrumbs" class="breadcrumbs" aria-label="Directory path"></nav>
       <span id="badge-mode" class="pill pill-mode">OFFLINE</span>
       <span id="badge-sensitivity" class="pill pill-sensitivity">SYNTHETIC</span>
@@ -1093,29 +1161,44 @@ kbd {
         <span class="search-slash" aria-hidden="true">/</span>
         <input id="search-input" type="search" placeholder="Search paths, files, runs..." autocomplete="off" spellcheck="false">
       </label>
+      <select id="fs-search-scope" class="hud-btn" aria-label="Search scope" hidden>
+        <option value="directory">This folder</option>
+        <option value="subtree">This subtree</option>
+        <option value="workspace">Whole workspace</option>
+      </select>
       <div class="seg-group" role="group" aria-label="View mode">
         <button id="btn-mode-3d" class="seg-btn active" type="button" data-view="3d">3D</button>
         <button id="btn-mode-grid" class="seg-btn" type="button" data-view="grid" title="Toggle 2D Grid (G)">Grid</button>
-        <button id="btn-mode-sql" class="seg-btn" type="button" data-view="sql">SQL</button>
       </div>
       <div class="seg-group" role="group" aria-label="Landscape theme">
         <button id="btn-theme-night" class="seg-btn active" type="button" data-theme="night">Night</button>
         <button id="btn-theme-grass" class="seg-btn" type="button" data-theme="grass">Grass</button>
       </div>
       <button id="btn-tree-toggle" class="hud-btn" type="button" aria-expanded="false" aria-controls="tree-panel" title="Toggle accessible directory tree">Tree</button>
-      <button id="btn-spotlight-ab" class="hud-btn" type="button" title="Switch Spotlight v2 / Baseline">Spot: v2</button>
-      <button id="btn-motion" class="hud-btn" type="button" title="Toggle motion (M)">Motion</button>
-      <button id="btn-frame-all" class="hud-btn" type="button" title="Frame entire tree (F)">Frame</button>
-      <button id="btn-export-live" class="hud-btn hud-btn-accent" type="button" hidden>Export HTML</button>
-      <button id="btn-print" class="hud-btn" type="button" title="Print top-down map and 2D grid">Print</button>
+      <details class="advanced-hud">
+        <summary class="hud-btn">More</summary>
+        <div class="advanced-actions">
+          <button id="btn-mode-sql" class="seg-btn" type="button" data-view="sql">SQL</button>
+          <button id="btn-spotlight-ab" class="hud-btn" type="button" title="Switch Spotlight v2 / Baseline">Spot: v2</button>
+          <button id="btn-motion" class="hud-btn" type="button" title="Toggle motion (M)">Motion</button>
+          <button id="btn-frame-all" class="hud-btn" type="button" title="Frame entire tree (F)">Frame</button>
+          <button id="btn-export-live" class="hud-btn hud-btn-accent" type="button" hidden>Export HTML</button>
+          <button id="btn-print" class="hud-btn" type="button" title="Print top-down map and 2D grid">Print</button>
+        </div>
+      </details>
       <button id="btn-help" class="hud-btn hud-icon-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">?</button>
     </div>
   </header>
 
   <!-- Sensitivity / Stale Banners (thin strip directly below HUD when active) -->
   <div id="banner-stack" class="banner-stack">
+    <div id="webgl-fallback-notice" class="banner" hidden>WebGL is unavailable. Browsing in Grid.</div>
     <div id="sensitivity-banner" class="banner banner-sensitivity" hidden></div>
     <div id="stale-banner" class="banner banner-stale" role="status" hidden></div>
+    <div class="filesystem-status">
+      <span id="fs-coverage" role="status" hidden></span>
+      <button id="fs-continue" class="hud-btn" type="button" hidden>Load more</button>
+    </div>
     <div id="search-results-bar" class="search-results-bar" hidden></div>
   </div>
 
@@ -1135,7 +1218,7 @@ kbd {
   <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object content, details, links, and evidence" hidden>
     <div class="drawer-header">
       <div class="drawer-title-group">
-        <span id="inspector-kind-badge" class="kind-badge">PASS</span>
+        <span id="inspector-kind-badge" class="kind-badge"></span>
         <div>
           <h2 id="inspector-title">Object</h2>
           <p id="inspector-path" class="drawer-subtitle"></p>
@@ -1160,7 +1243,7 @@ kbd {
   </aside>
 
   <!-- Full 2D Grid Fallback / Triage View -->
-  <main id="grid-view" class="overlay-view" aria-label="2D Triage Grid" hidden>
+  <main id="grid-view" class="overlay-view" aria-label="Grid browser" hidden>
     <div class="grid-toolbar">
       <div id="grid-filters" class="grid-filters"></div>
       <div id="grid-summary-stats" class="grid-summary-stats"></div>
@@ -1221,9 +1304,9 @@ kbd {
             <tr><td><kbd>Enter</kbd></td><td>Fly to and select focused object</td></tr>
             <tr><td><kbd>Esc</kbd></td><td>Close inspector or climb to parent</td></tr>
             <tr><td><kbd>F</kbd></td><td>Frame entire filesystem tree</td></tr>
-            <tr><td><kbd>/</kbd></td><td>Search across all paths &amp; objects (including aggregated)</td></tr>
-            <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Previous / next failure</td></tr>
-            <tr><td><kbd>G</kbd></td><td>Toggle 2D Grid triage view</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Search within the selected scope</td></tr>
+            <tr class="outcome-shortcut"><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Previous / next failure</td></tr>
+            <tr><td><kbd>G</kbd></td><td>Toggle Grid view</td></tr>
             <tr><td><kbd>M</kbd></td><td>Toggle reduced motion</td></tr>
             <tr><td><kbd>?</kbd></td><td>Show / hide this help dialog</td></tr>
           </tbody>
@@ -15067,6 +15150,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.state = initialPayload.state;
       this.sensitivity = initialPayload.sensitivity;
       this.meta = initialPayload.meta || {};
+      this.filesystem = mode === 'live' && initialPayload.server?.filesystem === true;
+      this.fsGeneration = null;
       this._blobCache = new Map();
       this._indexAttachments();
       this._refreshSequence = 0;
@@ -15105,6 +15190,25 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
       const q = params.toString();
       return q ? `?${q}` : '';
+    }
+
+    async queryFilesystem(operation, params, signal) {
+      if (!this.filesystem) throw new Error('Live filesystem unavailable');
+      const resp = await fetch(`/fs/${operation}?${new URLSearchParams(params)}`, {
+        cache: 'no-store', headers: this._liveHeaders(), signal,
+      });
+      if (!resp.ok) {
+        const error = new Error(`Filesystem request failed (HTTP ${resp.status})`);
+        error.status = resp.status;
+        throw error;
+      }
+      return resp.json();
+    }
+
+    applyFilesystemNodes(nodes, generation) {
+      this.fsGeneration = generation;
+      this.state = { ...this.state, nodes, items: [], groups: [] };
+      this._indexAttachments();
     }
 
     async refreshLive() {
@@ -15153,7 +15257,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     async fetchPreviewSlot(objectId, slot) {
-      if (this.mode === 'live') {
+      if (this.mode === 'live' && !this.filesystem) {
         const url = `/content/${encodeURIComponent(objectId)}/${encodeURIComponent(slot)}${this._liveQuerySuffix()}`;
         const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
         if (!resp.ok) return null;
@@ -15168,7 +15272,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
     async loadAttachmentBytes(itemId, name) {
       if (this.mode === 'live') {
-        const url = `/attachments/${encodeURIComponent(itemId)}/${encodeURIComponent(name)}${this._liveQuerySuffix()}`;
+        const ref = this._blobCache.get(JSON.stringify([itemId, name]));
+        if (this.filesystem && !ref) return null;
+        const url = this.filesystem
+          ? `/fs/attachment?${new URLSearchParams({ id: itemId, name, generation: this.fsGeneration, digest: ref.digest })}`
+          : `/attachments/${encodeURIComponent(itemId)}/${encodeURIComponent(name)}${this._liveQuerySuffix()}`;
         const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
         if (!resp.ok) return null;
         const buf = await resp.arrayBuffer();
@@ -15295,6 +15403,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     return `node/${encodePart(nodeId)}`;
   }
 
+  function isWorkspace(descriptor) {
+    return descriptor?.tool === 'josh-room' && descriptor.group_label === 'Directory';
+  }
+
+  function isFailureKind(kind) {
+    return kind === 'fail' || kind === 'error' || kind === 'critical';
+  }
+
   function shapeToSymbol(shape) {
     if (shape === 'notch') return '×';
     if (shape === 'hollow') return '○';
@@ -15308,7 +15424,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const shape = (def && def.shape) || 'solid';
       const label = (def && def.label) || kind;
       const color = (def && def.color) || '#8A93A6';
-      const isFailure = shape === 'notch' || kind === 'fail' || kind === 'error' || kind === 'critical';
+      const isFailure = isFailureKind(kind);
       entries.push({
         kind,
         label,
@@ -15339,12 +15455,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         color: def.color || '#8A93A6',
         shape,
         symbol: shapeToSymbol(shape),
-        isFailure: shape === 'notch' || kind === 'fail' || kind === 'error' || kind === 'critical',
+        isFailure: isFailureKind(kind),
       };
     }
     // Never silently rewrite an unrecognized kind to PASS
     const safeKind = kind || 'unknown';
-    const isFailure = safeKind === 'fail' || safeKind === 'error' || safeKind === 'critical';
+    const isFailure = isFailureKind(safeKind);
     return {
       kind: safeKind,
       label: safeKind,
@@ -15371,7 +15487,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       byKind[kind] = (byKind[kind] || 0) + 1;
       const entry = getLegendEntry(descriptor, kind);
       if (entry.isFailure) fail += 1;
-      else if (entry.shape === 'hollow' || kind === 'skip') skip += 1;
+      else if (kind === 'skip') skip += 1;
       else if (kind === 'pass') pass += 1;
       else other += 1;
     }
@@ -15409,18 +15525,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     return Math.min(4, bin);
   }
 
-  function degreeOfInterestScore(item, descriptor) {
-    const entry = getLegendEntry(descriptor, item.kind);
-    const kindWeight = entry.isFailure ? 1000000 : (entry.shape === 'hollow' ? 0 : 10000);
-    const metricVal = typeof item.metric === 'number' && Number.isFinite(item.metric) ? item.metric : 0;
-    return kindWeight + metricVal;
-  }
-
   function sortItemsByInterest(items, descriptor) {
+    const filesystem = isWorkspace(descriptor);
     return (items || []).slice().sort((a, b) => {
-      const diff = degreeOfInterestScore(b, descriptor) - degreeOfInterestScore(a, descriptor);
-      if (diff !== 0) return diff;
-      return String(a.id).localeCompare(String(b.id));
+      if (filesystem) return a.label.localeCompare(b.label) || a.id.localeCompare(b.id);
+      const priority = (item) => isFailureKind(item.kind) ? 2 : Number(item.kind !== 'skip');
+      return priority(b) - priority(a) || (b.metric || 0) - (a.metric || 0) || a.id.localeCompare(b.id);
     });
   }
 
@@ -15497,12 +15607,16 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
             summary: raw.summary || null,
             updated_at: raw.updated_at,
             fields: raw.fields || {},
+            previews: raw.previews || [],
+            attachments: raw.attachments || [],
+            links: raw.links || [],
             dirChildren: [],
             leafChildren: [],
             allDescendantLeaves: [],
             counts: null,
           };
           allTreeNodesById.set(treeId, dirNode);
+          recordIncomingLinks(raw.id, path, raw.label, dirNode.links);
           const kids = childrenByParent.get(raw.id) || [];
           for (const kid of kids) {
             const built = buildRec(kid, treeId, path, depth + 1);
@@ -15528,7 +15642,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           path,
           parentPath,
           depth,
-          kind: raw.kind || 'pass',
+          kind: raw.kind || 'unknown',
           metric: raw.metric != null ? raw.metric : null,
           updated_at: raw.updated_at,
           summary: raw.summary || null,
@@ -15703,6 +15817,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     const expandedPedestals = opts.expandedPedestals || new Set();
 
     const unified = buildUnifiedTree(descriptor, state);
+    const selected = unified.allTreeNodesById.get(opts.selectedNodeId);
+    const selectedAncestors = new Set();
+    for (let node = selected; node; node = unified.allTreeNodesById.get(node.parentId)) {
+      selectedAncestors.add(node.id);
+    }
     const breaks = computeQuantileBreaks(unified.allLeaves);
 
     const pedestals = [];
@@ -15718,14 +15837,13 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     const DEPTH_STEP_Z = unified.isUnixTree ? 10.6 : 13.0;
 
     // Pass 1: Measure every directory's pedestal dimensions & recursive subtree width
-    const planByDirId = new Map();
-
     const measureDir = (dir) => {
       const isRoot = dir.depth === 0;
       const autoCollapsed = (
         !isRoot &&
         dir.dirChildren.length > 0 &&
         dir.allDescendantLeaves.length > SUBTREE_COLLAPSE_THRESHOLD &&
+        !selectedAncestors.has(dir.id) &&
         !expandedDirs.has(dir.id) &&
         !(dir.groupId && expandedDirs.has(dir.groupId))
       );
@@ -15778,7 +15896,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         subtreeWidth = Math.max(dims.width, childrenSpan);
       }
 
-      const plan = {
+      return {
         dir,
         autoCollapsed,
         aggregatedLeaves,
@@ -15791,8 +15909,6 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         gap,
         subtreeWidth,
       };
-      planByDirId.set(dir.id, plan);
-      return plan;
     };
 
     const rootPlan = measureDir(unified.treeRoot);
@@ -15804,6 +15920,13 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const ranked = sortItemsByInterest(leaves, descriptor);
       const visible = plan.aggregatedLeaves ? ranked.slice(0, AGGREGATE_TOP_K) : ranked;
       const hidden = plan.aggregatedLeaves ? ranked.slice(AGGREGATE_TOP_K) : [];
+      if (hidden.length && selected?.parentId === plan.dir.id && selected.nodeType === 'item') {
+        const index = hidden.indexOf(selected);
+        if (index >= 0) {
+          hidden[index] = visible[visible.length - 1];
+          visible[visible.length - 1] = selected;
+        }
+      }
       const totalSlots = visible.length + (hidden.length > 0 ? 1 : 0);
       const cols = Math.min(plan.dims.cols, Math.max(1, totalSlots));
       const rows = Math.ceil(totalSlots / cols);
@@ -15900,6 +16023,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         // Keep `.depth` numeric pedestal Z dimension for scene3d compatibility + `.treeDepth` for level
         depth: plan.dims.depth,
         treeDepth: d.depth,
+        coverage: d.fields?.coverage,
         height: plan.dims.height,
         counts: d.counts,
         collapsed: plan.autoCollapsed,
@@ -15955,6 +16079,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (!plan.childPlans.length) return pedNode;
 
       const stepZ = d.depth === 0 ? DEPTH_STEP_Z_FIRST : DEPTH_STEP_Z;
+      const deepestDeck = (row) => row.reduce((depth, child) => Math.max(depth, child.dims.depth), 0);
+      const rowSpacing = (nearDepth, farDepth) => Math.max(stepZ, (nearDepth + farDepth) / 2 + 4.8);
+      const frontDepth = deepestDeck(plan.frontRow);
+      const frontZ = z - rowSpacing(pedNode.depth, frontDepth);
       const placeChildRow = (rowPlans, rowZ, isBackRow, aisleX) => {
         if (!rowPlans.length) return;
         const rowSpan = (
@@ -15962,8 +16090,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           Math.max(0, rowPlans.length - 1) * plan.gap
         );
         let curX = x - rowSpan / 2;
-        const busZ = (z - pedNode.depth / 2 + rowZ + 1.5) * 0.5;
-        const clampedBusZ = Math.min(z - pedNode.depth / 2 - 2.0, Math.max(rowZ + 2.2, busZ));
+        const busZ = (z - pedNode.depth / 2 + rowZ + deepestDeck(rowPlans) / 2) / 2;
 
         for (const cp of rowPlans) {
           const cx = curX + cp.subtreeWidth / 2;
@@ -15977,8 +16104,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
               childId: childPed.id,
               points: [
                 [pedNode.x, 0.04, pedNode.z - pedNode.depth / 2],
-                [pedNode.x, 0.04, clampedBusZ],
-                [childPed.x, 0.04, clampedBusZ],
+                [pedNode.x, 0.04, busZ],
+                [childPed.x, 0.04, busZ],
                 [childPed.x, 0.04, childPed.z + childPed.depth / 2],
               ],
             });
@@ -16003,17 +16130,16 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       };
 
       if (plan.useTwoTierRows) {
-        const frontZ = z - stepZ;
-        const backZ = frontZ - stepZ;
+        const backZ = frontZ - rowSpacing(frontDepth, deepestDeck(plan.backRow));
         const frontSpan = (
           plan.frontRow.reduce((acc, cp) => acc + cp.subtreeWidth, 0) +
           Math.max(0, plan.frontRow.length - 1) * plan.gap
         );
-        const aisleX = x + (plan.frontRow.length % 2 === 0 ? 0 : (frontSpan / 2 + 1.5));
+        const aisleX = x + frontSpan / 2 + 0.9;
         placeChildRow(plan.frontRow, frontZ, false, aisleX);
         placeChildRow(plan.backRow, backZ, true, aisleX);
       } else {
-        placeChildRow(plan.childPlans, z - stepZ, false, x);
+        placeChildRow(plan.childPlans, frontZ, false, x);
       }
 
       return pedNode;
@@ -16071,6 +16197,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
   global.RoomViewLayout = {
     BLOCK_WIDTH,
     BLOCK_GAP,
+    isWorkspace,
     QUANTILE_HEIGHTS,
     makeGroupNodeId,
     makeStageNodeId,
@@ -17098,7 +17225,35 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     setLayout(layout, { descriptor = null, runEstablishingShot = false, preserveCamera = false } = {}) {
+      const previous = this.layout?.nodeById.get(this.selectedNodeId);
+      const selected = layout.nodeById.get(this.selectedNodeId);
       this.layout = layout;
+      if (selected?.nodeType === 'item' && this.spotState.targetActive) {
+        this._bindSpotlight(selected);
+      } else if (!selected && this.selectedNodeId) {
+        this.flight = null;
+        this.selectedNodeId = null;
+        this.focusedPedestalId = 'root';
+        Object.assign(this.spotState, { active: false, targetActive: false, dimL: 0, spotL: 0 });
+        this._applyLightingAndDimming();
+      }
+      for (const id of this._blockLodState.keys()) {
+        if (!layout.nodeById.has(id)) this._blockLodState.delete(id);
+      }
+      if (preserveCamera && previous && selected) {
+        const delta = new this.THREE.Vector3(
+          selected.x - previous.x, selected.y - previous.y, selected.z - previous.z
+        );
+        if (this.flight) {
+          this.flight.toPos.add(delta);
+          this.flight.toTarget.add(delta);
+        } else {
+          this.camPos.add(delta);
+          this.camTarget.add(delta);
+          this.camera.position.copy(this.camPos);
+          this.camera.lookAt(this.camTarget);
+        }
+      }
       if (descriptor) this.descriptor = descriptor;
       this._clearWorldGroup();
       this._buildWorldGeometry(layout);
@@ -17710,7 +17865,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
       for (const ped of layout.pedestals) {
         const failSuffix = ped.counts.fail ? ` · ${ped.counts.fail} fail` : '';
-        const sub = ped.collapsed
+        const sub = global.RoomViewLayout.isWorkspace(this.descriptor)
+          ? `${ped.childDirCount + ped.directLeafCount} listed · ${ped.coverage || 'coverage unknown'}`
+          : ped.collapsed
           ? `${ped.counts.total} items (expand)`
           : `${ped.counts.total} items${failSuffix}`;
         const labelTitle = layout.isUnixTree ? ped.path : ped.label;
@@ -17720,14 +17877,19 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
 
       for (const sNode of layout.summaryBlocks) {
-        addLabelEntry(sNode, sNode.label, `${sNode.counts.fail} fail`, 60, 1.75, sNode.y + sNode.height + 0.42, 0.0, -45);
+        const subtitle = global.RoomViewLayout.isWorkspace(this.descriptor)
+          ? `${sNode.counts.total} listed files`
+          : `${sNode.counts.fail} fail`;
+        addLabelEntry(sNode, sNode.label, subtitle, 60, 1.75, sNode.y + sNode.height + 0.42, 0.0, -45);
       }
 
       for (const b of layout.blocks) {
         const unit = this.descriptor && this.descriptor.metric && this.descriptor.metric.unit
           ? ` ${this.descriptor.metric.unit}`
           : '';
-        const mText = b.item.metric != null ? `${b.item.metric}${unit}` : '';
+        const mText = Number.isSafeInteger(b.item.fields?.file_bytes) && global.RoomViewLayout.isWorkspace(this.descriptor)
+          ? `${b.item.fields.file_bytes} B`
+          : b.item.metric != null ? `${b.item.metric}${unit}` : '';
         addLabelEntry(b, b.label, mText, 30, 1.65, b.y + b.height + 0.46, 0.0, -40);
       }
       // Keep both variants of current labels, including shared and temporarily hidden ones.
@@ -17898,21 +18060,25 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
     }
 
-    _startSpotlightOnBlock(blockNode) {
-      const clickStart = performance.now();
+    _bindSpotlight(blockNode) {
       const s = this.spotState;
-      const moved = s.targetX !== blockNode.x || s.targetZ !== blockNode.z || !s.targetActive;
       s.targetX = blockNode.x;
       s.targetZ = blockNode.z;
       s.floorY = blockNode.y;
       s.blockTop = blockNode.y + blockNode.height;
       s.blockHalfDiag = Math.hypot(blockNode.width * 0.5, blockNode.depth * 0.5);
+      this._positionSpotlightOnState();
+    }
+
+    _startSpotlightOnBlock(blockNode) {
+      const clickStart = performance.now();
+      const s = this.spotState;
+      this._bindSpotlight(blockNode);
       s.fromDimL = s.dimL;
       s.fromSpotL = s.spotL;
       s.targetActive = true;
       s.active = true;
       s.startTime = performance.now();
-      if (moved) this._positionSpotlightOnState();
       this.requestRender();
       this.stats.lastFirstClickMs = Math.round((performance.now() - clickStart) * 10) / 10;
     }
@@ -17928,7 +18094,20 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.requestRender();
     }
 
-    _flyTo(destPos, destTarget, { instant = false } = {}) {
+    _directoryWaypoints(fromId, toId) {
+      const from = [...this._ancestorChainSet(fromId)];
+      const to = [...this._ancestorChainSet(toId)];
+      if (!from.length || !to.length) return [];
+      while (from.length > 1 && to.length > 1 && from.at(-2) === to.at(-2)) {
+        from.pop();
+        to.pop();
+      }
+      // The shared ancestor occurs once on the path. Endpoints already have a camera pose.
+      return from.concat(to.slice(0, -1).reverse()).slice(1, -1)
+        .map((id) => this.layout.nodeById.get(id));
+    }
+
+    _flyTo(destPos, destTarget, { instant = false, fromId = 'root', toId = 'root' } = {}) {
       this.cancelIntroAndTour();
       destPos.y = Math.max(0.75, destPos.y);
       if (instant || this.reducedMotion) {
@@ -17962,15 +18141,24 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         fromTarget: this.camTarget.clone(),
         toTarget: destTarget.clone(),
       };
+      const stops = this._directoryWaypoints(fromId, toId);
+      if (stops.length) {
+        const { Vector3, CatmullRomCurve3 } = this.THREE;
+        const positions = stops.map((p) => new Vector3(p.x + 1.2, p.height + 5, p.z + p.depth / 2 + 3));
+        const targets = stops.map((p) => new Vector3(p.x, p.height + 1, p.z));
+        this.flight.positionCurve = new CatmullRomCurve3([this.flight.fromPos, ...positions, this.flight.toPos]);
+        this.flight.targetCurve = new CatmullRomCurve3([this.flight.fromTarget, ...targets, this.flight.toTarget]);
+      }
       this.requestRender();
     }
 
     frameOverview({ instant = false } = {}) {
+      const fromId = this.focusedPedestalId;
       this.selectedNodeId = null;
       this.focusedPedestalId = 'root';
       this.clearSpotlight();
       this._updateColorsAndSelection();
-      this._flyTo(this.overviewPos.clone(), this.overviewTarget.clone(), { instant });
+      this._flyTo(this.overviewPos.clone(), this.overviewTarget.clone(), { instant, fromId });
     }
 
     focusNode(nodeId, { moveCamera = true, instant = false } = {}) {
@@ -17978,6 +18166,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const node = this.layout.nodeById.get(nodeId);
       if (!node) return null;
       const THREE = this.THREE;
+      const fromId = this.focusedPedestalId;
 
       if (node.nodeType === 'item') {
         this.selectedNodeId = node.id;
@@ -17995,7 +18184,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
             node.y + Math.sin(elev) * dist + 1.35,
             node.z + Math.cos(elev) * dist
           );
-          this._flyTo(pos, target, { instant });
+          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       } else if (node.nodeType === 'root') {
         this.frameOverview({ instant });
@@ -18019,7 +18208,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
             node.height + Math.sin(elev) * dist + 1.25,
             node.z + node.depth / 2 + Math.cos(elev) * dist * 0.78
           );
-          this._flyTo(pos, target, { instant });
+          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       } else if (node.nodeType === 'more' || node.nodeType === 'stage-summary') {
         this.selectedNodeId = node.id;
@@ -18029,7 +18218,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         if (moveCamera) {
           const target = new THREE.Vector3(node.x, node.y + 1.0, node.z);
           const pos = new THREE.Vector3(node.x + 1.8, node.y + 4.4, node.z + 7.2);
-          this._flyTo(pos, target, { instant });
+          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       }
       return node;
@@ -18153,14 +18342,20 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const f = this.flight;
         const tRaw = (now - f.startTime) / f.durationMs;
         const e = sigmoidEase(tRaw);
-        const omt = 1 - e;
-        this.camPos.set(
-          omt * omt * f.fromPos.x + 2 * omt * e * f.midPos.x + e * e * f.toPos.x,
-          Math.max(0.75, omt * omt * f.fromPos.y + 2 * omt * e * f.midPos.y + e * e * f.toPos.y),
-          omt * omt * f.fromPos.z + 2 * omt * e * f.midPos.z + e * e * f.toPos.z
-        );
-        const lookE = sigmoidEase(Math.min(1, tRaw * 1.15));
-        this.camTarget.lerpVectors(f.fromTarget, f.toTarget, lookE);
+        if (f.positionCurve) {
+          f.positionCurve.getPoint(e, this.camPos);
+          f.targetCurve.getPoint(e, this.camTarget);
+          this.camPos.y = Math.max(0.75, this.camPos.y);
+        } else {
+          const omt = 1 - e;
+          this.camPos.set(
+            omt * omt * f.fromPos.x + 2 * omt * e * f.midPos.x + e * e * f.toPos.x,
+            Math.max(0.75, omt * omt * f.fromPos.y + 2 * omt * e * f.midPos.y + e * e * f.toPos.y),
+            omt * omt * f.fromPos.z + 2 * omt * e * f.midPos.z + e * e * f.toPos.z
+          );
+          const lookE = sigmoidEase(Math.min(1, tRaw * 1.15));
+          this.camTarget.lerpVectors(f.fromTarget, f.toTarget, lookE);
+        }
         this.camera.position.copy(this.camPos);
         this.camera.lookAt(this.camTarget);
         if (tRaw >= 1) this.flight = null;
@@ -18284,6 +18479,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.descriptor = descriptor;
       this.state = state;
       this.layout = layout;
+      const restoreFocus = this.rootEl.contains(document.activeElement);
       this.rootEl.textContent = '';
       this.nodeElements.clear();
       this.modelById.clear();
@@ -18316,8 +18512,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           const ranked = global.RoomViewLayout.sortItemsByInterest(leaves, descriptor);
           const pedLayout = layout.nodeById.get(dirNode.id);
           const aggregated = pedLayout ? Boolean(pedLayout.aggregated) : (ranked.length > 16);
-          const visible = aggregated ? ranked.slice(0, 11) : ranked;
-          const hidden = aggregated ? ranked.slice(11) : [];
+          const visible = aggregated ? ranked.filter(leaf => layout.itemNodeById.has(leaf.objectId)) : ranked;
+          const hidden = aggregated ? ranked.filter(leaf => !layout.itemNodeById.has(leaf.objectId)) : [];
 
           visible.forEach((leaf, idx) => {
             const entry = global.RoomViewLayout.getLegendEntry(descriptor, leaf.kind);
@@ -18440,9 +18636,20 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       };
 
       renderNode(rootModel, this.rootEl, 1, 1);
+      if (!this.nodeElements.has(this.focusedId)) {
+        let fallback = this.modelById.get(this.focusedId);
+        while (fallback && !this.nodeElements.has(fallback.id)) fallback = this.modelById.get(fallback.parentId);
+        this.focusedId = fallback?.id || 'root';
+        this.nodeElements.get(this.focusedId).tabIndex = 0;
+      }
+      if (restoreFocus) this.nodeElements.get(this.focusedId)?.focus({ preventScroll: true });
     }
 
     toggleExpand(nodeId) {
+      if (this.callbacks.onToggle && this.modelById.get(nodeId)?.nodeType !== 'more') {
+        this.callbacks.onToggle(nodeId, !this.expanded.has(nodeId));
+        return;
+      }
       if (this.expanded.has(nodeId)) this.expanded.delete(nodeId);
       else this.expanded.add(nodeId);
       this.build(this.descriptor, this.state, this.layout);
@@ -18465,7 +18672,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (announcement) this.announce(announcement);
     }
 
-    selectAndFocus(nodeId, { emit = true, domFocus = false } = {}) {
+    selectAndFocus(nodeId, { emit = true, domFocus = this.rootEl.contains(document.activeElement) } = {}) {
       if (!this.modelById.has(nodeId)) return;
       this.selectedId = nodeId;
       this.focusedId = nodeId;
@@ -18499,17 +18706,15 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       } else if (direction === 'right' && curModel) {
         if (curModel.children && curModel.children.length) {
           if (!this.expanded.has(curModel.id)) {
-            this.expanded.add(curModel.id);
-            this.build(this.descriptor, this.state, this.layout);
+            this.toggleExpand(curModel.id);
+            return;
           }
           const firstChild = curModel.children[0];
           if (firstChild) this.selectAndFocus(firstChild.id, { emit: true });
         }
       } else if (direction === 'left' && curModel) {
         if (this.expanded.has(curModel.id) && curModel.children.length) {
-          this.expanded.delete(curModel.id);
-          this.build(this.descriptor, this.state, this.layout);
-          this.selectAndFocus(curModel.id, { emit: true });
+          this.toggleExpand(curModel.id);
         } else if (curModel.parentId) {
           this.selectAndFocus(curModel.parentId, { emit: true });
         }
@@ -18594,7 +18799,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
             b.classList.toggle('active', b.getAttribute('data-filter') === filterValue);
           });
           if (this.descriptor && this.state && this.layout) {
-            this.render(this.descriptor, this.state, this.layout);
+            this.render(this.descriptor, this.state, this.layout, this.scope);
           }
         });
         return btn;
@@ -18609,14 +18814,22 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     setSearch(query) {
       this.searchQuery = (query || '').trim().toLowerCase();
       if (this.descriptor && this.state && this.layout) {
-        this.render(this.descriptor, this.state, this.layout);
+        this.render(this.descriptor, this.state, this.layout, this.scope);
       }
     }
 
-    render(descriptor, state, layout) {
+    render(descriptor, state, layout, scope = {}) {
       this.descriptor = descriptor;
       this.state = state;
       this.layout = layout;
+      this.scope = scope;
+      const workspace = global.RoomViewLayout.isWorkspace(descriptor);
+      document.body.toggleAttribute('data-workspace', workspace);
+      if (this.filtersEl) this.filtersEl.hidden = workspace;
+      if (workspace) {
+        this._renderDirectory();
+        return;
+      }
       this._syncFilterChips(descriptor);
 
       const allLeaves = (layout && layout.allLeaves) || [];
@@ -18713,6 +18926,78 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
 
       this._renderPrintTable(descriptor, allLeaves);
+    }
+
+    _renderDirectory() {
+      const dir = this.layout.allTreeNodesById.get(this.scope.directoryId || 'root');
+      const path = dir?.path || '/';
+      const coverage = this.scope.coverage || dir?.fields?.coverage || 'Completeness unknown';
+      const folders = dir?.dirChildren || [];
+      const files = dir?.leafChildren || [];
+      const byName = (a, b) => (a.segmentLabel || a.label).localeCompare(b.segmentLabel || b.label) ||
+        a.id.localeCompare(b.id);
+      const children = [...folders.slice().sort(byName), ...files.slice().sort(byName)];
+      const rows = children.filter((node) => {
+        const label = node.segmentLabel || node.label;
+        return label.toLowerCase().includes(this.searchQuery);
+      });
+      const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${coverage}`;
+      this.summaryEl.textContent = summary;
+      const activeId = this.contentEl.contains(document.activeElement)
+        ? document.activeElement.getAttribute('data-item-id') : null;
+      this.contentEl.textContent = '';
+      const table = document.createElement('table');
+      table.className = 'directory-list';
+      const caption = document.createElement('caption');
+      caption.className = 'sr-only';
+      caption.textContent = summary;
+      const head = document.createElement('thead');
+      const headings = document.createElement('tr');
+      for (const title of ['Name', 'Type', 'Size']) {
+        const th = document.createElement('th');
+        th.scope = 'col';
+        th.textContent = title;
+        headings.appendChild(th);
+      }
+      head.appendChild(headings);
+      const body = document.createElement('tbody');
+      let focusTarget;
+      for (const node of rows) {
+        const folder = node.nodeKind === 'directory';
+        const tr = document.createElement('tr');
+        if (node.id === this.scope.selectedId) tr.className = 'selected';
+        const name = document.createElement('td');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = node.segmentLabel || node.label;
+        button.title = node.path;
+        button.setAttribute('data-item-id', node.objectId);
+        button.addEventListener('click', () => this.callbacks.onSelectItem?.(node.objectId));
+        if (activeId === node.objectId) focusTarget = button;
+        name.appendChild(button);
+        const type = document.createElement('td');
+        type.textContent = folder ? 'Folder' : global.RoomViewLayout.getLegendEntry(this.descriptor, node.kind).label;
+        const size = document.createElement('td');
+        const bytes = node.fields?.file_bytes;
+        size.textContent = !folder && Number.isSafeInteger(bytes) && bytes >= 0 ? `${bytes} B` : '—';
+        tr.append(name, type, size);
+        body.appendChild(tr);
+      }
+      table.append(caption, head, body);
+      this.contentEl.appendChild(table);
+      if (!rows.length) {
+        const message = document.createElement('p');
+        message.textContent = this.searchQuery ? 'No matching observed entries in this folder.'
+          : coverage === 'complete' ? 'No visible entries in this folder.' : 'No entries available in this observation.';
+        this.contentEl.appendChild(message);
+      }
+      focusTarget?.focus({ preventScroll: true });
+      if (this.printTableEl) {
+        const copy = table.cloneNode(true);
+        copy.querySelector('caption').className = '';
+        copy.querySelectorAll('button').forEach((button) => button.replaceWith(button.textContent));
+        this.printTableEl.replaceChildren(copy);
+      }
     }
 
     _renderPrintTable(descriptor, allLeaves) {
@@ -19063,6 +19348,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.lightboxCaption = document.getElementById('lightbox-caption');
 
       this.currentItem = null;
+      this.contentFingerprint = null;
       this.currentObjectId = null;
       this.activeTab = 'content';
       this.activePreviewSlot = null;
@@ -19109,8 +19395,16 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     hide() {
+      this._attRequestSeq++;
       this._teardownPdf();
+      this.lightboxEl.hidden = true;
+      this.lightboxImg.removeAttribute('src');
+      this.lightboxCaption.textContent = '';
+      for (const el of [this.tabContentEl, this.tabDetailsEl, this.tabEvidenceEl, this.tabTimelineEl, this.titleEl, this.pathEl]) {
+        el.textContent = '';
+      }
       this.currentItem = null;
+      this.contentFingerprint = null;
       this.currentObjectId = null;
       this.activePreviewSlot = null;
       this.drawerEl.hidden = true;
@@ -19121,13 +19415,26 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false } = {}) {
+      const sameObject = this.currentObjectId === (target.objectId || target.id);
+      const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
+      if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {
+        this.currentItem = target;
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        return;
+      }
+      const changed = preserveTab && sameObject && this.contentFingerprint !== fingerprint;
+      this._attRequestSeq++;
       this._teardownPdf();
+      this.lightboxEl.hidden = true;
+      this.lightboxImg.removeAttribute('src');
+      this.contentFingerprint = fingerprint;
+      if (!sameObject) this.activePreviewSlot = null;
       this.currentItem = target;
       this.currentObjectId = target.objectId || target.id;
       this.drawerEl.hidden = false;
 
       const entry = global.RoomViewLayout.getLegendEntry(descriptor, target.kind);
-      this.badgeEl.textContent = `${entry.symbol} ${entry.label}`;
+      this.badgeEl.textContent = target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`;
       this.badgeEl.style.color = entry.color;
       this.badgeEl.style.borderColor = entry.color;
       this.badgeEl.style.borderStyle = entry.shape === 'hollow' ? 'dashed' : 'solid';
@@ -19145,6 +19452,19 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
+      if (changed) {
+        this.tabContentEl.textContent = '';
+        this.tabEvidenceEl.textContent = '';
+        const reopen = document.createElement('button');
+        reopen.type = 'button';
+        reopen.textContent = 'Content changed. Open current version';
+        reopen.addEventListener('click', () => this.showTarget(this.currentItem, descriptor, state, layout, { quantileBin }));
+        this.tabContentEl.append(reopen);
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        this._renderTimeline(target, state);
+        this.switchTab('content');
+        return;
+      }
       this._renderContent(target, descriptor, layout);
       this._renderDetails(target, descriptor, layout, quantileBin);
       this._renderTimeline(target, state);
@@ -19365,7 +19685,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         ['ID', target.objectId || target.id],
         ['Path', target.path || '—'],
         ['Type', target.nodeKind || 'file'],
-        ['Outcome', `${entry.symbol} ${entry.label} (${target.kind})`],
+        [global.RoomViewLayout.isWorkspace(descriptor) ? 'Kind' : 'Outcome', target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`],
         [metricName, target.metric != null ? `${target.metric}${unit}${quantileBin ? ` (Bin ${quantileBin}/5)` : ''}` : '—'],
         ['Updated', target.updated_at || '—'],
       ];
@@ -19936,6 +20256,160 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 })(window);
 
 
+// === filesystem_search.js ===
+// Live filesystem search uses the same admitted, generation-bound pages as navigation.
+(function (global) {
+  'use strict';
+
+  class SearchWalk {
+    constructor(list, start, generation, recursive, query) {
+      this.list = list;
+      this.pending = [start];
+      this.generation = generation;
+      this.recursive = recursive;
+      this.query = query.toLowerCase();
+      this.cursor = null;
+      this.folders = 0;
+      this.examined = 0;
+      this.skipped = 0;
+      this.matches = [];
+    }
+
+    async advance(signal) {
+      const hits = this.matches.splice(0, 16);
+      for (let pages = 0; this.pending.length && pages < 8 && hits.length < 16; pages++) {
+        const result = await this.list(this.pending[0], this.generation, this.cursor, signal);
+        signal.throwIfAborted();
+        if (result.generation !== this.generation) throw new Error('Observation changed');
+        const ancestors = [...result.ancestors, result.directory];
+        const path = ancestors.map(node => node.label).filter(label => label && label !== '/');
+        const matches = [];
+        this.cursor = result.cursor;
+        if (!this.cursor) {
+          this.pending.shift();
+          this.folders++;
+          if (result.coverage !== 'complete') this.skipped++;
+        }
+        for (const node of result.entries) {
+          this.examined++;
+          if (this.recursive && node.node_kind === 'directory') {
+            if (this.pending.length < 2048) this.pending.push(node.id);
+            else this.skipped++;
+          }
+          const fullPath = '/' + [...path, node.label].join('/');
+          if (fullPath.toLowerCase().includes(this.query)) matches.push({ node, ancestors, fullPath });
+        }
+        hits.push(...matches.splice(0, 16 - hits.length));
+        this.matches.push(...matches);
+      }
+      return { hits, more: Boolean(this.pending.length || this.matches.length) };
+    }
+  }
+
+  class RoomViewFilesystemSearch {
+    constructor({ list, select, directory, root, generation }) {
+      this.list = list;
+      this.select = select;
+      this.directory = directory;
+      this.root = root;
+      this.generation = generation;
+      this.input = document.getElementById('search-input');
+      this.bar = document.getElementById('search-results-bar');
+      this.scope = document.getElementById('fs-search-scope');
+      this.scope.hidden = false;
+      this.input.placeholder = 'Search by name or path';
+      this.input.addEventListener('input', () => this.start());
+      this.scope.addEventListener('change', () => this.start());
+      this.input.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          this.input.value = '';
+          this.invalidate();
+        }
+      });
+    }
+
+    invalidate() {
+      this.controller?.abort();
+      this.walk = null;
+      this.bar.replaceChildren();
+      this.bar.hidden = true;
+    }
+
+    start() {
+      this.invalidate();
+      const query = this.input.value.trim();
+      if (!query) return;
+      this.bar.hidden = false;
+      if (!this.generation()) {
+        this.status('Waiting for this folder to load.');
+        this.button('Retry search', () => this.start());
+        return;
+      }
+      const start = this.scope.value === 'workspace' ? this.root() : this.directory();
+      this.walk = new SearchWalk(this.list, start, this.generation(), this.scope.value !== 'directory', query);
+      this.controller = new AbortController();
+      this.advance();
+    }
+
+    button(label, act) {
+      const element = document.createElement('button');
+      element.type = 'button';
+      element.className = 'search-hit';
+      element.textContent = label;
+      element.addEventListener('click', act);
+      this.bar.appendChild(element);
+      return element;
+    }
+
+    status(label) {
+      const element = document.createElement('span');
+      element.setAttribute('role', 'status');
+      element.textContent = label;
+      this.bar.appendChild(element);
+    }
+
+    async advance() {
+      const walk = this.walk;
+      const signal = this.controller.signal;
+      const hadFocus = this.bar.contains(document.activeElement);
+      this.bar.replaceChildren();
+      this.status('Searching live folder listings…');
+      const cancel = this.button('Cancel search', () => {
+        this.invalidate();
+        this.input.focus();
+      });
+      if (hadFocus) cancel.focus();
+      try {
+        const {hits, more} = await walk.advance(signal);
+        if (signal.aborted) return;
+        const moveFocus = this.bar.contains(document.activeElement);
+        this.bar.replaceChildren();
+        const coverage = more ? 'Partial search' : (walk.skipped ? 'Search ended with incomplete coverage' : 'Search complete for admitted entries');
+        this.status(`${coverage}. ${walk.examined} entries observed, ${walk.folders} folder listings finished. ${hits.length} matches on this page.`);
+        if (walk.skipped) this.status(`${walk.skipped} folder listings unavailable or beyond the search limit.`);
+        for (const hit of hits) {
+          this.button(hit.fullPath, () => {
+            this.invalidate();
+            this.select(hit.node, hit.ancestors);
+          });
+        }
+        if (more) this.button('Continue search', () => this.advance());
+        if (moveFocus) (this.bar.querySelector('button') || this.input).focus();
+      } catch {
+        if (signal.aborted) return;
+        this.bar.replaceChildren();
+        this.status('Search interrupted. The folder or its observation may have changed.');
+        this.button('Restart search', () => this.start());
+      }
+    }
+  }
+
+  global.RoomViewFilesystemSearch = RoomViewFilesystemSearch;
+  if (typeof module !== 'undefined' && module.exports) module.exports = { SearchWalk };
+})(globalThis);
+
+
 // === app.js ===
 // Main shared Room View controller (used identically by live localhost and offline single-file HTML).
 // Implements arbitrary-depth NAVIGATE, typed read-only INSPECT, clickable relationship jumps,
@@ -19959,8 +20433,15 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       );
 
       this.expandedDirs = new Set();
+      this.collapsedDirs = new Set();
       this.expandedPedestals = new Set();
       this.history = [];
+      this.forward = [];
+      this.fsPage = null;
+      this.fsRequest = null;
+      this.fsBusy = false;
+      this.fsCoverage = this.data.filesystem ? 'loading' : null;
+      if (this.data.filesystem) this.data.applyFilesystemNodes([this._placeholderRoot()], null);
       this.currentNodeId = 'root';
       this.failureIndex = -1;
       this.webglActive = false;
@@ -19988,6 +20469,22 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         document.getElementById('aria-live-region'),
         {
           onSelectNode: (nodeId) => this.handleNodeSelect(nodeId, { fromTree: true }),
+          onToggle: (nodeId, expand) => {
+            if (expand) this.expandDirectory(nodeId);
+            else {
+              this._remember(nodeId);
+              this.currentNodeId = nodeId;
+              this.expandedDirs.delete(nodeId);
+              this.collapsedDirs.add(nodeId);
+              this.evidence.hide();
+              this.scene3d?.clearSpotlight();
+              this._rebuildLayout({ preserveCamera: true });
+              this.ariaTree.syncFromWorld(nodeId);
+              this._updateBreadcrumbs();
+              this._renderGrid();
+              this._updateNavigationButtons();
+            }
+          },
           onExpandMore: (pedId) => this.expandPedestal(pedId),
         }
       );
@@ -20000,8 +20497,198 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this._exposeDebugHandle();
 
       if (this.data.mode === 'live') {
+        if (this.data.filesystem) this._openFilesystem('root', { pushHistory: false });
         this._startLivePolling();
       }
+    }
+
+    _placeholderRoot() {
+      return { id: 'root', node_kind: 'directory', parent_id: null, label: '/' };
+    }
+
+    _treeId(node) {
+      return node.parent_id == null ? 'root' : global.RoomViewLayout.makeCustomNodeId(node.id);
+    }
+
+    _directoryId() {
+      const current = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      return current?.nodeType === 'item' ? current.parentId : current?.id || 'root';
+    }
+
+    _renderGrid() {
+      this.gridView.render(this.data.descriptor, this.data.state, this.layout, {
+        directoryId: this._directoryId(),
+        selectedId: this.currentNodeId,
+        coverage: this.fsCoverage,
+      });
+    }
+
+    _updateNavigationButtons() {
+      document.getElementById('btn-back').disabled = !this.history.length;
+      document.getElementById('btn-forward').disabled = !this.forward.length;
+      document.getElementById('btn-up').disabled = this.currentNodeId === 'root';
+      const badge = document.getElementById('fs-coverage');
+      const more = document.getElementById('fs-continue');
+      badge.hidden = !this.fsCoverage;
+      if (this.fsCoverage) badge.textContent = this.fsCoverage;
+      more.hidden = !this.data.filesystem || !(this.fsRetry || this.fsResume || this.fsPage?.cursor);
+      more.disabled = this.fsBusy;
+      more.textContent = this.fsRetry ? 'Retry' : 'Continue';
+    }
+
+    _remember(nodeId) {
+      if (this.currentNodeId === nodeId) return;
+      this.history.push(this.currentNodeId);
+      if (this.history.length > 40) this.history.shift();
+      this.forward.length = 0;
+    }
+
+    async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
+      refresh = false, instant = false, moveCamera = true } = {}) {
+      this.fsRequest?.abort();
+      this.fsResume = null;
+      const previousPage = this.fsPage;
+      const previousNode = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      const previousChain = previousPage
+        ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
+          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
+      const request = new AbortController();
+      this.fsRequest = request;
+      this.fsBusy = true;
+      this.fsRetry = false;
+      const generation = this.data.fsGeneration;
+      const query = (name, params) => this.data.queryFilesystem(name, {
+        ...(generation ? { generation } : {}), ...params,
+      }, request.signal);
+      if (!refresh) {
+        this.filesystemSearch?.invalidate();
+        this.fsCoverage = 'Loading directory…';
+        this._updateNavigationButtons();
+      }
+      try {
+        let page = this.fsPage;
+        if (!kind && id !== 'root') {
+          const inspected = await query('inspect', { id });
+          kind = inspected.node.node_kind;
+        }
+        const isFile = Boolean(kind && kind !== 'directory');
+        let file = null;
+        if (isFile) {
+          const preview = await query('preview', { id });
+          file = preview.node;
+          if (page?.directory.id !== file.parent_id) {
+            page = await query('list', { id: file.parent_id });
+          }
+        } else {
+          page = await query('list', { id, ...(cursor ? { cursor } : {}) });
+        }
+        if (request.signal.aborted) return;
+        const selected = file || page.directory;
+        const selectedId = this._treeId(selected);
+        const previousId = this.currentNodeId;
+        if (pushHistory) this._remember(selectedId);
+        const nodes = new Map();
+        for (const node of [...page.ancestors, page.directory, ...page.entries, selected]) {
+          nodes.set(node.id, node);
+        }
+        this.fsPage = page;
+        const dir = nodes.get(page.directory.id);
+        nodes.set(dir.id, { ...dir, fields: { ...dir.fields, coverage: page.coverage,
+          entries_on_page: page.entries.length, examined: page.examined, omitted: page.omitted } });
+        this.fsCoverage = `${page.coverage} · ${page.entries.length} shown · ${page.examined} examined · ${page.omitted} omitted`;
+        this.currentNodeId = selectedId;
+        this.data.applyFilesystemNodes(Array.from(nodes.values()), page.generation);
+        this._syncFromData();
+        const target = this.layout.allTreeNodesById.get(selectedId);
+        const block = this.layout.nodeById.get(selectedId);
+        if (!refresh) {
+          this.scene3d?.focusNode(selectedId, { instant, moveCamera });
+          this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
+        }
+        if (target && (file || (id !== 'root' && !refresh))) {
+          this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
+            quantileBin: block?.quantileBin, preserveTab: previousId === selectedId,
+          });
+        } else if (!refresh) this.evidence.hide();
+      } catch (error) {
+        if (request.signal.aborted) return;
+        this.filesystemSearch?.invalidate();
+        this.evidence.hide();
+        this.scene3d?.clearSpotlight();
+        this.fsPage = null;
+        this.fsCoverage = error.status === 409
+          ? 'Workspace changed. Reopen the root to refresh.'
+          : `Directory unavailable (${error.message}).`;
+        this.fsRetry = true;
+        this.data.applyFilesystemNodes([this._placeholderRoot()], null);
+        this.currentNodeId = 'root';
+        this._syncFromData();
+        if ((error.status === 409 || error.status === 404) && previousChain.length) {
+          try {
+            await this._restoreFilesystem(previousChain, request.signal);
+          } catch (_) {
+            if (!request.signal.aborted) {
+              this.fsRetry = true;
+              this.fsCoverage = 'Workspace unavailable. Retry from the root.';
+            }
+          }
+        }
+      } finally {
+        if (!request.signal.aborted) {
+          this.fsBusy = false;
+          this._updateNavigationButtons();
+        }
+      }
+    }
+
+    async _restoreFilesystem(chain, signal) {
+      let index = 1;
+      let directory = 'root';
+      let generation;
+      let cursor;
+      const resume = async () => {
+        this.fsResume = null;
+        this.fsBusy = true;
+        try {
+          for (let batch = 0; batch < 8; batch++) {
+            const page = await this.data.queryFilesystem('list', {
+              id: directory, ...(generation ? { generation } : {}), ...(cursor ? { cursor } : {}),
+            }, signal);
+            if (signal.aborted) return;
+            generation = page.generation;
+            cursor = page.cursor;
+            const next = page.entries.find(node => node.id === chain[index]?.id);
+            if (next?.node_kind === 'directory') {
+              directory = next.id;
+              index++;
+              cursor = null;
+              continue;
+            }
+            if (next || index === chain.length || !cursor) {
+              this.data.fsGeneration = generation;
+              this.fsPage = page;
+              this.fsRetry = false;
+              await this._openFilesystem(next?.id || directory, {
+                kind: next?.node_kind || 'directory', pushHistory: false, instant: true,
+              });
+              return;
+            }
+          }
+          this.fsResume = resume;
+          this.fsRetry = false;
+          this.fsCoverage = 'Rechecking selected path. Continue to resume.';
+        } catch (error) {
+          if (signal.aborted) return;
+          this.fsCoverage = `Workspace unavailable (${error.message}). Retry from root.`;
+          this.fsRetry = true;
+        } finally {
+          if (!signal.aborted) {
+            this.fsBusy = false;
+            this._updateNavigationButtons();
+          }
+        }
+      };
+      return resume();
     }
 
     _init3DOrFallback() {
@@ -20109,12 +20796,22 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       liveExportBtn.hidden = this.data.mode !== 'live';
 
       this._renderBottomLegend(desc);
-      this._rebuildLayout({ runEstablishingShot: isInitial, preserveCamera: !isInitial });
-      this.gridView.render(desc, state, this.layout);
+      const signature = JSON.stringify([desc, state.nodes, state.items, state.groups, this.currentNodeId]);
+      if (this.layoutSignature !== signature) {
+        const previous = this.layout;
+        this._rebuildLayout({ runEstablishingShot: isInitial, preserveCamera: !isInitial });
+        while (this.currentNodeId !== 'root' && !this.layout.allTreeNodesById.has(this.currentNodeId)) {
+          this.currentNodeId = previous?.allTreeNodesById.get(this.currentNodeId)?.parentId || 'root';
+        }
+        this.layoutSignature = signature;
+      }
+      this._renderGrid();
+      this._updateNavigationButtons();
+      if (!this.data.filesystem && this.searchInputEl.value) this._runSearch(this.searchInputEl.value);
       this.sqlConsole.renderPresets(desc);
 
       // Reconcile open inspector drawer against refreshed state after live poll!
-      if (!isInitial && this.evidence.isOpen() && this.evidence.currentObjectId) {
+      if (!this.data.filesystem && !isInitial && this.evidence.isOpen() && this.evidence.currentObjectId) {
         const objId = this.evidence.currentObjectId;
         const refreshedLeaf = this.layout.allLeavesByObjectId.get(objId);
         if (refreshedLeaf) {
@@ -20141,7 +20838,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
     _rebuildLayout({ runEstablishingShot = false, preserveCamera = false } = {}) {
       this.layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor, this.data.state, {
+        selectedNodeId: this.currentNodeId,
         expandedDirs: this.expandedDirs,
+        collapsedDirs: this.collapsedDirs,
         expandedPedestals: this.expandedPedestals,
       });
       if (this.scene3d) {
@@ -20151,6 +20850,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           preserveCamera,
         });
       }
+      this.ariaTree.expanded = new Set(this.layout.pedestals.filter(node => !node.collapsed).map(node => node.id));
       this.ariaTree.build(this.data.descriptor, this.data.state, this.layout);
     }
 
@@ -20176,10 +20876,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     expandPedestal(pedestalId) {
       this.expandedPedestals.add(pedestalId);
       this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
-      this.handleNodeSelect(pedestalId, { pushHistory: false });
+      this.ariaTree.syncFromWorld(this.currentNodeId);
     }
 
     expandDirectory(dirId) {
+      this.collapsedDirs.delete(dirId);
       this.expandedDirs.add(dirId);
       this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
     }
@@ -20191,7 +20892,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       while (cur && cur.parentId) {
         const parentId = cur.parentId;
         const parentPed = this.layout.nodeById.get(parentId);
-        if (parentPed && parentPed.collapsed) {
+        if (!parentPed || parentPed.collapsed) {
+          this.collapsedDirs.delete(parentId);
           this.expandedDirs.add(parentId);
           rebuilt = true;
         }
@@ -20205,6 +20907,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
     handleNodeSelect(nodeId, { shiftKey = false, fromTree = false, pushHistory = true, instant = false } = {}) {
       if (!this.layout) return;
+      const logicalNode = this.layout.allTreeNodesById.get(nodeId);
+      if (this.data.filesystem && (logicalNode || nodeId === 'root' || nodeId.startsWith('node/'))) {
+        const id = logicalNode?.objectId || (nodeId === 'root' ? 'root' : decodeURIComponent(nodeId.slice(5)));
+        return this._openFilesystem(id, { kind: logicalNode?.nodeKind, pushHistory, instant, moveCamera: !shiftKey });
+      }
       let node = this.layout.nodeById.get(nodeId);
       if (!node) {
         // Node may live inside a collapsed subtree (>50) or aggregated >16 pedestal!
@@ -20236,11 +20943,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
 
       if (pushHistory && this.currentNodeId && this.currentNodeId !== nodeId) {
-        this.history.push(this.currentNodeId);
-        if (this.history.length > 40) this.history.shift();
+        this._remember(nodeId);
       }
       this.currentNodeId = nodeId;
-      document.getElementById('btn-back').disabled = this.history.length === 0;
+      this._updateNavigationButtons();
+      this._renderGrid();
 
       const freshNode = this.layout.nodeById.get(nodeId) || node;
       if (this.scene3d) {
@@ -20298,15 +21005,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     ascendToParent() {
-      if (this.evidence.isOpen()) {
-        this.evidence.hide();
-        const cur = this.layout && this.layout.nodeById.get(this.currentNodeId);
-        if (cur && cur.parentId) {
-          this.handleNodeSelect(cur.parentId);
-          return;
-        }
-      }
-      const cur = this.layout && this.layout.nodeById.get(this.currentNodeId);
+      const cur = this.layout?.allTreeNodesById.get(this.currentNodeId);
       if (cur && cur.parentId) {
         this.handleNodeSelect(cur.parentId);
       } else {
@@ -20315,8 +21014,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     frameAll({ instant = false } = {}) {
+      if (this.data.filesystem) return this._openFilesystem('root', { instant });
+      this._remember('root');
       this.evidence.hide();
       this.currentNodeId = 'root';
+      this._updateNavigationButtons();
+      this._renderGrid();
       if (this.scene3d) this.scene3d.frameOverview({ instant });
       this.ariaTree.syncFromWorld('root', 'Framed complete filesystem overview');
       this._updateBreadcrumbs();
@@ -20325,7 +21028,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     stepFailure(delta) {
       const allLeaves = (this.layout && this.layout.allLeaves) || [];
       const failures = allLeaves.filter((leaf) => global.RoomViewLayout.getLegendEntry(this.data.descriptor, leaf.kind).isFailure);
-      if (!failures.length) return;
+      if (global.RoomViewLayout.isWorkspace(this.data.descriptor) || !failures.length) return;
+      if (this.failureIndex < 0 && delta < 0) this.failureIndex = 0;
       this.failureIndex = (this.failureIndex + delta + failures.length) % failures.length;
       this.selectItemById(failures[this.failureIndex].objectId, { openInspector: true });
     }
@@ -20368,6 +21072,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const spotLabel = this.spotlightMode === 'v2' ? 'Spot v2' : 'Spot base';
       const draws = this.scene3d ? ` · ${this.scene3d.stats.drawCalls} draws` : ' · 2D';
       const dirInfo = this.layout ? `${this.layout.pedestals.length} dirs · ` : '';
+      if (global.RoomViewLayout.isWorkspace(this.data.descriptor)) {
+        el.textContent = `${dirInfo}${counts.total} observed files`;
+        return;
+      }
       el.textContent = `${dirInfo}${counts.total} objects (${counts.fail} fail) · ${spotLabel}${draws}`;
     }
 
@@ -20537,12 +21245,26 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       document.getElementById('btn-theme-night').addEventListener('click', () => this._applyTheme('night'));
       document.getElementById('btn-theme-grass').addEventListener('click', () => this._applyTheme('grass'));
       document.getElementById('btn-frame-all').addEventListener('click', () => this.frameAll());
+      document.getElementById('btn-forward').addEventListener('click', () => {
+        if (!this.forward.length) return;
+        this.history.push(this.currentNodeId);
+        this.handleNodeSelect(this.forward.pop(), { pushHistory: false });
+      });
+      document.getElementById('btn-up').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('fs-continue').addEventListener('click', () => {
+        if (this.fsResume) this.fsResume();
+        else if (this.fsRetry) this._openFilesystem('root', { pushHistory: false });
+        else if (this.fsPage?.cursor) this._openFilesystem(this.fsPage.directory.id, {
+          cursor: this.fsPage.cursor, kind: 'directory', pushHistory: false,
+        });
+      });
       document.getElementById('btn-back').addEventListener('click', () => {
         if (!this.history.length) return;
         const prev = this.history.pop();
+        this.forward.push(this.currentNodeId);
         this.handleNodeSelect(prev, { pushHistory: false });
       });
-      document.getElementById('btn-inspector-close').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.hide());
       document.getElementById('btn-prev-fail').addEventListener('click', () => this.stepFailure(-1));
       document.getElementById('btn-next-fail').addEventListener('click', () => this.stepFailure(1));
 
@@ -20589,6 +21311,18 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       });
       window.addEventListener('beforeprint', () => this._preparePrint());
 
+      if (this.data.filesystem) {
+        this.filesystemSearch = new global.RoomViewFilesystemSearch({
+          list: (id, generation, cursor, signal) => this.data.queryFilesystem('list', {
+            id, ...(generation ? { generation } : {}), ...(cursor ? { cursor } : {}),
+          }, signal),
+          select: hit => this._openFilesystem(hit.id, { kind: hit.node_kind }),
+          directory: () => this.fsPage?.directory.id || 'root',
+          root: () => 'root',
+          generation: () => this.data.fsGeneration,
+        });
+        return;
+      }
       this.searchInputEl.addEventListener('input', () => this._runSearch(this.searchInputEl.value));
       this.searchInputEl.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') {
@@ -20672,7 +21406,20 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
     _startLivePolling() {
       const intervalMs = Math.max(1000, (this.data.liveConfig && this.data.liveConfig.pollIntervalMs) || 5000);
-      setInterval(async () => {
+      const poll = async () => {
+        if (this.data.filesystem) {
+          if (this.fsBusy || !this.fsPage) return;
+          const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
+          const page = this.fsPage;
+          try {
+            await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
+          } catch (_) {
+            if (page === this.fsPage && !this.fsBusy) {
+              return this._openFilesystem(selected?.objectId || page.directory.id, { kind: selected?.nodeKind, refresh: true, pushHistory: false });
+            }
+          }
+          return;
+        }
         try {
           await this.data.refreshLive();
           this._syncFromData({ isInitial: false });
@@ -20681,7 +21428,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           staleBanner.textContent = 'STALE DATA (poll-connection-error) — retrying automatically';
           staleBanner.hidden = false;
         }
-      }, intervalMs);
+      };
+      this.refresh = poll;
+      setInterval(poll, intervalMs);
     }
 
     _exposeDebugHandle() {
@@ -20740,8 +21489,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           if (app.scene3d) app.scene3d.settleAnimationsImmediately();
         },
         refreshNow: async () => {
-          await app.data.refreshLive();
-          app._syncFromData({ isInitial: false });
+          await app.refresh?.();
         },
         runSql: (q) => app.sqlConsole.execute(q),
         openTab: (tab) => app.evidence.switchTab(tab),
