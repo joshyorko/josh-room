@@ -37,7 +37,9 @@ blocked pending pin retention and crash-consistent orchestration; see the
 
 In desktop VS Code with a Linux workspace extension host, right-click the open Room row and select **Explore Room
 in 3D…**, or use **Josh: Explore Room in 3D…** in the Command Palette. No global
-CLI, Save, or new Logical JAT is required. **Josh: Stop Room 3D Viewer** stops
+CLI, Save, or new Logical JAT is required. Open a directory to browse its children,
+then select a file to read its admitted preview. A partial listing has more work
+remaining. The offline export contains only its bounded observation. **Josh: Stop Room 3D Viewer** stops
 the session; closing only the browser tab does not. Windows desktop clients can
 use a Linux devcontainer/attached-container/SSH workspace through VS Code's
 private loopback forwarding (`remote.localPortHost: localhost`). Native Windows

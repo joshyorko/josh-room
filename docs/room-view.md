@@ -110,11 +110,13 @@ Built-in native providers:
 - `room --workspace <dir>` — bounded read-only workspace observation using Room
   identity, capture policy, descriptor-relative no-follow reads, mount checks,
   and typed sanitized previews. Requires safe descriptor-relative file APIs
-  (verified on Linux); unsupported platforms fail closed. Defaults: 250 nodes,
-  depth 6, 64 children per directory, 5 seconds, 16 KiB per preview and 512 KiB
-  total preview content. Caps produce explicit omissions, not complete coverage.
-  There is no continuation cursor yet. Incomplete sibling scans are withheld
-  rather than admitting names before all aliases are checked.
+  (verified on Linux). Live navigation starts at the root. Opening a folder
+  advances its own listing. Directory pages withhold names until the full sibling
+  scan can rule out ambiguous aliases. Files are read when selected.
+  Offline exports freeze a bounded observation (defaults of 250 nodes, six
+  levels, 64 children per directory, five seconds, 16 KiB per preview and
+  512 KiB of preview content). Each observed directory carries its coverage.
+  A partial or unexamined directory may have additional entries.
 - `capsule-manifest --manifest <file.json>` — validates a saved Logical JAT
   descriptor and displays recorded workspace/component anchors. This validates
   manifest structure, not the existence or digest of underlying archive bytes;

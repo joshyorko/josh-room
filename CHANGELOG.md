@@ -15,6 +15,8 @@
 
 ## [Unreleased]
 
+- Explore live Room directories in bounded pages, inspect individual files on demand, and see which folders a frozen observation covered.
+
 - Keep child folders with reserved composition metadata out of split selection, stop discovery at those boundaries, and reject ambiguous source paths and Win32 sibling aliases.
 - Refuse contradictory offline composition evidence about encrypted objects, parent lineage, optional origins, and timezone offsets.
 - Let users correct overlapping or oversized split selections and explain when discovery has no supported choices.
