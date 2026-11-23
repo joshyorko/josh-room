@@ -336,7 +336,8 @@ test("real Python starts outside a Room containing shadowing modules and stops w
   for (const name of ["secrets.py", "types.py", "typing.py", "logging.py", "dataclasses.py"])
     fs.writeFileSync(path.join(root, name), "raise RuntimeError('Room code must not execute')\n");
   fs.writeFileSync(path.join(root, "example.txt"), "synthetic");
-  const python = cp.execFileSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).trim();
+  const python = process.env.JOSH_ROOM_TEST_PYTHON || path.join(__dirname, "..", ".venv", "bin", "python");
+  if (!fs.existsSync(python)) return t.skip("Python project runtime unavailable; set JOSH_ROOM_TEST_PYTHON");
   const pidFile = path.join(base, "pid");
   const urlFile = path.join(base, "url");
   const code = `
