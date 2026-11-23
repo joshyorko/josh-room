@@ -39,6 +39,7 @@ def register_view_subparser(commands, json_option) -> None:
     serve.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also used for sensitivity policy)")
     serve.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
     serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
+    serve.add_argument("--stop-on-stdin-eof", action="store_true", help=argparse.SUPPRESS)
     serve.add_argument("--expected-workspace-binding", type=json.loads, help=argparse.SUPPRESS)
     serve.add_argument("--expected-room-id", help="require this live Room identity before serving")
     serve.add_argument("--expected-dimension-id", help="require this live Dimension identity before serving")
@@ -132,6 +133,7 @@ def dispatch_view(args) -> dict[str, object]:
             interval=args.interval,
             workspace=args.workspace,
             require_token=bool(args.require_token),
+            stop_on_stdin_eof=bool(args.stop_on_stdin_eof),
             json_mode=bool(getattr(args, "json", False)),
             max_seconds=getattr(args, "max_seconds", None),
         )

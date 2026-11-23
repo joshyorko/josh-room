@@ -1383,3 +1383,54 @@ def test_token_protected_view_survives_private_port_remap_without_allowing_dns_h
             proxy.shutdown()
             proxy.server_close()
             thread.join(timeout=3)
+
+@pytest.mark.parametrize("endpoint", ["/export.html?ack=1", "/export-preview.json", "/export.html?ack=1&no_attachments=1"])
+def test_text_only_export_checks_root_before_sensitivity_and_without_poll(tmp_path, endpoint):
+    root = tmp_path / "room"
+    root.mkdir()
+    (root / "example.txt").write_text("synthetic private preview")
+    (root / ".josh-roomignore").write_text("# josh-room sensitivity: restricted\n")
+    provider = RoomWorkspaceProvider(root)
+    with RoomViewServer(provider, port=0, interval_seconds=60, workspace=root) as server:
+        server.collector.stop()
+        root.rename(tmp_path / "moved")
+        root.mkdir()
+        status, _, body = _raw_http(server.port, "GET", endpoint)
+        assert status == 500
+        assert b"accounting" not in body
+        assert b"synthetic private preview" not in body
+        assert provider.binding_invalidated
+
+
+@pytest.mark.parametrize("endpoint,max_size", [("/export.html", 10_000_000), ("/export.html?ack=1", 100)])
+def test_export_revocation_precedes_ack_and_size_accounting(tmp_path, monkeypatch, endpoint, max_size):
+    (tmp_path / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(tmp_path)
+    original = provider.attachment
+    def revoke(item_id, name):
+        provider._invalidate_binding()
+        return original(item_id, name)
+    with RoomViewServer(provider, port=0, interval_seconds=60, workspace=tmp_path, max_export_bytes=max_size) as server:
+        server.collector.stop()
+        monkeypatch.setattr(provider, "attachment", revoke)
+        status, _, body = _raw_http(server.port, "GET", endpoint)
+        assert status == 500
+        assert b"accounting" not in body
+        assert b"preview" not in body
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        build_offline_export(provider, workspace=tmp_path, sensitivity_ack=True)
+
+
+def test_startup_binding_precedes_invalid_policy_and_requires_linked_room(tmp_path):
+    from josh_room.workspace_state import write_workspace_marker
+    info = tmp_path.stat()
+    binding = {"room_id": None, "dimension_id": None, "encryption_domain_id": None,
+               "composition_namespace": None, "device": str(info.st_dev), "inode": str(info.st_ino)}
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        RoomWorkspaceProvider(tmp_path, expected_binding=binding)
+    write_workspace_marker(tmp_path, dimension_id="alpha", project_id="demo", display_name="Synthetic",
+                           snapshot_id="snap", workspace_fingerprint="a" * 64)
+    (tmp_path / ".josh-roomignore").write_text("# josh-room capture-mode: invalid\n")
+    binding.update(room_id="other", dimension_id="alpha")
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        RoomWorkspaceProvider(tmp_path, expected_binding=binding)

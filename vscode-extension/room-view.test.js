@@ -64,14 +64,14 @@ test("launcher starts the exact selected Room workspace through the managed runt
   const runtimeCall = harness.calls.find((call) => call.args);
   assert.equal(launch.command, "/managed/rcc");
   assert.deepEqual(launch.options, {
-    cwd,
-    env: harness.runtime.env,
+    cwd: require("node:path").join(__dirname, "runtime", "controller"),
+    env: { ...harness.runtime.env, PYTHONSAFEPATH: "1" },
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   assert.deepEqual(runtimeCall.args, [
     "view", "serve", "--provider", "room", "--workspace", cwd,
-    "--port", "0", "--require-token",
+    "--port", "0", "--require-token", "--stop-on-stdin-eof",
   ]);
   assert.equal(runtimeCall.receipt.startsWith(require("node:path").join(require("node:os").tmpdir(), "josh-room-view-")), true);
   assert.equal(harness.opened[0], "http://127.0.0.1:49152/?token=synthetic-token");
@@ -323,4 +323,81 @@ test("private forwarding setting is checked again after runtime startup", async 
   await assert.rejects(launchRoomView({ ...h, cwd: process.cwd() }), { code: "ROOM_VIEW_FORWARD_PRIVATE_REQUIRED" });
   assert.equal(forwards, 0);
   assert.equal(h.child.closed, true);
+});
+
+test("real Python starts outside a Room containing shadowing modules and stops when its owner dies", { timeout: 15000, skip: process.platform !== "linux" }, async t => {
+  const path = require("node:path");
+  const os = require("node:os");
+  const cp = require("node:child_process");
+  const net = require("node:net");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "room-view-owner-"));
+  const root = path.join(base, "room"); fs.mkdirSync(root);
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  for (const name of ["secrets.py", "types.py", "typing.py", "logging.py", "dataclasses.py"])
+    fs.writeFileSync(path.join(root, name), "raise RuntimeError('Room code must not execute')\n");
+  fs.writeFileSync(path.join(root, "example.txt"), "synthetic");
+  const python = cp.execFileSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).trim();
+  const pidFile = path.join(base, "pid");
+  const urlFile = path.join(base, "url");
+  const code = `
+    const fs = require('node:fs');
+    const cp = require('node:child_process');
+    const {launchRoomView} = require(${JSON.stringify(require.resolve("./room-view"))});
+    launchRoomView({ cwd:${JSON.stringify(root)},
+      runtime:{command:${JSON.stringify(python)},env:{PATH:process.env.PATH,PYTHONPATH:${JSON.stringify(path.join(__dirname, "runtime", "controller"))}},args:a=>['-m','josh_room',...a,'--json']},
+      spawn:(...args)=>{const child=cp.spawn(...args);fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));return child;},
+      vscode:{workspace:{isTrusted:true},Uri:{parse:x=>x},env:{openExternal:async()=>true}}
+    }).then(s=>fs.writeFileSync(${JSON.stringify(urlFile)},s.url)).catch(e=>{console.error(e);process.exit(1)});
+  `;
+  const owner = cp.spawn(execPath, ["-e", code], { stdio: ["ignore", "ignore", "pipe"] });
+  let diagnostic = ""; owner.stderr.on("data", chunk => { diagnostic += chunk; });
+  t.after(() => {
+    try { owner.kill("SIGKILL"); } catch {}
+    if (fs.existsSync(pidFile)) { try { process.kill(-Number(fs.readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {} }
+  });
+  const deadline = Date.now() + 10000;
+  while (!fs.existsSync(urlFile) && owner.exitCode === null && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(fs.existsSync(urlFile), true, diagnostic);
+  const url = new URL(fs.readFileSync(urlFile, "utf8"));
+  const http = require("node:http");
+  const state = await new Promise((resolve, reject) => {
+    http.get(new URL('/state.json' + url.search, url), response => {
+      let body=''; response.on('data', chunk=>body+=chunk); response.on('end',()=>resolve({status:response.statusCode,body}));
+    }).on('error', reject);
+  });
+  assert.equal(state.status, 200);
+  assert.match(state.body, /example.txt/);
+  owner.kill("SIGKILL");
+  const stopped = () => new Promise(resolve => {
+    const socket=net.connect({host:'127.0.0.1',port:Number(url.port)});
+    socket.once('connect',()=>{socket.destroy();resolve(false)});
+    socket.once('error',error=>{socket.destroy();resolve(error.code==='ECONNREFUSED')});
+  });
+  let closed = false;
+  while (!(closed = await stopped()) && Date.now() < deadline) await new Promise(resolve=>setTimeout(resolve,25));
+  assert.equal(closed, true, "Viewer listener survived abrupt owner death");
+});
+
+test("leader close kills descendants before receipt IO and disposal awaits receipt validation", async t => {
+  const promises = require("node:fs/promises");
+  const h = createHarness();
+  const session = await launchRoomView({ ...h, cwd: "/workspace" });
+  const receipt = h.calls.find(call => call.receipt).receipt;
+  const original = promises.open;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  promises.open = async (...args) => { if (args[0] === receipt) await gate; return original(...args); };
+  t.after(() => { promises.open = original; release(); });
+  h.child.closed = true;
+  h.child.emit("close", 0);
+  assert.equal(h.child.lastSignal, "SIGKILL");
+  let finished = false;
+  const disposal = session.dispose().then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  assert.equal(fs.existsSync(require("node:path").dirname(receipt)), true);
+  release();
+  await disposal;
+  assert.equal(fs.existsSync(require("node:path").dirname(receipt)), false);
 });

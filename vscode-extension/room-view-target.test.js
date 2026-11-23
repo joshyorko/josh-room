@@ -43,3 +43,18 @@ test("symlinked OS ancestors resolve to the bound root, but a symlinked workspac
   const directAlias = path.join(base, "workspace-alias"); fs.symlinkSync(root, directAlias);
   assert.deepEqual(roomViewTargets([{ uri: { scheme: "file", fsPath: directAlias } }]), []);
 });
+
+test("sidebar selection requires the catalog encryption domain and composition namespace", () => {
+  const marker = { project_id: "demo", dimension_id: "work", encryption_domain_id: "domain-a" };
+  const target = { marker };
+  const item = { kind: "room", project: { id: "demo" }, dimension: { id: "work", encryption_domain_id: "domain-b" } };
+  assert.deepEqual(matchingRoomViewTargets([target], item), []);
+  item.dimension.encryption_domain_id = "domain-a";
+  assert.deepEqual(matchingRoomViewTargets([target], item), [target]);
+  marker.composition_namespace = "a".repeat(32);
+  assert.deepEqual(matchingRoomViewTargets([target], item), []);
+  item.project.composition_namespace = marker.composition_namespace;
+  assert.deepEqual(matchingRoomViewTargets([target], item), [target]);
+  delete marker.encryption_domain_id;
+  assert.deepEqual(matchingRoomViewTargets([target], item), []);
+});

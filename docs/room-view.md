@@ -25,10 +25,11 @@ The Command Palette also offers **Josh: Explore Room in 3D…** with an explicit
 choice among open, entered Rooms. The marker must match the folder, Dimension,
 and Room. The controller verifies the Room/Dimension, encryption domain,
 namespace and directory identity against the original selection at startup
-and pins them for the session. A changed or removed binding invalidates the session's workspace
+and pins them for the session. A changed or removed binding invalidates workspace
 state and attachments; launch it again after entering the intended Room. Save
-within the same Room does not invalidate the viewer. Enter/open a Room first if
-it is not loaded in this window.
+metadata updates within the same Room preserve the viewer. If a Save retry
+temporarily removes the binding marker, reopen the viewer after Save completes.
+Enter/open a Room first if it is not loaded in this window.
 
 This uses the VSIX's private managed controller, not a global `josh-room`
 command. It observes the current on-disk workspace without Save, hydration, or
@@ -36,8 +37,11 @@ a new Logical JAT. Unsaved editor buffers are not included. The browser opens
 the actual allocated `127.0.0.1` URL with a per-session token; do not share that
 URL. The existing capture-policy, bounded read, sanitizer and sensitivity gates
 apply. Workspaces overlapping the managed RCC runtime directory are refused;
-that directory is never exposed as Room content. There is no webview or hosted service.
+that directory is never exposed as Room content. Python starts from the bundled
+controller, never from the observed Room directory. There is no webview or hosted service.
 
+The extension owns a lifetime pipe; loss of its process closes the pipe and stops
+the controller. A remote disconnect alone may keep the remote extension host alive.
 Use **Josh: Stop Room 3D Viewer** to stop the owned session. Starting another
 viewer asks to stop the existing one. Closing the VS Code window or changing
 workspace folders also stops it. Closing the browser tab alone does not stop

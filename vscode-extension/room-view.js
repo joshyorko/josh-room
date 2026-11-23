@@ -93,13 +93,14 @@ async function launchRoomView({
   await fs.chmod(tempDirectory, 0o700);
   const receiptFile = path.join(tempDirectory, "receipt.json");
   const commandArgs = ["view", "serve", "--provider", "room", "--workspace", cwd,
-    "--port", "0", "--require-token"];
+    "--port", "0", "--require-token", "--stop-on-stdin-eof"];
   if (roomBinding) commandArgs.push("--expected-workspace-binding", JSON.stringify(roomBinding));
   let child;
   let closed = false;
   let disposed = false;
   let groupCleaned = false;
   let cleanupPromise;
+  let receiptValidation;
   let startupTimer;
   let startupResolve;
   let startupReject;
@@ -172,6 +173,7 @@ async function launchRoomView({
     disposed = true;
     cleanupPromise = (async () => {
       clearTimeout(startupTimer);
+      child?.stdin?.end();
       if (child?.pid && !closed) {
         signalGroup("SIGTERM");
         if (!closed && !await waitForClose(STOP_GRACE_MS)) {
@@ -183,6 +185,8 @@ async function launchRoomView({
         // leader closes so the launcher never leaves the server behind.
         signalGroup("SIGKILL");
       }
+      if (child?.pid) signalGroup("SIGKILL");
+      await receiptValidation?.catch(() => {});
       await cleanupDirectory();
     })();
     return cleanupPromise;
@@ -229,10 +233,10 @@ async function launchRoomView({
     if (cancellationToken?.isCancellationRequested) throw abortError();
     const args = runtime.args(commandArgs, receiptFile);
     child = spawn(runtime.command, args, {
-      cwd,
-      env: runtime.env,
+      cwd: path.join(__dirname, "runtime", "controller"),
+      env: { ...runtime.env, PYTHONSAFEPATH: "1" },
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     startupPromise = new Promise((resolve, reject) => {
       startupResolve = resolve;
@@ -290,9 +294,11 @@ async function launchRoomView({
       });
       child.once("close", async () => {
         closed = true;
+        signalGroup("SIGKILL");
+        receiptValidation = validateReceipt();
         let receiptError;
         try {
-          await validateReceipt();
+          await receiptValidation;
         } catch (error) {
           receiptError = error;
         }

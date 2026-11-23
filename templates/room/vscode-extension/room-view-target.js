@@ -48,7 +48,11 @@ function matchingRoomViewTargets(targets, item) {
   const dimensionId = project.dimension_id || dimension?.id || dimension?.dimension_id;
   const id = project.project_id || project.id;
   if (!id || !dimensionId) return [];
-  return targets.filter(({ marker }) => marker.project_id === id && marker.dimension_id === dimensionId);
+  const domainId = project.encryption_domain_id || dimension?.encryption_domain_id || dimension?.encryptionDomainId;
+  const namespace = project.composition_namespace || item.composition_namespace || null;
+  return targets.filter(({ marker }) => marker.project_id === id && marker.dimension_id === dimensionId
+    && (!domainId || marker.encryption_domain_id === domainId)
+    && (marker.composition_namespace || null) === namespace);
 }
 
 module.exports = { roomViewTargets, matchingRoomViewTargets };

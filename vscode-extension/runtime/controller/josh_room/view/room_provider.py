@@ -415,7 +415,6 @@ class RoomWorkspaceProvider:
         except OSError as error:
             raise ViewValidationError("workspace-unavailable", "workspace root is unavailable or unsafe") from error
         try:
-            _ = self._capture_policy(fd)
             root_stat = os.fstat(fd)
             self._root_identity = (root_stat.st_dev, root_stat.st_ino)
             self._context = context_status(self._root)
@@ -428,7 +427,7 @@ class RoomWorkspaceProvider:
                 "composition_namespace": self._context.get("composition_namespace"),
                 "device": str(root_stat.st_dev), "inode": str(root_stat.st_ino),
             }
-            if expected_binding is not None and expected_binding != actual_binding:
+            if expected_binding is not None and (not self._context.get("linked") or expected_binding != actual_binding):
                 raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
             if (expected_room_id is None) != (expected_dimension_id is None):
                 raise ViewValidationError("workspace-binding-required", "Room View requires both expected Room and Dimension")
@@ -438,6 +437,7 @@ class RoomWorkspaceProvider:
                 or self._context.get("dimension_id") != expected_dimension_id
             ):
                 raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+            _ = self._capture_policy(fd)
         except ViewValidationError:
             raise
         except (OSError, ValueError) as error:
@@ -463,6 +463,10 @@ class RoomWorkspaceProvider:
                     or self._binding_identity(context) != self._binding):
                 raise self._invalidate_binding()
         return context
+
+    def verify_binding(self) -> None:
+        fd, _ = self._open_bound_root()
+        os.close(fd)
 
     @property
     def binding_invalidated(self) -> bool:

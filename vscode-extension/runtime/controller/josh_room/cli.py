@@ -785,6 +785,7 @@ def build_parser() -> argparse.ArgumentParser:
     view_serve.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also sensitivity policy)")
     view_serve.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
     view_serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
+    view_serve.add_argument("--stop-on-stdin-eof", action="store_true", help=argparse.SUPPRESS)
     view_serve.add_argument("--expected-workspace-binding", type=json.loads, help=argparse.SUPPRESS)
     view_serve.add_argument("--expected-room-id", help="require this live Room identity before serving")
     view_serve.add_argument("--expected-dimension-id", help="require this live Dimension identity before serving")

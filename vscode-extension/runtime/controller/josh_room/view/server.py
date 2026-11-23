@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import secrets
+import sys
 import threading
 import time
 from datetime import UTC, datetime
@@ -224,12 +225,20 @@ class _SnapshotProviderAdapter:
         self.assert_binding()
         return self._state
 
+    def verify_binding(self) -> None:
+        self.assert_binding()
+
     def assert_binding(self) -> None:
+        verify = getattr(self._collector.provider, "verify_binding", None)
+        if callable(verify):
+            verify()
         if getattr(self._collector.provider, "binding_invalidated", False) is True:
             raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
 
     def attachment(self, item_id: str, name: str):
-        return self._collector.provider.attachment(item_id, name)
+        result = self._collector.provider.attachment(item_id, name)
+        self.assert_binding()
+        return result
 
 
 class RoomViewServer:
@@ -463,11 +472,14 @@ class RoomViewServer:
                             policy=owner._policy,
                         )
                         snapshot_provider.assert_binding()
-                    except SensitivityAckRequiredError as error:
-                        self._send_json(HTTPStatus.CONFLICT, error.result, head_only=head_only)
-                        return
-                    except ExportSizeLimitError as error:
-                        self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, error.result, head_only=head_only)
+                    except (SensitivityAckRequiredError, ExportSizeLimitError) as error:
+                        try:
+                            snapshot_provider.assert_binding()
+                        except (ValueError, OSError):
+                            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "export-failed"}, head_only=head_only)
+                            return
+                        status = HTTPStatus.CONFLICT if isinstance(error, SensitivityAckRequiredError) else HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+                        self._send_json(status, error.result, head_only=head_only)
                         return
                     except (ValueError, OSError):
                         self._send_json(
@@ -640,6 +652,7 @@ def serve_forever_cli(
     require_token: bool = False,
     json_mode: bool = False,
     max_seconds: float | None = None,
+    stop_on_stdin_eof: bool = False,
 ) -> dict[str, object]:
     """Run the localhost Room View server until interrupted (or max_seconds)."""
     server = RoomViewServer(
@@ -663,6 +676,27 @@ def serve_forever_cli(
         print(json.dumps(info, sort_keys=True), flush=True)
     else:
         print(f"Room View serving (read-only, localhost) at {server.url}", flush=True)
+    if stop_on_stdin_eof:
+        # The extension owns the pipe writer. EOF also covers a crashed owner,
+        # without trusting the RCC leader's lifetime or leaving an idle server.
+        owner_closed = threading.Event()
+
+        def wait_for_owner() -> None:
+            try:
+                while sys.stdin.buffer.read(1):
+                    pass
+            except (OSError, ValueError):
+                pass
+            finally:
+                owner_closed.set()
+
+        server.start_background()
+        threading.Thread(target=wait_for_owner, name="room-view-owner", daemon=True).start()
+        try:
+            owner_closed.wait(max_seconds)
+        finally:
+            server.shutdown()
+        return info
     if max_seconds is not None:
         server.start_background()
         try:
