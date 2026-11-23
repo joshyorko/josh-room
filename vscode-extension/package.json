@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.52",
+  "version": "1.0.0",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -218,7 +218,7 @@
       },
       {
         "command": "joshRoom.agentSessionsStatus",
-        "title": "Josh: Agent Sessions…",
+        "title": "Josh: Agent Sessions\u2026",
         "icon": "$(comment-discussion)"
       },
       {

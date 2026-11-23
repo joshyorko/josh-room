@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0]
+
+- Add the read-only Room viewer and self-contained offline snapshot exports.
+- Expand Save and New Room's component picker, and add proof-backed opt-in Codex and Claude history for Linux with MinIO. Unsupported modes stay unavailable.
+- Compose child Rooms with explicit pins and parent refresh, and recover exact historical files through Time Machine.
+- Preserve OCI image identities across Hauler capture, Serve, digest pulls, downloads and exports.
+- Improve managed Windows recovery with private credential handoffs and fail-closed recovery checks.
+
 ## [0.1.52]
 
 - feat: exhaustive paginated directory discovery preview (#198) (#204)
