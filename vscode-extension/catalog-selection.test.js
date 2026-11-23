@@ -30,6 +30,7 @@ async function pick(pages, actions) {
     requests.push(request);
     if (request.action === "lookup") return { status: "complete", id: request.id, selected: request.id };
     if (request.action === "page") {
+      assert.equal(request.limit, 32);
       const index = Number(request.after || 0);
       return { status: "complete", candidates: pages[index], next: index < pages.length - 1 ? String(index + 1) : null };
     }
@@ -51,11 +52,13 @@ test("Select All covers the visible eligible page, preserving manual overrides a
 
 test("bulk selection refuses overflow atomically and cancellation produces no selection", async () => {
   const rows = Array.from({ length: 33 }, (_, n) => candidate(`repo-${n}`));
-  const { warnings, result, requests } = await pick([rows], ["repo-0", "Select All on This Page (33)", "Continue with 1 selected"]);
+  const pages = [rows.slice(0, 32), rows.slice(32)];
+  const actions = ["Select All on This Page (32)", "Next page", "Select All on This Page (1)"];
+  const { warnings, result, requests } = await pick(pages, [...actions, "Continue with 32 selected"]);
   assert.match(warnings[0], /33.*at most 32/);
-  assert.deepEqual(result, ["repo-0"]);
-  assert.equal(requests.filter(request => request.action === "lookup").length, 1);
-  assert.equal((await pick([rows], ["Select All on This Page (33)", null])).result, undefined);
+  assert.deepEqual(result, pages[0].map(row => row.path));
+  assert.equal(requests.filter(request => request.action === "lookup").length, 32);
+  assert.equal((await pick(pages, [...actions, null])).result, undefined);
 });
 
 test("nested selections require an explicit choice and empty selections cannot continue", async () => {

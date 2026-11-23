@@ -42,7 +42,7 @@ async function selectCatalogChildren(vscode, request) {
   let page;
   const selected = new Map();
   for (;;) {
-    page ||= await request({ action: "page", suggested, after, query });
+    page ||= await request({ action: "page", suggested, after, query, limit: MAX_CHILDREN });
     if (page.status === "stale") throw new Error("The source changed. Restart Catalog selection.");
     const choices = page.candidates.filter(eligible);
     const rows = [
