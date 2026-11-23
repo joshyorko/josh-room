@@ -91,6 +91,15 @@ def registry_fixture(rows):
             thread.join(5)
 
 
+def diagnostic(path, root):
+    # The fixture is synthetic. Retain a short failure tail, excluding local paths.
+    data = path.read_bytes()[-8192:].decode("utf-8", errors="replace")
+    data = data.replace(str(root), "<fixture>")
+    data = re.sub(r"""[A-Za-z]:[\\/][^\r\n"'<>:;,){}\[\]]+""", "<path>", data)
+    data = re.sub(r"(?i)(authorization|token|secret|password)\s*[:=]\s*\S+", r"\1=<redacted>", data)
+    return data.strip()[-4096:]
+
+
 def verify(root):
     env = dict(os.environ, NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
     read = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
@@ -127,7 +136,8 @@ def verify(root):
              "--images-file", str(images), "--hauler-manifest", str(manifest), "--exclude-extras", "--json"], "capture")
 
     startup = root / "startup.json"
-    with (root / "serve.log").open("wb") as log:
+    serve_log = root / "serve.log"
+    with serve_log.open("wb") as log:
         serve = subprocess.Popen(
             [*room("serve"), "serve", "--haul", str(haul), "--mode", "both", "--startup-file", str(startup), "--json"],
             env=env, cwd=root, stdout=log, stderr=log, start_new_session=os.name != "nt",
@@ -136,6 +146,10 @@ def verify(root):
             deadline = time.monotonic() + 80
             while not startup.exists() and serve.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.2)
+            if not startup.is_file():
+                failure = serve.poll()
+                raise RuntimeError(f"Hauler Serve readiness not recorded; exit={failure}, "
+                                   f"diagnostic={diagnostic(serve_log, root) or '(no output)'}")
             ready = json.loads(startup.read_text(encoding="utf-8"))["serve"]
             image, = ready["image_mapping"]["images"]
             pull = image["pull_reference"]
