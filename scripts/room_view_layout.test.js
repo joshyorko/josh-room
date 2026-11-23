@@ -52,7 +52,7 @@ test('a selected block moving between slots carries its spotlight on layout refr
     _blockLodState: new Map(), THREE: { Vector3: class {
       constructor(x, y, z) { Object.assign(this, { x, y, z }); }
     } }, camPos: { add(delta) { this.dx = delta.x; } }, camTarget: { add() {} },
-    camera: { position: { copy() {} }, lookAt() {} },
+    camera: { position: { copy() {} }, lookAt() {}, updateProjectionMatrix() {} },
     _clearWorldGroup() {}, _buildWorldGeometry() {}, _computeOverviewCamera() {},
     _updateBlockMatrices() {}, _positionSpotlightOnState() {}, requestRender() {},
   });

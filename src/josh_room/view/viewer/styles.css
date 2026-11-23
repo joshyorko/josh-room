@@ -299,7 +299,13 @@ body {
 .hud-left .hud-icon-btn { background: transparent; border-color: transparent; }
 .crumb-btn { padding: 0 2px; color: var(--text-muted); }
 .crumb-btn[aria-current] { color: var(--text); }
-.session-badges { display: flex; gap: 5px; padding: 3px; }
+.room-heading, .session-badges { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.room-heading { gap: 8px; }
+.session-badges { flex-shrink: 0; }
+.session-badges .pill { font-size: 9px; }
+.world-key summary { cursor: pointer; padding: 4px; }
+#menu-map-key { display: grid; gap: 4px; padding: 5px; }
+#menu-map-key .legend-sep { display: none; }
 [data-workspace] .hud-bottom { display: none; }
 .banner-sensitivity { border-left: 3px solid #eeb665; }
 @media (max-width: 760px) {
@@ -324,7 +330,7 @@ body {
   justify-content: space-between;
 }
 
-.banner-sensitivity { background: var(--surface); color: #ffdfa8; }
+.banner-sensitivity { background: var(--warn-bg); color: #fff6f2; }
 .banner-stale { background: var(--stale-bg); color: #fff4ed; border-bottom: 1px solid rgba(255, 180, 140, 0.5); }
 
 .filesystem-status {
@@ -480,8 +486,13 @@ body {
   max-height: min(100%, 530px);
   height: fit-content;
 }
-.filesystem-reader:has(#tab-compare:not([hidden])) {
-  width: min(630px, calc(100vw - 24px));
+.filesystem-reader:has(#file-summary:not([hidden])) .drawer-tabs,
+.filesystem-reader:has(#file-summary:not([hidden])) .drawer-body { display: none; }
+#file-summary { padding: 6px 12px 12px; }
+#file-summary-info { margin: 4px 0 10px; color: var(--text-muted); }
+.file-summary-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.filesystem-reader:has(#btn-reader-back:not([hidden])) {
+  width: min(740px, calc(100vw - 24px));
   max-height: 100%;
 }
 .filesystem-reader .drawer-title-group { display: grid; gap: 4px; }

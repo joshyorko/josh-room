@@ -193,3 +193,51 @@ def test_selected_file_revalidated_after_read(tmp_path, monkeypatch):
     with pytest.raises(ViewValidationError) as failure:
         adapter.preview(nodes["sample.py"]["id"], gen)
     assert failure.value.code == "filesystem-stale"
+
+
+def test_scene_sample_preserves_interactive_handles_and_continuations(tmp_path, monkeypatch):
+    monkeypatch.setattr(filesystem, "_MAX_HANDLES", 6)
+    monkeypatch.setattr(filesystem, "_MAX_SAMPLE_HANDLES", 8)
+    for folder in ("active", "first", "second"):
+        (tmp_path / folder).mkdir()
+        for i in range(170 if folder == "active" else 8):
+            (tmp_path / folder / f"entry-{i}").touch()
+    (tmp_path / "selected.txt").touch()
+    provider = RoomWorkspaceProvider(tmp_path)
+
+    def unexpected_read(*args):
+        pytest.fail("directory samples must not read file content")
+    monkeypatch.setattr(provider, "_read_regular_file_bytes", unexpected_read)
+    adapter = provider.open_filesystem()
+    gen, top = entries(adapter)
+    active = top["active"]["id"]
+    start = adapter.listing(active, gen)
+    wide = adapter.listing(active, gen, sample=True)
+    assert not wide["entries"] and wide["coverage"] == "partial" and wide["cursor"] is None
+
+    first = adapter.listing(top["first"]["id"], gen, sample=True)
+    selected = first["entries"][0]["id"]
+    assert adapter.inspect(selected, gen)["node"]["id"] == selected
+    adapter.listing(top["second"]["id"], gen, sample=True)
+    assert adapter.inspect(selected, gen)["node"]["id"] == selected
+    assert adapter.inspect(top["selected.txt"]["id"], gen)["node"]["label"] == "selected.txt"
+    # An interactive continuation retains authority even across a changed sampled file.
+    (tmp_path / "first" / first["entries"][0]["label"]).write_text("changed")
+    with pytest.raises(ViewValidationError) as failure:
+        adapter.listing(top["first"]["id"], gen, sample=True)
+    assert failure.value.code == "filesystem-stale"
+    assert adapter.listing(active, gen, start["cursor"])["entries"]
+    adapter.close()
+
+
+def test_scene_sample_requires_known_scope_and_full_alias_admission(tmp_path):
+    (tmp_path / "visible").touch()
+    (tmp_path / "ambiguous").touch()
+    (tmp_path / "Ambiguous").touch()
+    adapter = RoomWorkspaceProvider(tmp_path).open_filesystem()
+    gen, _ = entries(adapter)
+    assert [node["label"] for node in adapter.listing("root", gen, sample=True)["entries"]] == ["visible"]
+    for args in (("root",), ("root", "other"), ("unknown", gen), ("root", gen, "cursor")):
+        with pytest.raises(ViewValidationError):
+            adapter.listing(*args, sample=True)
+    adapter.close()

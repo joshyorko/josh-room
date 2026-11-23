@@ -84,3 +84,50 @@ test('a stale file handle rechecks ancestors and selects only the same admitted 
   assert.equal(app.currentNodeId, 'node/dir');
   assert.equal(app.layout.allLeavesByObjectId.size, 0);
 });
+
+require('../src/josh_room/view/viewer/data_layer.js');
+
+test('seven real directory IDs acquire a bounded landscape independently of the current listing', async () => {
+  const folders = Array.from({length: 7}, (_, n) => ({ ...dir, id: 'dir' + n, label: 'folder' + n, fields: {coverage: 'not-examined'} }));
+  const deeper = { ...dir, id: 'deep', parent_id: 'dir3' };
+  const leaf = { ...file, id: 'context-file', parent_id: deeper.id, previews: [{body: 'private body'}] };
+  const app = appFixture();
+  Object.assign(app, { viewMode: '3d', sceneContext: [], scene3d: {setLayout(layout) { this.layout = layout; }} });
+  const data = app.data;
+  const calls = [];
+  data.sceneNeighborhood = window.RoomViewData.RoomViewDataLayer.prototype.sceneNeighborhood;
+  data.queryFilesystem = async (op, {id, sample, cursor, generation}) => {
+    calls.push([op, id, sample, cursor, generation]);
+    const directory = [deeper, ...folders].find(d => d.id === id);
+    return {directory, generation: 'current', coverage: id === 'dir0' ? 'partial' : 'complete',
+      entries: id === deeper.id ? [leaf] : id === 'dir3' ? [deeper] : [] };
+  };
+  const page = listing(root, folders, 'current');
+  app.fsPage = page;
+  data.applyFilesystemNodes([root, ...folders], 'current');
+  app._syncFromData();
+  await app._sampleScene(page);
+  assert.deepEqual(calls.map(c => c[1]), ['dir3', 'dir0', 'dir6', 'deep']);
+  assert.ok(calls.every(([op, , sample, cursor, gen]) =>
+    op === 'list' && sample === '1' && !cursor && gen === 'current'));
+  assert.equal(data.state.nodes.length, 8);
+  assert.equal(app.layout.allLeavesByObjectId.size, 0);
+  assert.equal(app.scene3d.layout.allLeavesByObjectId.get(leaf.id).previews.length, 0);
+  assert.equal(app.scene3d.layout.nodeById.get('node/dir0').coverage, 'partial');
+  assert.equal(app.scene3d.layout.nodeById.get('node/dir1').coverage, 'not-examined');
+});
+
+test('late geometry from an abandoned sample cannot reappear after navigation', async () => {
+  const app = appFixture();
+  const page = listing(root, [dir]);
+  let release;
+  Object.assign(app, {viewMode: '3d', fsPage: page, sceneContext: [], scene3d: {}});
+  app.data.sceneNeighborhood = () => new Promise(resolve => { release = resolve; });
+  const pending = app._sampleScene(page);
+  app._clearSceneContext();
+  app.fsPage = listing(other, []);
+  release([file]);
+  await pending;
+  assert.deepEqual(app.sceneContext, []);
+  assert.equal(app.currentNodeId, 'root');
+});

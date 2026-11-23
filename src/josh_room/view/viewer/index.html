@@ -24,7 +24,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <button id="btn-forward" class="hud-btn hud-icon-btn" type="button" title="Go forward" aria-label="Go forward" disabled>&#8594;</button>
       <button id="btn-up" class="hud-btn hud-icon-btn" type="button" title="Go to parent folder" aria-label="Go to parent folder" disabled>&#8593;</button>
       <div class="room-location">
-        <strong id="room-title"></strong>
+        <div class="room-heading"><strong id="room-title"></strong><div class="session-badges"><span id="badge-mode" class="pill pill-mode">Offline</span> <span id="badge-sensitivity" class="pill pill-sensitivity"></span></div></div>
         <nav id="breadcrumbs" class="breadcrumbs" aria-label="Directory path"></nav>
       </div>
     </div>
@@ -50,8 +50,8 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <details class="advanced-hud">
         <summary class="hud-btn">More</summary>
         <div class="advanced-actions">
-          <div class="session-badges"><span id="badge-mode" class="pill pill-mode">Offline</span> <span id="badge-sensitivity" class="pill pill-sensitivity"></span></div>
-      <button id="btn-help" class="hud-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">Keyboard help</button>
+          <button id="btn-help" class="hud-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">Keyboard help</button>
+          <details class="world-key"><summary>Map key</summary><div id="menu-map-key"></div></details>
           <button id="btn-mode-sql" class="seg-btn" type="button" data-view="sql">SQL</button>
           <button id="btn-spotlight-ab" class="hud-btn" type="button" title="Switch Spotlight v2 / Baseline">Spot: v2</button>
           <button id="btn-motion" class="hud-btn" type="button" title="Toggle motion (M)">Motion</button>
@@ -102,9 +102,17 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <div class="drawer-header-actions">
         <button id="btn-prev-fail" class="hud-btn hud-sm" type="button" title="Previous failure ([)">[ Fail</button>
         <button id="btn-next-fail" class="hud-btn hud-sm" type="button" title="Next failure (])">Fail ]</button>
+        <button id="btn-reader-back" class="hud-btn hud-sm" type="button" hidden>Back to file</button>
         <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector (Esc)">&times;</button>
       </div>
     </div>
+    <section id="file-summary" aria-label="Selected file" hidden>
+      <p id="file-summary-info"></p>
+      <div class="file-summary-actions">
+        <button id="btn-read-file" class="hud-btn" type="button">Read file</button>
+        <button id="btn-compare-file" class="hud-btn" type="button" hidden>Compare saved version</button>
+      </div>
+    </section>
     <div class="drawer-tabs" role="tablist" aria-label="Inspector sections">
       <button class="tab-btn active" role="tab" aria-selected="true" data-tab="content" type="button">Content <span id="content-count-badge" class="tab-count">0</span></button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="details" type="button">Details</button>

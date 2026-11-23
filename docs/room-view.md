@@ -231,6 +231,14 @@ A complete listing with zero admitted entries means there are no visible
 children under the current policy. Boundaries and inaccessible listings carry
 their own status. Reopen the directory if the server revokes its generation.
 
+In live 3D, `GET /fs/list?id=<issued-id>&generation=<generation>&sample=1`
+observes a single sibling-scan batch and returns at most eight metadata entries.
+Samples allocate no continuation. A partial sample can show zero children while
+alias validation is unfinished. The landscape samples up to three direct folders,
+one grandchild, the parent and a neighboring branch. Grid, tree, inspector,
+and export retain their own scope. Opening a sampled object runs the usual
+identity-bound listing or selected preview. Offline views use embedded data.
+
 `/fs/inspect` returns metadata for an issued ID. `/fs/preview` reads the
 selected object under the current workspace binding and policy. Binary previews
 use `/fs/attachment` with the admitted name and digest. The server rejects

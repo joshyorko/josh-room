@@ -27,8 +27,10 @@ from .room_provider import (
 
 _SCAN_BATCH = 128
 _PAGE = 48
+_SCENE_SAMPLE = 8
 _MAX_CURSORS = 8
 _MAX_HANDLES = 8192
+_MAX_SAMPLE_HANDLES = 256
 _BLOCKED = {"reserved-boundary", "git-pointer-unsupported", "inaccessible-boundary"}
 
 
@@ -135,6 +137,7 @@ class WorkspaceFilesystem:
         self._generation = None
         self._policy_hash = None
         self._handles = OrderedDict()
+        self._sample_handles = OrderedDict()
         self._cursors = OrderedDict()
         self._last_page = None
 
@@ -143,6 +146,7 @@ class WorkspaceFilesystem:
             scan.close()
         self._cursors.clear()
         self._handles.clear()
+        self._sample_handles.clear()
         self._last_page = None
         self._generation = None
 
@@ -151,6 +155,7 @@ class WorkspaceFilesystem:
             self._clear()
 
     def _remember(self, entry):
+        self._sample_handles.pop(entry.id, None)
         self._handles[entry.id] = entry
         self._handles.move_to_end(entry.id)
         if len(self._handles) > _MAX_HANDLES:
@@ -179,6 +184,7 @@ class WorkspaceFilesystem:
         try:
             policy = self.provider._capture_policy(fd)
             if policy.sha256 != self._policy_hash:
+                self._clear()
                 raise _stale()
             mount = _safe_mount_id(fd)
             if mount is None:
@@ -203,6 +209,8 @@ class WorkspaceFilesystem:
                     os.close(fd)
                     fd = child
                 if stamp(os.fstat(fd)) != stamp(component.info) or _safe_mount_id(fd) != mount:
+                    if index == 0:
+                        self._clear()
                     raise _stale()
                 if index < len(chain) - 1 and self._boundary(component, fd) in _BLOCKED:
                     raise _stale()
@@ -212,30 +220,32 @@ class WorkspaceFilesystem:
             raise
 
     @contextmanager
-    def _bound(self, object_id, generation):
+    def _bound(self, object_id, generation, *, sample=False):
         if generation != self._generation or generation is None:
             raise _stale()
-        entry = self._handles.get(object_id)
+        entry = self._handles.get(object_id) or self._sample_handles.get(object_id)
         if entry is None:
             raise _unknown()
-        self._handles.move_to_end(entry.id)
         try:
             fd, policy = self._open_entry(entry)
             try:
+                if not sample:
+                    self._remember(entry)
                 yield entry, fd, policy
                 fresh, _ = self._open_entry(entry)
                 os.close(fresh)
             finally:
                 os.close(fd)
         except ViewValidationError as error:
-            if error.code in {"filesystem-stale", "workspace-binding-changed"}:
+            if error.code == "workspace-binding-changed" or (not sample and error.code == "filesystem-stale"):
                 self._clear()
             raise
         except (OSError, ValueError):
-            self._clear()
+            if not sample:
+                self._clear()
             raise _stale() from None
 
-    def _child(self, parent, fd, policy, name):
+    def _child(self, parent, fd, policy, name, *, sample=False):
         parts = (*parent.parts, name)
         if policy.is_excluded("/".join(parts)):
             return None
@@ -257,21 +267,32 @@ class WorkspaceFilesystem:
         identity = f"{info.st_dev}:{info.st_ino}:" + "/".join(parts)
         token = hashlib.blake2s(identity.encode(), key=self._key, digest_size=16).hexdigest()
         child = Entry(f"n-{token}", parent, parts, info)
-        self._remember(child)
+        if sample:
+            previous = self._handles.get(child.id) or self._sample_handles.get(child.id)
+            if previous and stamp(previous.info) != stamp(child.info):
+                raise _stale()
+            if child.id not in self._handles:
+                self._sample_handles[child.id] = child
+                self._sample_handles.move_to_end(child.id)
+                if len(self._sample_handles) > _MAX_SAMPLE_HANDLES:
+                    self._sample_handles.popitem(last=False)
+        else:
+            self._remember(child)
         return child
 
-    def _page(self, scan, entry, fd, policy, rows):
+    def _page(self, scan, entry, fd, policy, rows, *, sample=False):
+        limit = _SCENE_SAMPLE if sample else _PAGE
         candidates = scan.db.execute(
             "select name,sortkey,ambiguous from siblings where sortkey>? order by sortkey limit ?",
-            (scan.after, _PAGE + 1),
+            (scan.after, limit + 1),
         ).fetchall()
-        for name, key, aliases in candidates[:_PAGE]:
+        for name, key, aliases in candidates[:limit]:
             scan.after = key
             if aliases:
                 scan.omitted += 1 + aliases
                 continue
             try:
-                child = self._child(entry, fd, policy, name)
+                child = self._child(entry, fd, policy, name, sample=sample)
             except OSError:
                 scan.inaccessible = True
                 child = None
@@ -279,14 +300,16 @@ class WorkspaceFilesystem:
                 rows.append(child.node().to_dict())
             else:
                 scan.omitted += 1
-        return len(candidates) > _PAGE
+        return len(candidates) > limit
 
-    def listing(self, object_id, generation=None, cursor=None):
+    def listing(self, object_id, generation=None, cursor=None, *, sample=False):
+        if sample and (cursor is not None or generation is None):
+            raise ViewValidationError("invalid-query", "sample requires an admitted generation without a cursor")
         with self._lock:
             if object_id == "root" and generation is None and cursor is None:
                 self._bootstrap()
                 generation = self._generation
-            with self._bound(object_id, generation) as (entry, fd, policy):
+            with self._bound(object_id, generation, sample=sample) as (entry, fd, policy):
                 if not stat.S_ISDIR(entry.info.st_mode):
                     raise _unknown()
                 boundary = self._boundary(entry, fd)
@@ -319,8 +342,8 @@ class WorkspaceFilesystem:
                 try:
                     if scan.iterator is not None:
                         scan.advance()
-                    more = scan.iterator is not None or self._page(scan, entry, fd, policy, rows)
-                    if more:
+                    more = scan.iterator is not None or self._page(scan, entry, fd, policy, rows, sample=sample)
+                    if more and not sample:
                         if len(self._cursors) >= _MAX_CURSORS:
                             _, evicted = self._cursors.popitem(last=False)
                             evicted.close()

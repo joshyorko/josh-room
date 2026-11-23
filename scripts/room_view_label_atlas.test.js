@@ -52,6 +52,7 @@ test('live label textures follow the current layout across polls, theme changes 
   const ctx = {
     createRadialGradient: () => ({ addColorStop() {} }),
     createLinearGradient: () => ({ addColorStop() {} }),
+    measureText: text => ({ width: text.length * 7.5 }), scale() {},
     clearRect() {}, fillRect() {}, beginPath() {}, arc() {}, roundRect() {}, fill() {}, stroke() {}, fillText() {},
   };
   const document = { createElement: () => ({ getContext: () => ctx }) };
@@ -87,9 +88,22 @@ test('live label textures follow the current layout across polls, theme changes 
     assert.notEqual(current, stable);
     if (highlighted) assert.equal(current, highlighted);
     highlighted = current;
-    // Root plus normal/highlighted variants for the two distinct file labels.
-    assert.equal(liveTextures.size - lightingTextures.size, 5);
-    assert.equal(scene.labelAtlas.cache.size, 5);
+    const visible = scene.labelPool.filter(label => label.mesh.visible);
+    assert.ok(visible.includes(shared[0]), 'selected file is the first collision priority');
+    for (const label of visible) {
+      const r = label.screenRect;
+      assert.ok(Math.abs(r.right - r.left - label.width) < 0.01);
+      assert.ok(Math.abs(r.bottom - r.top - label.height) < 0.01);
+      assert.ok(r.left >= 0 && r.top >= 0 && r.right <= 1280 && r.bottom <= 720);
+      assert.ok(label.mesh.material.depthTest, 'foreground geometry occludes labels');
+      for (const other of visible.filter(item => item !== label)) {
+        const b = other.screenRect;
+        assert.ok(r.right <= b.left || b.right <= r.left || r.bottom <= b.top || b.bottom <= r.top);
+      }
+    }
+    const textureCount = 3 + visible.filter(label => label.nodeId === scene.selectedNodeId || label.nodeId === scene.hoveredNodeId).length;
+    assert.equal(liveTextures.size - lightingTextures.size, textureCount);
+    assert.equal(scene.labelAtlas.cache.size, textureCount);
   }
   scene.setTheme('grass');
   assert.equal(scene.labelAtlas.cache.size, 3);
@@ -110,32 +124,85 @@ test('camera frames expanded deck corners and recenters the selected file beside
   const context = vm.createContext({ window, performance });
   vm.runInContext(fs.readFileSync(path.join(view, 'viewer', 'scene3d.js'), 'utf8'), context);
   const scene = Object.create(window.RoomViewScene3D.FsnScene3D.prototype);
-  const deck = { id: 'root', x: 0, z: 0, width: 6, depth: 20, height: 0.7 };
-  const children = [-12, 0, 12].map((x, i) => ({
-    id: 'd' + i, parentId: deck.id, x, z: -18, width: 5, depth: 4, height: 0.6,
-  }));
-  Object.assign(scene, { THREE, layout: { pedestals: [deck, ...children] },
+  vm.runInContext(fs.readFileSync(path.join(view, 'viewer', 'layout.js'), 'utf8'), context);
+  const nodes = [{ id: 'root', label: '/', node_kind: 'directory' }];
+  for (let i = 0; i < 7; i++) {
+    const id = 'd' + i;
+    nodes.push({ id, parent_id: 'root', label: id, node_kind: 'directory' });
+    for (let j = 0; j < 8; j++) {
+      nodes.push({ id: id + '-' + j, parent_id: id, label: 'dir-' + j, node_kind: 'directory' });
+    }
+  }
+  const layout = window.RoomViewLayout.buildFsnLayout({}, { nodes });
+  const overlay = (left, top, right, bottom) => ({
+    dataset: {}, getBoundingClientRect: () => ({ left, top, right, bottom, width: right-left, height: bottom-top }),
+  });
+  Object.assign(scene, { THREE, frameOverlays: [overlay(0, 0, 1280, 95), overlay(0, 752, 1280, 800),
+    overlay(8, 100, 220, 740), overlay(870, 98, 1272, 735)], requestRender() {},
     camera: new THREE.PerspectiveCamera(42, 1.6, 0.25, 650),
     canvas: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 800 }) },
   });
-  const { pos, target } = scene._directoryPose(deck);
-  scene.camera.position.copy(pos);
-  scene.camera.lookAt(target);
-  scene.camera.updateMatrixWorld();
-  for (const p of scene.layout.pedestals) {
-    for (const x of [p.x - p.width / 2, p.x + p.width / 2]) {
-      for (const z of [p.z - p.depth / 2, p.z + p.depth / 2]) {
-        const point = new THREE.Vector3(x, p.height, z).project(scene.camera);
-        assert.ok(Math.abs(point.x) < 0.91 && Math.abs(point.y) < 0.75);
+  scene._updateFraming();
+  assert.deepEqual({...scene.safeRect}, { left: 226, top: 101, right: 864, bottom: 746, width: 638, height: 645 });
+  scene.layout = layout;
+  const assertVisible = (x,y,z) => {
+    const ndc = new THREE.Vector3(x,y,z).project(scene.camera);
+    const sx = (ndc.x + 1) * 640;
+    const sy = (1 - ndc.y) * 400;
+    assert.ok(sx >= scene.safeRect.left && sx <= scene.safeRect.right);
+    assert.ok(sy >= scene.safeRect.top && sy <= scene.safeRect.bottom);
+  };
+  for (const id of ['root', 'node/d6']) {
+    const directory = layout.nodeById.get(id);
+    const pose = scene._directoryPose(directory);
+    scene.camera.position.copy(pose.pos);
+    scene.camera.lookAt(pose.target);
+    scene.camera.updateMatrixWorld();
+    for (const p of layout.pedestals.filter(p => p.id === id || p.parentId === id || p.id === directory.parentId)) {
+      for (const x of [p.x-p.width/2, p.x+p.width/2]) {
+        for (const z of [p.z-p.depth/2, p.z+p.depth/2]) assertVisible(x,p.height,z);
       }
     }
+    for (const wire of layout.wires.filter(w => w.childId === id || w.parentId === id)) {
+      for (const point of wire.points) assertVisible(...point);
+    }
   }
-  scene._frameReader({ getBoundingClientRect: () => ({ left: 780, top: 100, width: 500, height: 600 }) });
-  const onscreenX = (target.clone().project(scene.camera).x + 1) * 640;
-  assert.ok(Math.abs(onscreenX - 390) < 0.01);
-  scene._frameReader({ hidden: true });
-  assert.ok(Math.abs(target.clone().project(scene.camera).x) < 0.001);
-
+  Object.assign(scene, { manualCamera: true, overviewTarget: new THREE.Vector3(), overviewPos: new THREE.Vector3() });
+  const openReader = scene.frameOverlays.pop();
+  scene._updateFraming();
+  assert.equal(scene.safeRect.right, 1280);
+  assert.equal(scene.safeRect.left, 226);
+  scene.frameOverlays.push(openReader);
+  scene._updateFraming();
+  assert.equal(scene.safeRect.right, 864);
+  // A detached map must use its complete output area even while the reader is open.
+  const interactive = scene.camera;
+  Object.assign(scene, { scene: new THREE.Scene(), groundMesh: new THREE.Object3D(),
+    _updateBlockMatrices() {}, _updateFloorLabels() {}, renderer: { render(world, camera) {
+      assert.notEqual(interactive, camera);
+      assert.equal(camera.view.enabled, false);
+      const b = scene.layout.bounds;
+      for (const x of [b.minX, b.maxX]) {
+        for (const z of [b.minZ, b.maxZ]) {
+          const projected = new THREE.Vector3(x,0,z).project(camera);
+          assert.ok(Math.abs(projected.x) < 1 && Math.abs(projected.y) < 1);
+        }
+      }
+    } },
+  });
+  scene.canvas.toDataURL = () => 'synthetic';
+  assert.equal(scene.captureTopDownDataUrl(), 'synthetic');
+  assert.equal(scene.camera, interactive);
+  assert.equal(scene.safeRect.right, 864);
+  const floorTarget = {};
+  scene.pickables = [floorTarget];
+  scene.beamV2Mesh = { visible: true };
+  scene.pointerNdc = new THREE.Vector2();
+  scene.raycaster = {
+    setFromCamera() {}, intersectObjects(objects) { assert.deepEqual(objects, [floorTarget]); return []; },
+  };
+  assert.equal(scene._pickAtEvent({ clientX: 800, clientY: 300 }), null);
+  const { pos, target } = scene._directoryPose(layout.nodeById.get('root'));
   Object.assign(scene, { camPos: pos, camTarget: target, requestRender() {}, cancelIntroAndTour() {},
     _directoryWaypoints: () => [], reducedMotion: false });
   const destination = pos.clone().add(new THREE.Vector3(3, 0, 4));

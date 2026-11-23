@@ -8,13 +8,10 @@
 
   const THEMES = {
     night: {
-      skyZenith: 0x050914,
-      skyHorizon: 0x16243b,
-      skyBand: 0x243c60,
       fogColor: 0x132034,
       fogDensity: 1.55 / 155,
       groundNear: 0x0e1520,
-      groundFar: 0x223548,
+      groundFar: 0x132034,
 
       hemiSky: 0x90acd8,
       hemiGround: 0x171f2d,
@@ -23,9 +20,6 @@
       keyColor: 0xc9ddff,
       keyIntensity: 0.86,
       keyDim: 0.11,
-      headlightColor: 0xa4c8ff,
-      headlightIntensity: 0.32,
-      headlightDim: 0.03,
       pedestalPlinth: 0x1e2838,
       pedestalTop: 0x687487,
       pedestalDeck: 0x475369,
@@ -37,7 +31,6 @@
       wireGlowAlpha: 0.02,
       failCrown: 0xffd8c8,
       labelBg: 'rgba(8, 14, 26, 0.90)',
-      labelBorder: 'rgba(110, 170, 220, 0.62)',
       labelText: '#f0f7ff',
       labelSub: '#8ec4e6',
       spotV2Color: 0xfff1d6,
@@ -54,24 +47,18 @@
     },
     grass: {
       // SGI Fsn app-defaults Grass landscape palette (verified)
-      skyZenith: 0x3985a4,
-      skyHorizon: 0xb0d7cd,
-      skyBand: 0xc8ded1,
-      fogColor: 0xabcac2,
+      fogColor: 0xd1daca,
       fogDensity: 1.55 / 190,
-      groundNear: 0x244539,
-      groundFar: 0x658975,
+      groundNear: 0xb8c7af,
+      groundFar: 0xd1daca,
 
       hemiSky: 0xdff6ff,
-      hemiGround: 0x1e5c2c,
-      hemiIntensity: 1.04,
+      hemiGround: 0x889986,
+      hemiIntensity: 1.65,
       hemiDim: 0.19,
       keyColor: 0xfff7e2,
-      keyIntensity: 0.90,
+      keyIntensity: 2.20,
       keyDim: 0.14,
-      headlightColor: 0xdaf4ff,
-      headlightIntensity: 0.24,
-      headlightDim: 0.03,
       pedestalPlinth: 0x35474a,
       pedestalTop: 0x96ab9e,
       pedestalDeck: 0x748b80,
@@ -83,7 +70,6 @@
       wireGlowAlpha: 0.02,
       failCrown: 0xffefe8,
       labelBg: 'rgba(10, 32, 20, 0.90)',
-      labelBorder: 'rgba(145, 255, 240, 0.65)',
       labelText: '#f4fff8',
       labelSub: '#a8f0d4',
       spotV2Color: 0xfffee2,
@@ -106,11 +92,6 @@
 
   function sigmoidEase(t) {
     return 0.5 * (1 - Math.cos(Math.PI * clamp(t, 0, 1)));
-  }
-
-  function smootherstep(t) {
-    const x = clamp(t, 0, 1);
-    return x * x * x * (x * (x * 6 - 15) + 10);
   }
 
   function resolveBlockHex(block, themeKey) {
@@ -325,26 +306,40 @@
       if (this.cache.has(key)) return this.cache.get(key);
       const t = THEMES[themeKey] || THEMES.night;
       const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = subtitle ? 184 : 132;
       const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+      const titleFont = '600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      const subFont = '500 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      const maxTextWidth = 180;
+      const fit = (text, font) => {
+        ctx.font = font;
+        const measure = value => ctx.measureText(value).width;
+        let display = text;
+        if (measure(display) > maxTextWidth) {
+          let end = display.length;
+          do { display = text.slice(0, --end) + '…'; } while (end && measure(display) > maxTextWidth);
+        }
+        return { display, width: measure(display) };
+      };
+      const main = fit(title, titleFont);
+      const sub = fit(subtitle || '', subFont);
+      const width = Math.max(32, Math.ceil(Math.max(main.width, sub.width)) + 16);
+      const height = subtitle ? 35 : 22;
+      canvas.width = width * 2;
+      canvas.height = height * 2;
+      ctx.scale(2, 2);
       ctx.fillStyle = highlighted ? 'rgba(22, 24, 27, 0.95)' : t.labelBg;
-      ctx.fillRect(3, 3, canvas.width - 6, canvas.height - 6);
-
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = highlighted ? '#ffe6b0' : t.labelBorder;
+      ctx.fillRect(0, 0, width, 1);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = highlighted ? '#ffffff' : t.labelText;
-      ctx.font = '700 66px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-      const displayTitle = title.length > 18 ? `${title.slice(0, 17)}…` : title;
-      ctx.fillText(displayTitle, canvas.width / 2, subtitle ? 72 : canvas.height / 2 + 4, canvas.width - 44);
-
+      ctx.font = titleFont;
+      ctx.fillText(main.display, width / 2, subtitle ? 10 : height / 2);
       if (subtitle) {
         ctx.fillStyle = highlighted ? '#ffe6b0' : t.labelSub;
-        ctx.font = '600 34px ui-monospace, SFMono-Regular, Menlo, monospace';
-        const displaySub = subtitle.length > 28 ? `${subtitle.slice(0, 27)}…` : subtitle;
-        ctx.fillText(displaySub, canvas.width / 2, 136, canvas.width - 44);
+        ctx.font = subFont;
+        ctx.fillText(sub.display, width / 2, 25);
       }
 
       const tex = new this.THREE.CanvasTexture(canvas);
@@ -354,7 +349,7 @@
       tex.magFilter = this.THREE.LinearFilter;
       tex.anisotropy = this.maxAnisotropy;
       tex.needsUpdate = true;
-      const entry = { labelKey, tex, aspect: canvas.width / canvas.height };
+      const entry = { labelKey, tex, width, height };
       this.cache.set(key, entry);
       return entry;
     }
@@ -394,8 +389,7 @@
       this.overviewPos = new THREE.Vector3(0, 6.4, 11.5);
       this.overviewTarget = new THREE.Vector3(0, 1.3, -11.5);
       this.flight = null;
-      this.establishingShot = null;
-      this.towerRiseProgress = 1;
+      this.manualCamera = false;
       this.lastInputTime = performance.now();
 
       this.spotState = {
@@ -467,52 +461,6 @@
       this.scene.fog = new THREE.FogExp2(t.fogColor, t.fogDensity);
       this.scene.background = new THREE.Color(t.fogColor);
 
-      const skyGeo = new THREE.SphereGeometry(420, 32, 20);
-      this.skyUniforms = {
-        uZenith: { value: new THREE.Color(t.skyZenith) },
-        uHorizon: { value: new THREE.Color(t.skyHorizon) },
-        uBand: { value: new THREE.Color(t.skyBand) },
-        uGround: { value: new THREE.Color(t.groundNear) },
-      };
-      const skyMat = new THREE.ShaderMaterial({
-        side: THREE.BackSide,
-        depthWrite: false,
-        fog: false,
-        uniforms: this.skyUniforms,
-        vertexShader: `
-          varying vec3 vDir;
-          void main() {
-            vDir = normalize(position);
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform vec3 uZenith;
-          uniform vec3 uHorizon;
-          uniform vec3 uBand;
-          uniform vec3 uGround;
-          varying vec3 vDir;
-          void main() {
-            float h = vDir.y;
-            vec3 col;
-            if (h >= 0.0) {
-              float skyT = pow(clamp(h, 0.0, 1.0), 0.52);
-              col = mix(uHorizon, uZenith, skyT);
-              float band = exp(-h * 14.0);
-              col = mix(col, uBand, band * 0.40);
-            } else {
-              float gT = pow(clamp(-h, 0.0, 1.0), 0.6);
-              col = mix(uHorizon, uGround, gT);
-            }
-            gl_FragColor = vec4(col, 1.0);
-            #include <colorspace_fragment>
-          }
-        `,
-      });
-      this.skyMesh = new THREE.Mesh(skyGeo, skyMat);
-      this.skyMesh.renderOrder = -10;
-      this.scene.add(this.skyMesh);
-
       const groundGeo = new THREE.PlaneGeometry(900, 900);
       groundGeo.rotateX(-Math.PI / 2);
       this.groundMat = new THREE.MeshStandardMaterial({
@@ -540,12 +488,12 @@
 
       this.keyLight = new THREE.DirectionalLight(t.keyColor, t.keyIntensity);
       this.keyLight.position.set(24, 38, 30);
-      this.keyLight.castShadow = false;
+      this.keyLight.castShadow = true;
+      this.keyLight.shadow.mapSize.set(1024, 1024);
+      this.keyLight.shadow.normalBias = 0.025;
+      this.keyLight.shadow.bias = -0.0002;
+      this.scene.add(this.keyLight.target);
       this.scene.add(this.keyLight);
-
-      this.headlight = new THREE.PointLight(t.headlightColor, t.headlightIntensity, 46, 1.5);
-      this.headlight.position.set(0, 1.6, 0);
-      this.camera.add(this.headlight);
     }
 
     _initSpotlightRig() {
@@ -645,7 +593,6 @@
       this.beamV2Mesh = new THREE.Mesh(outerGeo, this.beamV2Mat);
       this.beamV2Mesh.frustumCulled = false;
       this.beamV2Mesh.renderOrder = 10;
-      this.beamV2Mesh.userData = { isSpotBeam: true };
       this.scene.add(this.beamV2Mesh);
 
       // Inner luminous core shaft
@@ -657,7 +604,6 @@
       this.beamCoreMesh = new THREE.Mesh(coreGeo, this.beamCoreMat);
       this.beamCoreMesh.frustumCulled = false;
       this.beamCoreMesh.renderOrder = 11;
-      this.beamCoreMesh.userData = { isSpotBeam: true };
       this.scene.add(this.beamCoreMesh);
 
       // Focused radial floor-pool halo disc right around the selected file's base
@@ -697,7 +643,6 @@
       this.beamBaseMesh.frustumCulled = false;
       this.beamBaseMesh.renderOrder = 10;
       this.beamBaseMesh.visible = false;
-      this.beamBaseMesh.userData = { isSpotBeam: true };
       this.scene.add(this.beamBaseMesh);
 
       const basePoolGeo = new THREE.CircleGeometry(2.3, 48);
@@ -752,6 +697,7 @@
           if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
             dragMoved = true;
             this.flight = null;
+            this.manualCamera = true;
           }
           lastX = ev.clientX;
           lastY = ev.clientY;
@@ -776,6 +722,7 @@
         ev.preventDefault();
         this.cancelIntroAndTour();
         this.flight = null;
+        this.manualCamera = true;
         const factor = ev.deltaY > 0 ? 1.12 : 0.89;
         const offset = this.camPos.clone().sub(this.camTarget);
         const dist = clamp(offset.length() * factor, 3.2, 135);
@@ -792,18 +739,23 @@
       dom.addEventListener('pointerup', onPointerUp);
       dom.addEventListener('wheel', onWheel, { passive: false });
       dom.addEventListener('contextmenu', (ev) => ev.preventDefault());
-      const reader = document.getElementById?.('inspector-drawer');
-      if (reader && window.ResizeObserver) {
-        this.readerObserver = new window.ResizeObserver(() => {
-          this._frameReader(reader);
-          this.requestRender();
-        });
-        this.readerObserver.observe(reader);
+      this.frameOverlays = ['hud-top', 'banner-stack', 'hud-bottom', 'tree-panel', 'inspector-drawer']
+        .map(id => document.getElementById?.(id)).filter(Boolean);
+      const reframe = () => this._updateFraming();
+      if (window.ResizeObserver) {
+        this.frameObserver = new window.ResizeObserver(reframe);
+        this.frameMutationObserver = new window.MutationObserver(reframe);
+        for (const overlay of this.frameOverlays) {
+          this.frameObserver.observe(overlay);
+          this.frameMutationObserver.observe(overlay, { attributes: true, attributeFilter: ['data-open', 'hidden', 'class'] });
+          overlay.addEventListener('transitionend', reframe);
+        }
       }
       window.addEventListener('resize', () => this.resize());
       window.addEventListener('pagehide', (event) => {
         if (!event.persisted) {
-          this.readerObserver?.disconnect();
+          this.frameObserver?.disconnect();
+          this.frameMutationObserver?.disconnect();
           this._clearLabelMeshes();
           this.labelAtlas.retainLabels(new Set());
         }
@@ -847,33 +799,63 @@
 
     cancelIntroAndTour() {
       this.lastInputTime = performance.now();
-      if (this.establishingShot) {
-        this.establishingShot = null;
-        this.towerRiseProgress = 1;
-        this._updateBlockMatrices();
-        this.requestRender();
-      }
     }
 
-    _frameReader(reader) {
-      if (!reader || reader.hidden) {
-        this.camera.clearViewOffset();
-        return;
-      }
+    _updateFraming() {
       const viewport = this.canvas.getBoundingClientRect();
-      const bounds = reader.getBoundingClientRect();
-      const width = viewport.width;
-      const height = viewport.height;
-      // A docked reader shifts the optical centre into the remaining landscape.
-      // Full-screen readers are intentionally allowed on small screens.
-      const left = bounds.left - viewport.left;
-      const above = bounds.top - viewport.top;
-      if (left >= width * 0.24 && bounds.width > 0) {
-        this.camera.setViewOffset(width, height, (width - left) / 2, 0, width, height);
-      } else if (above >= height * 0.24 && bounds.height > 0) {
-        this.camera.setViewOffset(width, height, 0, (height - above) / 2, width, height);
+      const { width, height } = viewport;
+      if (!width || !height) return;
+      const obstacles = this.frameOverlays.filter(el => !el.hidden && el.dataset.open !== 'false')
+        .map(el => el.getBoundingClientRect())
+        .filter(r => r.width && r.height)
+        .map(r => ({
+          left: clamp(r.left - viewport.left - 6, 0, width), right: clamp(r.right - viewport.left + 6, 0, width),
+          top: clamp(r.top - viewport.top - 6, 0, height), bottom: clamp(r.bottom - viewport.top + 6, 0, height),
+        })).sort((a, b) => a.top - b.top);
+      const xs = [...new Set([0, width, ...obstacles.flatMap(r => [r.left, r.right])])].sort((a, b) => a - b);
+      let best = { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+      for (let i = 0; i < xs.length; i++) {
+        for (const right of xs.slice(i + 1)) {
+          const left = xs[i];
+          let top = 0;
+          const consider = bottom => {
+            if ((right - left) * (bottom - top) > best.width * best.height) {
+              best = { left, top, right, bottom, width: right - left, height: bottom - top };
+            }
+          };
+          for (const r of obstacles) {
+            if (r.right <= left || r.left >= right) continue;
+            consider(r.top);
+            top = Math.max(top, r.bottom);
+          }
+          consider(height);
+        }
+      }
+      if (!best.width || !best.height) return;
+      this.safeRect = best;
+      this.fitWidth = best.width / width;
+      this.fitHeight = best.height / height;
+      this.camera.setViewOffset(width, height, (width - best.right - best.left) / 2,
+        (height - best.bottom - best.top) / 2, width, height);
+      if (this.layout) {
+        this._computeOverviewCamera(this.layout);
+        if (!this.manualCamera) this._refitSelection();
+      }
+      this.requestRender();
+    }
+
+    _refitSelection() {
+      const node = this.layout.nodeById.get(this.selectedNodeId || 'root');
+      if (!node || node.nodeType === 'more' || node.nodeType === 'stage-summary') return;
+      const { pos, target } = node.nodeType === 'item' ? this._filePose(node) : this._directoryPose(node);
+      if (this.flight) {
+        this.flight.toPos.copy(pos);
+        this.flight.toTarget.copy(target);
       } else {
-        this.camera.clearViewOffset();
+        this.camPos.copy(pos);
+        this.camTarget.copy(target);
+        this.camera.position.copy(pos);
+        this.camera.lookAt(target);
       }
     }
 
@@ -882,7 +864,7 @@
       const w = window.innerWidth;
       const h = Math.max(1, window.innerHeight);
       this.camera.aspect = w / h;
-      this._frameReader(document.getElementById?.('inspector-drawer'));
+      this._updateFraming();
       this.camera.updateProjectionMatrix();
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       this.renderer.setSize(w, h, false);
@@ -893,10 +875,6 @@
       if (!THEMES[themeKey]) return;
       this.themeKey = themeKey;
       const t = THEMES[themeKey];
-      this.skyUniforms.uZenith.value.setHex(t.skyZenith);
-      this.skyUniforms.uHorizon.value.setHex(t.skyHorizon);
-      this.skyUniforms.uBand.value.setHex(t.skyBand);
-      this.skyUniforms.uGround.value.setHex(t.groundNear);
       this.scene.fog.color.setHex(t.fogColor);
       this.scene.fog.density = t.fogDensity * (1 + 0.3 * this.spotState.dimL);
       this.scene.background.setHex(t.fogColor);
@@ -905,7 +883,6 @@
       this.hemiLight.color.setHex(t.hemiSky);
       this.hemiLight.groundColor.setHex(t.hemiGround);
       this.keyLight.color.setHex(t.keyColor);
-      this.headlight.color.setHex(t.headlightColor);
 
       this.spotLight.color.setHex(this.spotlightMode === 'v2' ? t.spotV2Color : 0xfff1c9);
       const blend = t.additiveBeam ? this.THREE.AdditiveBlending : this.THREE.NormalBlending;
@@ -967,11 +944,11 @@
 
     setReducedMotion(enabled) {
       this.reducedMotion = Boolean(enabled);
-      if (this.reducedMotion) this.cancelIntroAndTour();
+      if (this.reducedMotion && this.flight) this.settleAnimationsImmediately();
       this.requestRender();
     }
 
-    setLayout(layout, { descriptor = null, runEstablishingShot = false, preserveCamera = false } = {}) {
+    setLayout(layout, { descriptor = null, preserveCamera = false } = {}) {
       const previous = this.layout?.nodeById.get(this.selectedNodeId);
       const selected = layout.nodeById.get(this.selectedNodeId);
       this.layout = layout;
@@ -1001,38 +978,28 @@
           this.camera.lookAt(this.camTarget);
         }
       }
+      if (this.keyLight) {
+        const anchor = selected || layout.treeRoot;
+        const pad = layout.nodeById.get(anchor.parentId || anchor.id);
+        if (pad) {
+          this.keyLight.target.position.set(pad.x, 0, pad.z);
+          this.keyLight.position.set(pad.x + 18, 30, pad.z + 14);
+          const extent = Math.max(24, pad.width, pad.depth);
+          Object.assign(this.keyLight.shadow.camera, { left: -extent, right: extent, top: extent, bottom: -extent });
+          this.keyLight.shadow.camera.updateProjectionMatrix();
+        }
+      }
       if (descriptor) this.descriptor = descriptor;
       this._clearWorldGroup();
       this._buildWorldGeometry(layout);
       this._computeOverviewCamera(layout);
-
-      if (runEstablishingShot && !this.reducedMotion) {
-        this.towerRiseProgress = 0.04;
-        this._updateBlockMatrices();
-        const offset = this.overviewPos.clone().sub(this.overviewTarget);
-        const startOff = offset.clone().multiplyScalar(1.62);
-        startOff.applyAxisAngle(new this.THREE.Vector3(0, 1, 0), 0.30);
-        startOff.y *= 1.15;
-        this.camPos.copy(this.overviewTarget).add(startOff);
-        this.camTarget.copy(this.overviewTarget);
-        this.camera.position.copy(this.camPos);
-        this.camera.lookAt(this.camTarget);
-        this.establishingShot = {
-          startTime: performance.now(),
-          durationMs: 950,
-          fromPos: this.camPos.clone(),
-          toPos: this.overviewPos.clone(),
-        };
-      } else {
-        this.towerRiseProgress = 1;
-        this._updateBlockMatrices();
-        if (!preserveCamera && !this.flight) {
-          this.camPos.copy(this.overviewPos);
-          this.camTarget.copy(this.overviewTarget);
-          this.camera.position.copy(this.camPos);
-          this.camera.lookAt(this.camTarget);
-        }
+      if (layout.bounds) {
+        const reach = Math.max(layout.bounds.spanX, layout.bounds.spanZ);
+        this.camera.far = Math.max(650, reach * 15);
+        this.camera.updateProjectionMatrix();
       }
+      this._updateBlockMatrices();
+      if ((!preserveCamera || !this.manualCamera) && selected?.nodeType !== 'item') this._refitSelection();
 
       this._shadowDirty = true;
       this.requestRender();
@@ -1046,30 +1013,53 @@
     }
 
     _directoryPose(node) {
-      // Fit this deck and the nearest branching pads; distant siblings stay explorable.
-      const children = this.layout.pedestals.filter(p => p.parentId === node.id)
-        .sort((a, b) => Math.abs(a.x - node.x) - Math.abs(b.x - node.x)).slice(0, 5);
-      const decks = [node, ...children];
-      const front = node.z + node.depth / 2 + 1;
-      const rear = Math.min(...decks.map(p => p.z - p.depth / 2));
-      const target = new this.THREE.Vector3(node.x, 1.4, (front + rear) / 2);
+      const decks = this.layout.pedestals.filter(p => p.id === node.id || p.parentId === node.id || p.id === node.parentId);
+      const points = [];
+      const addBox = (x, y, z, w, h, d) => {
+        for (const px of [x - w / 2, x + w / 2]) {
+          for (const py of [y, y + h]) {
+            for (const pz of [z - d / 2, z + d / 2]) points.push([px, py, pz]);
+          }
+        }
+      };
+      const ids = new Set(decks.map(p => p.id));
+      for (const p of decks) addBox(p.x, 0, p.z, p.width + 0.3, p.height, p.depth + 0.3);
+      for (const p of [...this.layout.blocks, ...this.layout.summaryBlocks]) {
+        if (ids.has(p.parentId)) addBox(p.x, p.y, p.z, p.width, p.height, p.depth);
+      }
+      for (const wire of this.layout.wires) {
+        if (wire.childId === node.id || wire.parentId === node.id) points.push(...wire.points);
+      }
+      return this._fitPoints(points);
+    }
+
+    _filePose(node) {
+      const radius = 2.6;
+      return this._fitPoints([
+        [node.x - radius, node.y, node.z + radius], [node.x + radius, node.y, node.z + radius],
+        [node.x, node.y + node.height + 1.8, node.z], [node.x, node.y, node.z - radius],
+      ]);
+    }
+
+    _fitPoints(points) {
+      const bounds = new this.THREE.Box3();
+      for (const [x, y, z] of points) bounds.expandByPoint(new this.THREE.Vector3(x, y, z));
+      const target = bounds.getCenter(new this.THREE.Vector3());
       const pitch = 18 * Math.PI / 180;
       const sin = Math.sin(pitch);
       const cos = Math.cos(pitch);
       const tan = Math.tan(this.camera.fov * Math.PI / 360);
       let distance = 9;
-      for (const deck of decks) {
-        const halfX = Math.abs(deck.x - target.x) + deck.width / 2 + 0.4;
-        for (const z of [deck.z - deck.depth / 2, deck.z + deck.depth / 2 + 1]) {
-          for (const y of [0, deck.height + 4.35]) {
-            const dz = z - target.z;
-            const dy = y - target.y;
-            const towardEye = dz * cos + dy * sin;
-            distance = Math.max(distance,
-              towardEye + halfX / (tan * this.camera.aspect * 0.90),
-              towardEye + Math.abs(dy * cos - dz * sin) / (tan * 0.74));
-          }
-        }
+      const width = this.safeRect?.width || 1280;
+      const height = this.safeRect?.height || 800;
+      const horizontal = tan * this.camera.aspect * (this.fitWidth || 1) * Math.max(0.3, 1 - 100 / width);
+      const vertical = tan * (this.fitHeight || 1) * Math.max(0.3, 1 - 104 / height);
+      for (const [x, y, z] of points) {
+        const dz = z - target.z;
+        const dy = y - target.y;
+        const towardEye = dz * cos + dy * sin;
+        distance = Math.max(distance, towardEye + Math.abs(x - target.x) / horizontal,
+          towardEye + Math.abs(dy * cos - dz * sin) / vertical);
       }
       return { target, pos: target.clone().add(new this.THREE.Vector3(0, sin * distance, cos * distance)) };
     }
@@ -1142,7 +1132,7 @@
         const slabGeo = new THREE.BoxGeometry(ped.width, topH, ped.depth);
         slabGeo.translate(0, plinthH + topH / 2, 0);
         const slab = new THREE.Mesh(slabGeo, pedTopMat);
-        slab.castShadow = false;
+        slab.castShadow = true;
         slab.receiveShadow = true;
         slab.userData = { nodeId: ped.id, nodeType: ped.nodeType };
         group.add(slab);
@@ -1379,13 +1369,6 @@
         if (!list || !list.length || !primaryMesh) return;
         for (let i = 0; i < list.length; i += 1) {
           const b = list[i];
-          let rise = 1.0;
-          if (this.towerRiseProgress < 1.0) {
-            const delay = clamp(Math.abs(b.x) * 0.008 + Math.abs(b.z) * 0.009, 0, 0.55);
-            rise = smootherstep((this.towerRiseProgress - delay) / Math.max(0.01, 1 - delay));
-            rise = Math.max(0.04, rise);
-          }
-
           const dist = Math.hypot(camPos.x - b.x, camPos.y - (b.y + b.height * 0.5), camPos.z - b.z);
           const prevLod = this._blockLodState.get(b.id) || 0;
           let lod = prevLod;
@@ -1393,7 +1376,7 @@
           else if (prevLod === 1 && dist < 46) lod = 0;
           this._blockLodState.set(b.id, lod);
 
-          const h = b.height * rise;
+          const h = b.height;
           if (lod === 0) {
             dummy.position.set(b.x, b.y, b.z);
             dummy.rotation.set(0, 0, 0);
@@ -1579,48 +1562,38 @@
       this._clearLabelMeshes();
       const labelKeys = new Set();
 
-      const addLabelEntry = (node, title, subtitle, priority, worldW, yPos, zOffset, tiltDeg = -56) => {
-        const texEntry = this.labelAtlas.getTexture(title, subtitle, this.themeKey, false);
-        labelKeys.add(texEntry.labelKey);
-        const h = worldW / texEntry.aspect;
-        const geo = new THREE.PlaneGeometry(worldW, h);
-        const mat = new THREE.MeshBasicMaterial({
-          map: texEntry.tex,
-          transparent: true,
-          depthWrite: false,
-          side: THREE.FrontSide,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(node.x, yPos, node.z + zOffset);
-        mesh.rotation.x = (tiltDeg * Math.PI) / 180;
+      const addLabelEntry = (node, title, subtitle, priority, y, z) => {
+        const entry = this.labelAtlas.getTexture(title, subtitle, this.themeKey, false);
+        labelKeys.add(entry.labelKey);
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
+          map: entry.tex, transparent: true, depthWrite: false, toneMapped: false, fog: false,
+        }));
         mesh.renderOrder = 8;
         mesh.visible = false;
         this.labelGroup.add(mesh);
         this.labelPool.push({
-          nodeId: node.id,
-          parentId: node.parentId,
-          nodeType: node.nodeType,
-          treeDepth: node.treeDepth || 0,
-          title,
-          subtitle,
-          priority,
-          mesh,
-          worldPos: mesh.position.clone(),
+          nodeId: node.id, parentId: node.parentId, nodeType: node.nodeType, title, subtitle,
+          priority, mesh, width: entry.width, height: entry.height,
+          worldPos: new THREE.Vector3(node.x, y, z),
         });
       };
 
       for (const ped of layout.pedestals) {
-        const labelTitle = ped.label;
-        const w = Math.min(ped.width - 0.2, Math.max(2.2, labelTitle.length * 0.35));
-        const prio = ped.treeDepth === 0 ? 110 : (ped.treeDepth === 1 ? 92 : 76 - Math.min(20, ped.treeDepth * 5));
-        addLabelEntry(ped, labelTitle, ped.collapsed ? 'Expand' : '', prio, w, Math.max(0.43, ped.height * 0.56), ped.depth / 2 + 0.14, -22);
+        let subtitle = ped.collapsed ? 'Expand' : '';
+        if (global.RoomViewLayout.isWorkspace(this.descriptor)) {
+          subtitle = ped.coverage === 'complete'
+            ? `${ped.directLeafCount + ped.childDirCount} shown · complete`
+            : (ped.coverage || 'not-examined').replaceAll('-', ' ');
+        }
+        const priority = 90 - Math.min(24, ped.treeDepth * 4);
+        addLabelEntry(ped, ped.segmentLabel || ped.label, subtitle, priority, ped.height, ped.z + ped.depth / 2 + 0.08);
       }
 
       for (const sNode of layout.summaryBlocks) {
         const subtitle = global.RoomViewLayout.isWorkspace(this.descriptor)
           ? `${sNode.counts.total} listed files`
           : `${sNode.counts.fail} fail`;
-        addLabelEntry(sNode, sNode.label, subtitle, 60, 1.75, sNode.y + sNode.height + 0.42, 0.0, -45);
+        addLabelEntry(sNode, sNode.label, subtitle, 60, sNode.y + sNode.height + 0.08, sNode.z);
       }
 
       for (const b of layout.blocks) {
@@ -1630,7 +1603,7 @@
         const mText = Number.isSafeInteger(b.item.fields?.file_bytes) && global.RoomViewLayout.isWorkspace(this.descriptor)
           ? `${b.item.fields.file_bytes} B`
           : b.item.metric != null ? `${b.item.metric}${unit}` : '';
-        addLabelEntry(b, b.label, mText, 30, 1.65, b.y + b.height + 0.46, 0.0, -40);
+        addLabelEntry(b, b.label, mText, 30, b.y + b.height + 0.08, b.z);
       }
       // Keep both variants of current labels, including shared and temporarily hidden ones.
       this.labelAtlas.retainLabels(labelKeys);
@@ -1639,74 +1612,64 @@
     _updateFloorLabels() {
       if (!this.labelPool.length) return;
       const THREE = this.THREE;
-      const cam = this.camera;
-      const w = window.innerWidth;
-      const h = Math.max(1, window.innerHeight);
-      const proj = new THREE.Vector3();
-
+      const camera = this.camera;
+      camera.updateMatrixWorld();
+      const viewport = this.canvas.getBoundingClientRect?.();
+      const width = viewport?.width || window.innerWidth;
+      const height = viewport?.height || window.innerHeight;
+      const safe = this.safeRect || { left: 0, top: 0, right: width, bottom: height };
+      const focusedParent = this.layout.nodeById.get(this.focusedPedestalId)?.parentId;
       const candidates = [];
+      const position = new THREE.Vector3();
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+      const projectionScale = 2 / (height * camera.projectionMatrix.elements[5]);
       for (const item of this.labelPool) {
         item.mesh.visible = false;
-        const isForce = item.nodeId === this.selectedNodeId || item.nodeId === this.hoveredNodeId;
-        const isFocusedDirChild = item.nodeType === 'item' && item.parentId === this.focusedPedestalId;
-        const dist = cam.position.distanceTo(item.worldPos);
-        if (!isForce) {
-          if (item.nodeType === 'item' && dist > (isFocusedDirChild ? 16.5 : 10.5)) continue;
-          if ((item.nodeType === 'directory' || item.nodeType === 'stage') && dist > 62) continue;
-          if (item.nodeType === 'group' && dist > 95) continue;
-          if (item.nodeType === 'stage-summary' && dist > 28) continue;
-          if (item.nodeType === 'more' && dist > 20) continue;
+        item.screenRect = null;
+        const selected = item.nodeId === this.selectedNodeId;
+        const focused = item.nodeId === this.focusedPedestalId;
+        const parent = item.nodeId === focusedParent;
+        const hovered = item.nodeId === this.hoveredNodeId;
+        const distance = camera.position.distanceTo(item.worldPos);
+        if (!(selected || focused || parent || hovered)) {
+          if (item.nodeType === 'item' && (this.spotState.targetActive || distance > 28)) continue;
+          if (distance > 100) continue;
         }
-        proj.copy(item.worldPos).project(cam);
-        if (proj.z < -1 || proj.z > 1 || Math.abs(proj.x) > 1.04 || Math.abs(proj.y) > 1.04) continue;
-        const sx = (proj.x * 0.5 + 0.5) * w;
-        const sy = (-proj.y * 0.5 + 0.5) * h;
-        const estW = clamp(128 * (17 / Math.max(4, dist)), 62, 185);
-        const estH = clamp(36 * (17 / Math.max(4, dist)), 22, 54);
-        const boost = isForce ? 10000 : (isFocusedDirChild ? 550 : item.priority * 10);
-        const score = boost - dist;
-        candidates.push({ item, isForce, isFocusedDirChild, sx, sy, estW, estH, score });
+        position.copy(item.worldPos).applyMatrix4(camera.matrixWorldInverse);
+        if (position.z >= -camera.near || position.z <= -camera.far) continue;
+        const scale = -position.z * projectionScale;
+        const mesh = item.mesh;
+        mesh.position.copy(item.worldPos).addScaledVector(up, (item.height / 2 + 2) * scale);
+        mesh.quaternion.copy(camera.quaternion);
+        mesh.scale.set(item.width * scale, item.height * scale, 1);
+        mesh.updateMatrixWorld();
+        // These are the actual billboard vertices in canvas-relative CSS pixels.
+        // A screen-aligned plane needs only its opposite corners.
+        position.set(-0.5, 0.5, 0).applyMatrix4(mesh.matrixWorld).project(camera);
+        const left = (position.x + 1) * width / 2;
+        const top = (1 - position.y) * height / 2;
+        position.set(0.5, -0.5, 0).applyMatrix4(mesh.matrixWorld).project(camera);
+        const right = (position.x + 1) * width / 2;
+        const bottom = (1 - position.y) * height / 2;
+        if (left < safe.left + 2 || right > safe.right - 2 || top < safe.top + 2 || bottom > safe.bottom - 2) continue;
+        const rank = selected ? 5 : focused ? 4 : hovered ? 3 : parent ? 2 : 1;
+        candidates.push({ item, rank, distance, left, top, right, bottom, highlighted: selected || hovered });
       }
-
-      candidates.sort((a, b) => b.score - a.score);
+      candidates.sort((a, b) => b.rank - a.rank || b.item.priority - a.item.priority || a.distance - b.distance);
       const accepted = [];
-      const MAX_LABELS = 32;
-      let nonSelectedItemLabels = 0;
-      for (const cand of candidates) {
-        if (!cand.isForce && accepted.length >= MAX_LABELS) continue;
-        if (!cand.isForce && cand.item.nodeType === 'item') {
-          if (this.spotState.targetActive || nonSelectedItemLabels >= 6) continue;
-        }
-        const r1 = {
-          x0: cand.sx - cand.estW * 0.46,
-          x1: cand.sx + cand.estW * 0.46,
-          y0: cand.sy - cand.estH * 0.46,
-          y1: cand.sy + cand.estH * 0.46,
-        };
-        let collides = false;
-        if (!cand.isForce) {
-          for (const prev of accepted) {
-            if (r1.x0 < prev.x1 && r1.x1 > prev.x0 && r1.y0 < prev.y1 && r1.y1 > prev.y0) {
-              collides = true;
-              break;
-            }
-          }
-        }
-        if (!collides) {
-          cand.item.mesh.visible = true;
-          if (!cand.isForce && cand.item.nodeType === 'item') nonSelectedItemLabels += 1;
-          const texEntry = this.labelAtlas.getTexture(
-            cand.item.title,
-            cand.item.subtitle,
-            this.themeKey,
-            cand.isForce
-          );
-          if (cand.item.mesh.material.map !== texEntry.tex) {
-            cand.item.mesh.material.map = texEntry.tex;
-            cand.item.mesh.material.needsUpdate = true;
-          }
-          accepted.push(r1);
-        }
+      let fileLabels = 0;
+      for (const candidate of candidates) {
+        if (accepted.length >= 32) break;
+        const { item, highlighted } = candidate;
+        if (!highlighted && item.nodeType === 'item' && fileLabels >= 6) continue;
+        if (accepted.some(prev => candidate.left < prev.right + 3 && candidate.right > prev.left - 3
+          && candidate.top < prev.bottom + 3 && candidate.bottom > prev.top - 3)) continue;
+        const entry = this.labelAtlas.getTexture(item.title, item.subtitle, this.themeKey, highlighted);
+        item.mesh.material.map = entry.tex;
+        item.mesh.visible = true;
+        item.screenRect = { left: candidate.left, top: candidate.top, right: candidate.right, bottom: candidate.bottom };
+        if (item.nodeType === 'item') fileLabels++;
+        accepted.push(candidate);
       }
     }
 
@@ -1752,12 +1715,10 @@
       if (isV2) {
         this.hemiLight.intensity = t.hemiIntensity + (t.hemiDim - t.hemiIntensity) * dimL;
         this.keyLight.intensity = t.keyIntensity + (t.keyDim - t.keyIntensity) * dimL;
-        this.headlight.intensity = t.headlightIntensity + (t.headlightDim - t.headlightIntensity) * dimL;
         this.scene.fog.density = t.fogDensity * (1 + 0.35 * dimL);
       } else {
         this.hemiLight.intensity = t.hemiIntensity * (1 - 0.78 * dimL);
         this.keyLight.intensity = t.keyIntensity * (1 - 0.82 * dimL);
-        this.headlight.intensity = t.headlightIntensity * (1 - 0.86 * dimL);
         this.scene.fog.density = t.fogDensity * (1 + 0.25 * dimL);
       }
 
@@ -1891,6 +1852,7 @@
     }
 
     frameOverview({ instant = false } = {}) {
+      this.manualCamera = false;
       const fromId = this.focusedPedestalId;
       this.selectedNodeId = null;
       this.focusedPedestalId = 'root';
@@ -1905,6 +1867,7 @@
       if (!node) return null;
       const THREE = this.THREE;
       const fromId = this.focusedPedestalId;
+      if (moveCamera) this.manualCamera = false;
 
       if (node.nodeType === 'item') {
         this.selectedNodeId = node.id;
@@ -1912,16 +1875,7 @@
         this._startSpotlightOnBlock(node);
         this._updateColorsAndSelection();
         if (moveCamera) {
-          // Low theatrical framing (~20 deg elevation) so the full overhead volumetric BEAM
-          // descending from top of frame onto the file monolith + floor pool is unmistakable!
-          const elev = (20 * Math.PI) / 180;
-          const dist = clamp(node.height * 1.45 + 7.2, 8.2, 12.6);
-          const target = new THREE.Vector3(node.x, node.y + Math.min(2.4, node.height * 0.68 + 0.55), node.z);
-          const pos = new THREE.Vector3(
-            node.x + 2.3,
-            node.y + Math.sin(elev) * dist + 1.35,
-            node.z + Math.cos(elev) * dist
-          );
+          const { pos, target } = this._filePose(node);
           this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       } else if (node.nodeType === 'root') {
@@ -1955,17 +1909,10 @@
       this.pointerNdc.y = -((ev.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
       this.raycaster.setFromCamera(this.pointerNdc, this.camera);
 
-      const targets = this.pickables.slice();
-      if (this.beamV2Mesh.visible) targets.push(this.beamV2Mesh);
-      if (this.beamBaseMesh.visible) targets.push(this.beamBaseMesh);
-
-      const hits = this.raycaster.intersectObjects(targets, false);
+      const hits = this.raycaster.intersectObjects(this.pickables, false);
       if (!hits.length) return null;
       const hit = hits[0];
       const ud = hit.object.userData || {};
-      if (ud.isSpotBeam) {
-        return { kind: 'spot-beam', nodeId: this.selectedNodeId };
-      }
       if (ud.instancedRole && ud.blockList && hit.instanceId != null) {
         const b = ud.blockList[hit.instanceId];
         if (b) return { kind: 'node', nodeId: b.id, node: b };
@@ -1996,10 +1943,6 @@
     _handleClick(ev) {
       const hit = this._pickAtEvent(ev);
       if (!hit) return;
-      if (hit.kind === 'spot-beam' && this.selectedNodeId) {
-        this.focusNode(this.selectedNodeId, { moveCamera: true });
-        return;
-      }
       if (hit.kind === 'wire') {
         const targetId = this.selectedNodeId === hit.childId ? hit.parentId : hit.childId;
         if (this.callbacks.onSelectNode) {
@@ -2015,21 +1958,35 @@
     captureTopDownDataUrl() {
       if (!this.layout) return '';
       const THREE = this.THREE;
-      const savedPos = this.camera.position.clone();
-      const savedQuat = this.camera.quaternion.clone();
-      const b = this.layout.bounds;
-      const span = Math.max(b.spanX, b.spanZ, 26);
-      this.camera.position.set(b.centerX, span * 1.05, b.centerZ + 0.01);
-      this.camera.lookAt(new THREE.Vector3(b.centerX, 0, b.centerZ));
-      this.skyMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
-      this.groundMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
-      this._updateFloorLabels();
-      this.renderer.render(this.scene, this.camera);
-      const dataUrl = this.canvas.toDataURL('image/png');
-      this.camera.position.copy(savedPos);
-      this.camera.quaternion.copy(savedQuat);
-      this.requestRender();
-      return dataUrl;
+      const interactive = this.camera;
+      const previousRect = this.safeRect;
+      const ground = this.groundMesh.position.clone();
+      try {
+        this.camera = interactive.clone();
+        this.camera.clearViewOffset();
+        const viewport = this.canvas.getBoundingClientRect();
+        this.safeRect = { left: 0, top: 0, right: viewport.width, bottom: viewport.height,
+          width: viewport.width, height: viewport.height };
+        const b = this.layout.bounds;
+        const tangent = Math.tan(this.camera.fov * Math.PI / 360);
+        const height = Math.max(b.spanZ, b.spanX / this.camera.aspect, 12) / (tangent * 1.8) + 6;
+        this.camera.position.set(b.centerX, height, b.centerZ);
+        this.camera.up.set(0, 0, -1);
+        this.camera.lookAt(new THREE.Vector3(b.centerX, 0, b.centerZ));
+        this.camera.far = Math.max(this.camera.far, height * 2);
+        this.camera.updateProjectionMatrix();
+        this.camera.updateMatrixWorld();
+        this.groundMesh.position.set(b.centerX, 0, b.centerZ);
+        this._updateBlockMatrices();
+        this._updateFloorLabels();
+        this.renderer.render(this.scene, this.camera);
+        return this.canvas.toDataURL('image/png');
+      } finally {
+        this.camera = interactive;
+        this.safeRect = previousRect;
+        this.groundMesh.position.copy(ground);
+        this.requestRender();
+      }
     }
 
     requestRender() {
@@ -2044,23 +2001,6 @@
       this._rafId = null;
       if (this._disposed) return;
       let keepGoing = false;
-
-      if (this.establishingShot) {
-        const tRaw = (now - this.establishingShot.startTime) / this.establishingShot.durationMs;
-        const e = smootherstep(tRaw);
-        this.camPos.lerpVectors(this.establishingShot.fromPos, this.establishingShot.toPos, e);
-        this.camera.position.copy(this.camPos);
-        this.camera.lookAt(this.camTarget);
-        this.towerRiseProgress = clamp(tRaw * 1.15, 0.04, 1);
-        this._updateBlockMatrices();
-        if (tRaw >= 1) {
-          this.establishingShot = null;
-          this.towerRiseProgress = 1;
-          this._updateBlockMatrices();
-        } else {
-          keepGoing = true;
-        }
-      }
 
       if (this.flight) {
         const f = this.flight;
@@ -2111,8 +2051,9 @@
           keepGoing = true;
         }
       }
-
-      this.skyMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
+      const focusDistance = this.camPos.distanceTo(this.camTarget);
+      const atmosphere = THEMES[this.themeKey].fogDensity * (1 + 0.35 * this.spotState.dimL);
+      this.scene.fog.density = Math.min(atmosphere, 0.60 / Math.max(1, focusDistance));
       this.groundMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
 
       this._updateBlockMatrices();
@@ -2139,11 +2080,6 @@
     }
 
     settleAnimationsImmediately() {
-      if (this.establishingShot) {
-        this.camPos.copy(this.establishingShot.toPos);
-        this.establishingShot = null;
-        this.towerRiseProgress = 1;
-      }
       if (this.flight) {
         this.camPos.copy(this.flight.toPos);
         this.camTarget.copy(this.flight.toTarget);

@@ -27,6 +27,8 @@
       this.fsPage = null;
       this.fsRequest = null;
       this.fsBusy = false;
+      this.sceneContext = [];
+      this.sceneRequest = null;
       this.fsCoverage = this.data.filesystem ? 'loading' : null;
       if (this.data.filesystem) this.data.applyFilesystemNodes([this._placeholderRoot()], null);
       this.currentNodeId = 'root';
@@ -134,6 +136,7 @@
     async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
       refresh = false, instant = false, moveCamera = true, reading = null, reconcile = true } = {}) {
       this.fsRequest?.abort();
+      this._clearSceneContext();
       this.fsResume = null;
       const previousPage = this.fsPage;
       const previousNode = this.layout?.allTreeNodesById.get(this.currentNodeId);
@@ -206,6 +209,7 @@
             reading: unchanged ? reading : null, deferContent: restoring && !unchanged,
           });
         } else if (!refresh) this.evidence.hide();
+        if (!request.signal.aborted) this._sampleScene(page);
       } catch (error) {
         if (request.signal.aborted) return;
         if (error.status === 429) {
@@ -363,6 +367,12 @@
         metricSpan.textContent = 'Height: 5 quantile bins';
       }
       strip.append(sep, metricSpan);
+      const key = document.getElementById('menu-map-key');
+      if (key) key.replaceChildren(...Array.from(strip.children, child => {
+        const entry = child.cloneNode(true);
+        entry.removeAttribute('id');
+        return entry;
+      }));
     }
 
     _syncFromData({ isInitial = false } = {}) {
@@ -440,20 +450,73 @@
       this._updateTelemetry();
     }
 
-    _rebuildLayout({ runEstablishingShot = false, preserveCamera = false } = {}) {
-      this.layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor, this.data.state, {
-        selectedNodeId: this.currentNodeId,
-        expandedDirs: this.expandedDirs,
-        collapsedDirs: this.collapsedDirs,
-        expandedPedestals: this.expandedPedestals,
-      });
-      if (this.scene3d) {
-        this.scene3d.setLayout(this.layout, {
-          descriptor: this.data.descriptor,
-          runEstablishingShot,
-          preserveCamera,
-        });
+    _clearSceneContext() {
+      this.sceneRequest?.abort();
+      this.sceneRequest = null;
+      if (!this.sceneContext?.length) return;
+      this.sceneContext = [];
+      if (this.tooltipEl) {
+        this.tooltipEl.hidden = true;
+        this.tooltipEl.textContent = '';
       }
+      this._drawScene({ preserveCamera: true });
+    }
+
+    async _sampleScene(page) {
+      if (!this.scene3d || this.viewMode !== '3d' || this.sceneRequest || !page) return;
+      const request = new AbortController();
+      this.sceneRequest = request;
+      try {
+        const nodes = await this.data.sceneNeighborhood(page, request.signal);
+        if (request.signal.aborted || this.fsPage !== page) return;
+        if (JSON.stringify(nodes) !== JSON.stringify(this.sceneContext)) {
+          this.sceneContext = nodes;
+          this._drawScene({ preserveCamera: true });
+        }
+      } catch (error) {
+        if (request.signal.aborted || this.fsPage !== page) return;
+        this._clearSceneContext();
+        if (error.status === 409 || error.status === 403) {
+          const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
+          const id = selected?.objectId || page.directory.id;
+          try {
+            await this.data.queryFilesystem('inspect', { id, generation: page.generation });
+          } catch (authorityError) {
+            if (authorityError.status !== 429 && this.fsPage === page && !this.fsBusy) {
+              await this._openFilesystem(id, { kind: selected?.nodeKind, pushHistory: false, refresh: true });
+            }
+          }
+        }
+      } finally {
+        if (this.sceneRequest === request) this.sceneRequest = null;
+      }
+    }
+
+    _layoutOptions() {
+      return { selectedNodeId: this.currentNodeId, expandedDirs: this.expandedDirs,
+        collapsedDirs: this.collapsedDirs, expandedPedestals: this.expandedPedestals };
+    }
+
+    _drawScene(options) {
+      if (!this.scene3d || !this.layout) return;
+      let layout = this.layout;
+      if (this.sceneContext?.length) {
+        const nodes = new Map(this.sceneContext.map(node => [node.id, node]));
+        for (const node of this.data.state.nodes) {
+          const sample = nodes.get(node.id);
+          if (sample?.fields.coverage && node.fields?.coverage === 'not-examined') {
+            nodes.set(node.id, { ...node, fields: { ...node.fields, coverage: sample.fields.coverage } });
+          } else nodes.set(node.id, node);
+        }
+        layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor,
+          { ...this.data.state, nodes: [...nodes.values()] }, this._layoutOptions());
+      }
+      this.scene3d.setLayout(layout, { descriptor: this.data.descriptor, ...options });
+    }
+
+    _rebuildLayout({ runEstablishingShot = false, preserveCamera = false } = {}) {
+      this.layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor, this.data.state, this._layoutOptions());
+      this._drawScene({ runEstablishingShot, preserveCamera });
       this.ariaTree.expanded = new Set(this.layout.pedestals.filter(node => !node.collapsed).map(node => node.id));
       this.ariaTree.build(this.data.descriptor, this.data.state, this.layout);
     }
@@ -474,7 +537,10 @@
       document.getElementById('btn-mode-3d').classList.toggle('active', mode === '3d');
       document.getElementById('btn-mode-grid').classList.toggle('active', mode === 'grid');
       document.getElementById('btn-mode-sql').classList.toggle('active', mode === 'sql');
-      if (mode === '3d' && this.scene3d) this.scene3d.requestRender();
+      if (mode === '3d' && this.scene3d) {
+        this.scene3d.requestRender();
+        if (this.fsPage) this._sampleScene(this.fsPage);
+      } else this._clearSceneContext();
     }
 
     expandPedestal(pedestalId) {
@@ -700,6 +766,9 @@
         const entry = global.RoomViewLayout.getLegendEntry(this.data.descriptor, node.kind);
         const rawMetric = node.item.metric != null ? `${node.item.metric}${unit} (Bin ${node.quantileBin}/5)` : 'n/a';
         mEl.textContent = `${entry.symbol} ${entry.label} · ${rawMetric}`;
+      } else if (this.data.filesystem && node.nodeKind === 'directory') {
+        const coverage = node.coverage || 'not-examined';
+        mEl.textContent = `Directory · ${coverage} · open for current listing`;
       } else if (node.counts) {
         mEl.textContent = global.RoomViewLayout.formatCountsSummary(node.counts, this.data.descriptor);
       }
@@ -873,7 +942,7 @@
         this.forward.push(this.currentNodeId);
         this.handleNodeSelect(prev, { pushHistory: false });
       });
-      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.hide());
+      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.dismiss());
       document.getElementById('btn-prev-fail').addEventListener('click', () => this.stepFailure(-1));
       document.getElementById('btn-next-fail').addEventListener('click', () => this.stepFailure(1));
 
@@ -969,7 +1038,7 @@
           if (!help.hidden) { help.hidden = true; return; }
           if (!exp.hidden) { exp.hidden = true; return; }
           if (!lb.hidden) { lb.hidden = true; return; }
-          if (this.evidence.isOpen()) { this.evidence.hide(); return; }
+          if (this.evidence.isOpen()) { this.evidence.dismiss(); return; }
           this.ascendToParent();
         } else if (ev.key === 'f' || ev.key === 'F') {
           ev.preventDefault();
@@ -1025,6 +1094,7 @@
           try {
             await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
             if (page === this.fsPage && !this.fsBusy) await this.filesystemSearch.validateDisplayed();
+            if (page === this.fsPage && !this.fsBusy) await this._sampleScene(page);
           } catch (error) {
             if (error.status === 429) return;
             if (page === this.fsPage && !this.fsBusy) {

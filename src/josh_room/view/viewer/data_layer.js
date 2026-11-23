@@ -409,6 +409,43 @@
       return resp.json();
     }
 
+    // At most six independent, metadata-only samples: parent, three direct
+    // folders, one grandchild and one neighboring branch. None owns a cursor.
+    async sceneNeighborhood(page, signal) {
+      const nodes = new Map();
+      const sampled = new Set();
+      const sample = async id => {
+        signal.throwIfAborted();
+        if (!id || sampled.has(id)) return [];
+        sampled.add(id);
+        const result = await this.queryFilesystem('list', { id, generation: page.generation, sample: '1' }, signal);
+        signal.throwIfAborted();
+        if (result.generation !== page.generation) throw Object.assign(new Error('Stale landscape'), { status: 409 });
+        for (const n of [result.directory, ...result.entries]) {
+          if (sampled.has(n.id) && id !== n.id) continue;
+          nodes.set(n.id, { id: n.id, parent_id: n.parent_id, label: n.label,
+            node_kind: n.node_kind, kind: n.kind, metric: n.metric, fields: {
+              file_bytes: n.fields?.file_bytes,
+              coverage: id === n.id ? result.coverage : n.fields?.coverage,
+            } });
+        }
+        return result.entries.filter(n => n.node_kind === 'directory');
+      };
+      const folders = page.entries.filter(n => n.node_kind === 'directory');
+      const neighbors = page.directory.parent_id ? await sample(page.directory.parent_id) : [];
+      const center = Math.floor(folders.length / 2);
+      let deeper;
+      for (const folder of [folders[center], folders[0], folders.at(-1)]) {
+        if (!folder || sampled.has(folder.id)) continue;
+        const children = await sample(folder.id);
+        deeper ||= children[0];
+      }
+      if (deeper) await sample(deeper.id);
+      const neighbor = neighbors.find(n => n.id !== page.directory.id);
+      if (neighbor) await sample(neighbor.id);
+      return [...nodes.values()];
+    }
+
     applyFilesystemNodes(nodes, generation) {
       this.fsGeneration = generation;
       this.state = { ...this.state, nodes, items: [], groups: [] };

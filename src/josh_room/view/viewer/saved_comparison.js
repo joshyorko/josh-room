@@ -135,7 +135,7 @@
           sides.append(column);
         };
         side('Saved', receipt.date, receipt.saved);
-        side('Live', 'Read ' + new Date().toISOString(), receipt.live);
+        side('Live', 'Result received ' + new Date().toISOString(), receipt.live);
         output.append(sides);
         const provenance = element('details');
         provenance.append(element('summary', 'Recovery point and file digests'));
