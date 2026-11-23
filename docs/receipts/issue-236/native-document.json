@@ -1,5 +1,9 @@
 {
-  "product": "f6f3bc216d6c32429e4cb27c2e262164fad09ff7",
+  "detailsBeforeBack": true,
+  "readPdfRestoredFileTab": true,
+  "closeClickCount": 1,
+  "drawerDismissed": true,
+  "product": "3ab227f3ed61f2421a9cdcb493aae7c6acfcf47d",
   "provider": "room",
   "launch": "Installed Linux extension Explore command",
   "browser": "Headless Chrome, SwiftShader WebGL",
@@ -51,6 +55,6 @@
   },
   "screenshot": {
     "file": "native-document.png",
-    "sha256": "a5168a018802a92257b00bcbb75660577f58ed853bb44ae0a379abb5d10e72fd"
+    "sha256": "d09f87053af25492aad6eb97c3394cf736b59666a0c7f5cac1ae57a23fb2eb86"
   }
 }
