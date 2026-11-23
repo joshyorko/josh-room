@@ -22,6 +22,31 @@ function launcherError(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
+function assertRoomViewHost(vscode, platform = process.platform) {
+  if (platform !== "linux") throw new Error("Room View is supported only on a Linux workspace extension host.");
+  if (vscode?.UIKind && vscode.env?.uiKind === vscode.UIKind.Web) throw new Error("Room View is unavailable in VS Code for the web.");
+  if (vscode?.env?.remoteName) {
+    if (!["dev-container", "attached-container", "ssh-remote"].includes(vscode.env.remoteName)
+        || typeof vscode.env.asExternalUri !== "function") {
+      throw new Error("This remote VS Code host cannot privately forward Room View. Use desktop VS Code with a Linux devcontainer or SSH workspace.");
+    }
+    const localHost = vscode.workspace.getConfiguration?.("remote")?.get("localPortHost", "localhost");
+    if (localHost !== "localhost") throw new Error("Room View requires remote.localPortHost set to localhost before forwarding.");
+  }
+}
+
+function validateForwardedUri(uri, serverUrl) {
+  let value;
+  try { value = new URL(uri.toString(true)); } catch { throw launcherError("ROOM_VIEW_FORWARD_FAILED", "VS Code did not return a valid private forwarding URL"); }
+  const original = new URL(serverUrl);
+  if (value.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(value.hostname)
+      || value.username || value.password || value.hash || value.pathname !== "/" || !value.port
+      || value.searchParams.size !== 1 || value.searchParams.get("token") !== original.searchParams.get("token")) {
+    throw launcherError("ROOM_VIEW_FORWARD_FAILED", "VS Code must forward Room View to a token-preserving desktop loopback URL; public URLs are not supported");
+  }
+  return value.toString();
+}
+
 function validateRoomViewInfo(value) {
   if (!value || value.ok !== true || value.command !== "view-serve" || value.host !== "127.0.0.1"
       || value.read_only !== true
@@ -54,10 +79,9 @@ async function launchRoomView({
   kill = process.kill,
   onDiagnostic,
   sanitizeDiagnostic,
+  roomBinding,
 } = {}) {
-  if (platform !== "linux") throw new Error("Room View is supported only on local Linux VS Code.");
-  if (vscode?.env?.remoteName) throw new Error("Room View cannot run from a remote VS Code window.");
-  if (vscode?.UIKind && vscode.env?.uiKind === vscode.UIKind.Web) throw new Error("Room View is unavailable in VS Code for the web.");
+  assertRoomViewHost(vscode, platform);
   if (vscode?.workspace?.isTrusted !== true) throw new Error("Room View requires a trusted VS Code workspace.");
   if (!runtime || typeof runtime.command !== "string" || typeof runtime.args !== "function"
       || !runtime.env || typeof cwd !== "string" || !cwd || !vscode?.env?.openExternal || !vscode?.Uri?.parse) {
@@ -70,6 +94,7 @@ async function launchRoomView({
   const receiptFile = path.join(tempDirectory, "receipt.json");
   const commandArgs = ["view", "serve", "--provider", "room", "--workspace", cwd,
     "--port", "0", "--require-token"];
+  if (roomBinding) commandArgs.push("--expected-room-id", roomBinding.roomId, "--expected-dimension-id", roomBinding.dimensionId);
   let child;
   let closed = false;
   let disposed = false;
@@ -83,6 +108,9 @@ async function launchRoomView({
   let stderrBuffer = "";
   let stderrBytes = 0;
   let settled = false;
+  let interruptReject;
+  const interrupted = new Promise((_, reject) => { interruptReject = reject; });
+  interrupted.catch(() => {});
 
   const cleanupDirectory = async () => fs.rm(tempDirectory, { recursive: true, force: true });
   const redactDiagnostic = (text) => text.replace(/([?&]token=)[^&#\s]*/gi, "$1[redacted]");
@@ -177,7 +205,12 @@ async function launchRoomView({
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     if (value.ok === false) {
-      rejectStartup(launcherError("ROOM_VIEW_CONTROLLER_FAILED", "Room View controller refused startup"));
+      const refusals = new Map([
+        ["Room View cannot observe the managed runtime directory", ["ROOM_VIEW_RUNTIME_OVERLAP", "Room View cannot observe the managed runtime directory. Choose a Room outside that directory."]],
+        ["Room workspace binding changed; launch Room View again", ["ROOM_VIEW_BINDING_CHANGED", "The selected Room binding changed. Select the Room and launch Room View again."]],
+      ]);
+      const refusal = refusals.get(value.error);
+      rejectStartup(launcherError(refusal?.[0] || "ROOM_VIEW_CONTROLLER_FAILED", refusal?.[1] || "Room View controller refused startup"));
       return;
     }
     if (value.command !== "view-serve") return;
@@ -257,7 +290,6 @@ async function launchRoomView({
       });
       child.once("close", async () => {
         closed = true;
-        if (!settled && stdout.trim()) parseStartup(stdout);
         let receiptError;
         try {
           await validateReceipt();
@@ -276,6 +308,7 @@ async function launchRoomView({
             if (safe) onDiagnostic(redactDiagnostic(safe));
           } catch (_error) { /* diagnostics must not affect cleanup */ }
         }
+        interruptReject(receiptError || launcherError("ROOM_VIEW_EXITED_EARLY", "Room View process exited before browser handoff completed"));
         if (child.pid && !groupCleaned) {
           signalGroup("SIGKILL");
         }
@@ -296,16 +329,33 @@ async function launchRoomView({
 
   const cancellation = () => {
     rejectStartup(abortError());
-    void dispose();
+    interruptReject(abortError());
+    void dispose().catch(() => {});
   };
   const subscription = cancellationToken?.onCancellationRequested?.(cancellation);
   if (cancellationToken?.isCancellationRequested) cancellation();
 
   let url;
   try {
-    url = await startupPromise;
+    url = await Promise.race([startupPromise, interrupted]);
+    if (closed) throw launcherError("ROOM_VIEW_EXITED_EARLY", "Room View process exited before browser handoff completed");
     if (disposed || cancellationToken?.isCancellationRequested) throw abortError();
-    const opened = await vscode.env.openExternal(vscode.Uri.parse(url));
+    let browserUri = vscode.Uri.parse(url);
+    if (vscode.env.remoteName) {
+      try {
+        browserUri = await Promise.race([vscode.env.asExternalUri(browserUri), interrupted]);
+        url = validateForwardedUri(browserUri, url);
+      } catch (error) {
+        if (error?.code === "ABORT_ERR" || error?.code?.startsWith("ROOM_VIEW_")) throw error;
+        throw launcherError("ROOM_VIEW_FORWARD_FAILED", "VS Code could not privately forward Room View; check the desktop Ports view");
+      }
+    }
+    const opened = await Promise.race([Promise.resolve().then(() => {
+      if (closed) throw launcherError("ROOM_VIEW_EXITED_EARLY", "Room View process exited before browser handoff completed");
+      if (disposed || cancellationToken?.isCancellationRequested) throw abortError();
+      return vscode.env.openExternal(browserUri);
+    }), interrupted]);
+    if (closed) throw launcherError("ROOM_VIEW_EXITED_EARLY", "Room View process exited before browser handoff completed");
     if (opened === false) throw launcherError("ROOM_VIEW_OPEN_FAILED", "Room View could not be opened");
     if (disposed || cancellationToken?.isCancellationRequested) throw abortError();
   } catch (error) {
@@ -324,4 +374,4 @@ async function launchRoomView({
   };
 }
 
-module.exports = { launchRoomView, validateRoomViewInfo };
+module.exports = { launchRoomView, validateRoomViewInfo, assertRoomViewHost, validateForwardedUri };

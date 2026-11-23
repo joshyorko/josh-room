@@ -126,9 +126,12 @@ class ViewCollector:
                 policy=self._policy,
                 extra_sanitizer=extra_sanitizer,
             )
-        except ViewValidationError:
+        except ViewValidationError as error:
             with self._lock:
-                self._mark_stale_locked("sanitization-rejected")
+                if error.code == "workspace-binding-changed":
+                    self._state = self._empty_stale_state("workspace-binding-changed")
+                else:
+                    self._mark_stale_locked("sanitization-rejected")
             return
         except Exception:  # noqa: BLE001 - provider errors become safe stale markers
             with self._lock:

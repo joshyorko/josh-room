@@ -7956,7 +7956,7 @@ test("3D launcher uses selected open Room root without Save or hydration", async
   assert.equal(launched.runtime.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
   await assert.rejects(extension.__test__.exploreRoom3D({ kind: "jat", project: { id: "demo-room" }, dimension: { id: "two" } }), /Open the entered Room/);
   vscode.env.remoteName = "dev-container";
-  await assert.rejects(extension.__test__.exploreRoom3D(), /Remote\/SSH\/devcontainer/);
+  await assert.rejects(extension.__test__.exploreRoom3D(), /privately forward Room View/);
   vscode.env.remoteName = undefined;
   vscode.workspace.isTrusted = false;
   await assert.rejects(extension.__test__.exploreRoom3D(), /Workspace Trust/);
@@ -8025,7 +8025,7 @@ test("Room View blocks web and unknown trust before runtime or workspace reads",
   await assert.rejects(extension.__test__.exploreRoom3D(), /Workspace Trust/);
   vscode.workspace.isTrusted = true;
   vscode.env.uiKind = 2;
-  await assert.rejects(extension.__test__.exploreRoom3D(), /local Linux/);
+  await assert.rejects(extension.__test__.exploreRoom3D(), /VS Code for the web/);
 });
 
 test("Room View palette selects explicitly and concurrent launch is rejected", async t => {
@@ -8064,4 +8064,31 @@ test("Room View repeats require explicit replacement, and public command ignores
   let injected = false;
   await callbacks.get("joshRoom.explore3D")(item, { launch: () => { injected = true; } });
   assert.equal(injected, false);
+});
+
+test("review regression: deactivate invalidates the open picker", async t => {
+  const { extension, vscode } = roomViewCommandFixture(t);
+  const [target] = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders);
+  const picker = Promise.withResolvers();
+  vscode.window.showQuickPick = () => picker.promise;
+  let launches = 0;
+  const operation = extension.__test__.exploreRoom3D(undefined, {
+    launch: async () => { launches++; return { active: true, dispose() {} }; },
+  });
+  await extension.deactivate();
+  picker.resolve(target);
+  await operation.catch(() => {});
+  await extension.deactivate();
+  assert.equal(launches, 0);
+});
+
+test("review regression: viewer excludes ambient MinIO credentials", async t => {
+  const { extension, item } = roomViewCommandFixture(t);
+  const previous = process.env.MINIO_ROOT_PASSWORD;
+  process.env.MINIO_ROOT_PASSWORD = "synthetic";
+  t.after(() => { if (previous === undefined) delete process.env.MINIO_ROOT_PASSWORD; else process.env.MINIO_ROOT_PASSWORD = previous; });
+  await extension.__test__.exploreRoom3D(item, { launch: async ({ runtime }) => {
+    assert.equal(Object.hasOwn(runtime.env, "MINIO_ROOT_PASSWORD"), false);
+    return { active: false, dispose() {} };
+  } });
 });

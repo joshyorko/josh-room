@@ -1066,11 +1066,15 @@ def load_provider(
     *,
     workspace: object | None = None,
     manifest: object | None = None,
+    expected_room_id: str | None = None,
+    expected_dimension_id: str | None = None,
 ) -> ViewStateProvider:
     """Load a ViewStateProvider by builtin name, entry point, or module:attr."""
     if not isinstance(spec, str) or not spec.strip():
         raise ViewValidationError("invalid-provider", "provider specification is required")
     spec = spec.strip()
+    if spec != "room" and (expected_room_id is not None or expected_dimension_id is not None):
+        raise ViewValidationError("invalid-provider", "expected Room binding requires provider 'room'")
 
     from .room_provider import RoomWorkspaceProvider, SavedCapsuleManifestProvider
     from .synthetic_provider import SyntheticPipelineProvider, SyntheticUnixFsProvider
@@ -1081,7 +1085,7 @@ def load_provider(
                 "workspace-required",
                 "provider 'room' requires --workspace <path>",
             )
-        return RoomWorkspaceProvider(workspace)
+        return RoomWorkspaceProvider(workspace, expected_room_id=expected_room_id, expected_dimension_id=expected_dimension_id)
     if spec == "capsule-manifest":
         if manifest is None:
             raise ViewValidationError(

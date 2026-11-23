@@ -35,9 +35,11 @@ blocked pending pin retention and crash-consistent orchestration; see the
 
 ## Explore an entered Room in 3D
 
-In a local Linux window, right-click the open Room row and select **Explore Room
+In desktop VS Code with a Linux workspace extension host, right-click the open Room row and select **Explore Room
 in 3D…**, or use **Josh: Explore Room in 3D…** in the Command Palette. No global
 CLI, Save, or new Logical JAT is required. **Josh: Stop Room 3D Viewer** stops
-the session; closing only the browser tab does not. Windows and remote/SSH/WSL/
-devcontainer windows currently fail closed for this action. See
+the session; closing only the browser tab does not. Windows desktop clients can
+use a Linux devcontainer/attached-container/SSH workspace through VS Code's
+private loopback forwarding (`remote.localPortHost: localhost`). Native Windows
+controllers, web hosts and public forwarding URLs remain unsupported. See
 [Room View](https://github.com/joshyorko/josh-room/blob/main/docs/room-view.md) for lifecycle and security limits.

@@ -372,6 +372,8 @@ class RoomWorkspaceProvider:
         include_previews: bool = True,
         include_attachments: bool = True,
         sensitivity: str = "internal",
+        expected_room_id: str | None = None,
+        expected_dimension_id: str | None = None,
     ) -> None:
         if not _HAS_DIR_FD or not getattr(os, "O_NOFOLLOW", 0):
             raise ViewValidationError("workspace-platform-unsupported", "safe descriptor-relative workspace reads unavailable")
@@ -413,6 +415,19 @@ class RoomWorkspaceProvider:
             raise ViewValidationError("workspace-unavailable", "workspace root is unavailable or unsafe") from error
         try:
             _ = self._capture_policy(fd)
+            root_stat = os.fstat(fd)
+            self._root_identity = (root_stat.st_dev, root_stat.st_ino)
+            self._context = context_status(self._root)
+            self._binding = self._binding_identity(self._context)
+            self._binding_invalidated = False
+            if (expected_room_id is None) != (expected_dimension_id is None):
+                raise ViewValidationError("workspace-binding-required", "Room View requires both expected Room and Dimension")
+            if expected_room_id is not None and (
+                not self._context.get("linked")
+                or self._context.get("project_id") != expected_room_id
+                or self._context.get("dimension_id") != expected_dimension_id
+            ):
+                raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
         except ViewValidationError:
             raise
         except (OSError, ValueError) as error:
@@ -421,6 +436,25 @@ class RoomWorkspaceProvider:
             os.close(fd)
 
         self._descriptor = self._build_descriptor()
+
+    @staticmethod
+    def _binding_identity(context: dict) -> tuple:
+        # Save can advance snapshot/signature metadata without changing the Room.
+        return tuple(context.get(key) for key in (
+            "state", "linked", "path_matches", "dimension_id", "project_id",
+            "encryption_domain_id", "composition_namespace",
+        ))
+
+    def _assert_binding(self, directory_fd: int) -> dict:
+        info = os.fstat(directory_fd)
+        context = context_status(self._root)
+        with self._lock:
+            if (self._binding_invalidated or (info.st_dev, info.st_ino) != self._root_identity
+                    or self._binding_identity(context) != self._binding):
+                self._binding_invalidated = True
+                self._attachment_index.clear()
+                raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+        return context
 
     def _capture_policy(self, directory_fd: int) -> CapturePolicy:
         # Managed RCC always sets ROBOCORP_HOME. Descriptor-bound policy cannot
@@ -437,7 +471,7 @@ class RoomWorkspaceProvider:
         return load_capture_policy(self._root, directory_fd=directory_fd if _HAS_DIR_FD else None)
 
     def _build_descriptor(self) -> ViewDescriptor:
-        ctx = context_status(self._root)
+        ctx = self._context
         title = "Room Workspace"
         if ctx.get("linked") and isinstance(ctx.get("display_name"), str):
             safe_name = _safe_display_label(ctx["display_name"], "room-display-name")
@@ -779,7 +813,7 @@ class RoomWorkspaceProvider:
             root_stamp = stamp(root_stat)
             root_mount = _safe_mount_id(root_fd)
             policy = self._capture_policy(root_fd)
-            ctx = context_status(self._root)
+            ctx = self._assert_binding(root_fd)
 
             nodes_list: list[NodeState] = []
             items_list: list[ItemState] = []
@@ -1250,6 +1284,7 @@ class RoomWorkspaceProvider:
             if omissions:
                 summary["omissions"] = ",".join(sorted(omissions))[:140]
 
+            self._assert_binding(root_fd)
             return ViewState(
                 taken_at=now_iso,
                 since=now_iso,
@@ -1274,6 +1309,7 @@ class RoomWorkspaceProvider:
             root_stat = os.fstat(root_fd)
             if (root_stat.st_dev, root_stat.st_ino) != record.root_identity:
                 return None
+            self._assert_binding(root_fd)
             policy = self._capture_policy(root_fd)
             if policy.sha256 != record.policy_sha256 or policy.is_excluded("/".join(record.rel_parts)):
                 return None
@@ -1300,6 +1336,7 @@ class RoomWorkspaceProvider:
                 return None
             if hashlib.sha256(data).hexdigest() != record.sha256:
                 return None
+            self._assert_binding(root_fd)
             return Attachment(name=name, media_type=record.media_type, data=data)
         except (OSError, ValueError):
             return None

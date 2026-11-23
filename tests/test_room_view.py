@@ -1196,3 +1196,46 @@ def test_room_provider_in_managed_rcc_keeps_descriptor_policy(tmp_path, monkeypa
     monkeypatch.setenv("ROBOCORP_HOME", str(workspace / "runtime"))
     with pytest.raises(ViewValidationError, match="managed runtime"):
         RoomWorkspaceProvider(workspace)
+
+
+def test_live_room_binding_cannot_switch_dimensions_or_serve_old_attachments(tmp_path):
+    from josh_room.view.server import ViewCollector
+    from josh_room.workspace_state import write_workspace_marker
+
+    def bind(dimension):
+        write_workspace_marker(tmp_path, dimension_id=dimension, project_id="demo",
+                               display_name=dimension, snapshot_id="snap", workspace_fingerprint="a" * 64)
+
+    bind("alpha")
+    (tmp_path / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(tmp_path)
+    collector = ViewCollector(provider, workspace=tmp_path)
+    image = next(item for item in collector.current_payload()["state"]["items"] if item["label"] == "diagram.png")
+    attachment = image["attachments"][0]
+    assert provider.attachment(image["id"], attachment["name"]) is not None
+    bind("beta")
+    (tmp_path / "beta.txt").touch()
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+    assert provider.attachment(image["id"], attachment["name"]) is None
+
+
+def test_room_provider_requires_selected_binding_but_allows_save_in_same_room(tmp_path):
+    from josh_room.workspace_state import write_workspace_marker
+
+    def bind(snapshot):
+        write_workspace_marker(tmp_path, dimension_id="alpha", project_id="demo",
+                               display_name="Synthetic", snapshot_id=snapshot, workspace_fingerprint="a" * 64)
+    bind("snap-1")
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_room_id="demo", expected_dimension_id="beta")
+    provider = load_provider("room", workspace=tmp_path, expected_room_id="demo", expected_dimension_id="alpha")
+    (tmp_path / "example.txt").write_text("synthetic content")
+    bind("snap-2")
+    assert [item.label for item in provider.state().items] == ["example.txt"]
+    (tmp_path / ".josh-room.json").unlink()
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        provider.state()
+    bind("snap-2")
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        provider.state()

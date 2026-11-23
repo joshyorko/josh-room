@@ -73,7 +73,7 @@ test("launcher starts the exact selected Room workspace through the managed runt
     "view", "serve", "--provider", "room", "--workspace", cwd,
     "--port", "0", "--require-token",
   ]);
-  assert.equal(runtimeCall.receipt.startsWith("/tmp/josh-room-view-"), true);
+  assert.equal(runtimeCall.receipt.startsWith(require("node:path").join(require("node:os").tmpdir(), "josh-room-view-")), true);
   assert.equal(harness.opened[0], "http://127.0.0.1:49152/?token=synthetic-token");
   assert.equal(session.url, harness.opened[0]);
   assert.equal(session.active, true);
@@ -82,14 +82,14 @@ test("launcher starts the exact selected Room workspace through the managed runt
   assert.equal(fs.existsSync(runtimeCall.receipt), false);
 });
 
-test("launcher blocks non-Linux and remote VS Code before spawning", async () => {
+test("launcher blocks non-Linux and remote hosts without private forwarding before spawning", async () => {
   const local = createHarness();
-  await assert.rejects(launchRoomView({ ...local, cwd: "/workspace", platform: "win32" }), /only on local Linux/);
+  await assert.rejects(launchRoomView({ ...local, cwd: "/workspace", platform: "win32" }), /Linux workspace extension host/);
   assert.equal(local.calls.length, 0);
 
   const remote = createHarness();
   remote.vscode.env.remoteName = "ssh-remote";
-  await assert.rejects(launchRoomView({ ...remote, cwd: "/workspace", platform: "linux" }), /remote VS Code/);
+  await assert.rejects(launchRoomView({ ...remote, cwd: "/workspace", platform: "linux" }), /remote VS Code host/);
   assert.equal(remote.calls.length, 0);
 
   const untrusted = createHarness();
@@ -211,4 +211,102 @@ test("real Linux child starts, opens, and is reaped by session disposal", { skip
   await session.dispose();
   assert.equal(session.active, false);
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+});
+
+test("review regression: cancellation settles while browser handoff is pending", async () => {
+  const h = createHarness();
+  const entered = Promise.withResolvers(), browser = Promise.withResolvers();
+  let cancel;
+  const token = { onCancellationRequested(f) { cancel = f; return { dispose() {} }; } };
+  h.vscode.env.openExternal = () => { entered.resolve(); return browser.promise; };
+  const result = launchRoomView({ ...h, cwd: process.cwd(), cancellationToken: token })
+    .then(() => "opened", error => error.code);
+  await entered.promise;
+  token.isCancellationRequested = true;
+  cancel();
+  const observed = await Promise.race([result, new Promise(r => setTimeout(() => r("pending"), 150))]);
+  browser.resolve(true);
+  await result;
+  assert.equal(observed, "ABORT_ERR");
+});
+
+test("review regression: a closed child cannot open the browser", async () => {
+  const { spawn, kill, ...h } = createHarness();
+  const record = { ok: true, command: "view-serve", host: "127.0.0.1",
+    port: 41234, read_only: true, url: "http://127.0.0.1:41234/?token=fixture" };
+  h.runtime.command = process.execPath;
+  h.runtime.args = () => ["-e", "process.stdout.write(process.argv[1])", JSON.stringify(record)];
+  await assert.rejects(launchRoomView({ ...h, cwd: process.cwd() }), { code: "ROOM_VIEW_EXITED_EARLY" });
+  assert.equal(h.opened.length, 0);
+});
+
+test("review regression: provider overlap refusal stays actionable without exposing arbitrary errors", async () => {
+  const overlap = createHarness({ info: { ok: false, error: "Room View cannot observe the managed runtime directory" } });
+  await assert.rejects(launchRoomView({ ...overlap, cwd: process.cwd() }), error =>
+    error.code === "ROOM_VIEW_RUNTIME_OVERLAP" && /outside that directory/.test(error.message));
+  const unknown = createHarness({ info: { ok: false, error: "synthetic private diagnostic" } });
+  await assert.rejects(launchRoomView({ ...unknown, cwd: process.cwd() }), error =>
+    error.code === "ROOM_VIEW_CONTROLLER_FAILED" && !error.message.includes("private"));
+});
+
+test("launcher sends the exact selected Room binding to the controller", async () => {
+  const h = createHarness();
+  const session = await launchRoomView({ ...h, cwd: process.cwd(), roomBinding: { roomId: "demo", dimensionId: "alpha" } });
+  assert.deepEqual(h.calls.find(call => call.args).args.slice(-4), ["--expected-room-id", "demo", "--expected-dimension-id", "alpha"]);
+  await session.dispose();
+});
+
+for (const remoteName of ["dev-container", "attached-container", "ssh-remote"]) {
+  test(`Linux ${remoteName} forwards a tokenized viewer privately to the desktop browser`, async () => {
+    const h = createHarness();
+    h.vscode.env.remoteName = remoteName;
+    h.vscode.workspace.getConfiguration = () => ({ get: () => "localhost" });
+    let forwarded = 0;
+    h.vscode.env.asExternalUri = async uri => {
+      assert.equal(uri.value, "http://127.0.0.1:49152/?token=synthetic-token");
+      forwarded++;
+      return { value: "http://127.0.0.1:53123/?token=synthetic-token", toString: () => "http://127.0.0.1:53123/?token=synthetic-token" };
+    };
+    const session = await launchRoomView({ ...h, cwd: process.cwd() });
+    assert.equal(forwarded, 1);
+    assert.equal(h.opened[0], "http://127.0.0.1:53123/?token=synthetic-token");
+    assert.equal(session.url, h.opened[0]);
+    await session.dispose();
+  });
+}
+
+test("remote viewer refuses public localPortHost before spawning and unsafe mapped URLs before opening", async () => {
+  for (const url of ["https://public.invalid/?token=synthetic-token", "http://127.0.0.1:53123/", "http://0.0.0.0:53123/?token=synthetic-token"]) {
+    const h = createHarness();
+    h.vscode.env.remoteName = "dev-container";
+    h.vscode.workspace.getConfiguration = () => ({ get: () => "localhost" });
+    h.vscode.env.asExternalUri = async () => ({ toString: () => url });
+    await assert.rejects(launchRoomView({ ...h, cwd: process.cwd() }), { code: "ROOM_VIEW_FORWARD_FAILED" });
+    assert.equal(h.opened.length, 0);
+    assert.equal(h.child.closed, true);
+  }
+  const h = createHarness();
+  h.vscode.env.remoteName = "dev-container";
+  h.vscode.workspace.getConfiguration = () => ({ get: () => "allInterfaces" });
+  h.vscode.env.asExternalUri = async () => { throw new Error("must not forward"); };
+  await assert.rejects(launchRoomView({ ...h, cwd: process.cwd() }), /localPortHost/);
+  assert.equal(h.calls.length, 0);
+});
+
+test("cancelling a pending private forward settles and cleans the Linux process", async () => {
+  const h = createHarness();
+  h.vscode.env.remoteName = "ssh-remote";
+  h.vscode.workspace.getConfiguration = () => ({ get: () => "localhost" });
+  const entered = Promise.withResolvers();
+  const forwarding = Promise.withResolvers();
+  h.vscode.env.asExternalUri = () => { entered.resolve(); return forwarding.promise; };
+  let cancel;
+  const token = { onCancellationRequested(cb) { cancel = cb; return { dispose() {} }; } };
+  const result = launchRoomView({ ...h, cwd: process.cwd(), cancellationToken: token });
+  await entered.promise;
+  token.isCancellationRequested = true; cancel();
+  await assert.rejects(result, { code: "ABORT_ERR" });
+  assert.equal(h.child.closed, true);
+  assert.equal(h.opened.length, 0);
+  forwarding.resolve({ toString: () => "http://localhost:53123/?token=synthetic-token" });
 });

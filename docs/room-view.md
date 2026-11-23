@@ -18,11 +18,17 @@ All examples, fixtures, receipts, and screenshots in this repository use
 
 ## Standalone VS Code extension
 
-In a **local Linux** VS Code window, open an entered Room folder, right-click
+In desktop VS Code with a **Linux workspace extension host** (local, devcontainer,
+attached container or Remote SSH), open an entered Room folder, right-click
 its Room row in the Josh Room sidebar and choose **Explore Room in 3D…**.
 The Command Palette also offers **Josh: Explore Room in 3D…** with an explicit
 choice among open, entered Rooms. The marker must match the folder, Dimension,
-and Room. Enter/open a Room first if it is not loaded in this window.
+and Room. The controller verifies the selected IDs at startup and keeps the
+Room/Dimension, encryption domain, namespace and directory identity pinned for
+the session. A changed or removed binding invalidates the session's workspace
+state and attachments; launch it again after entering the intended Room. Save
+within the same Room does not invalidate the viewer. Enter/open a Room first if
+it is not loaded in this window.
 
 This uses the VSIX's private managed controller, not a global `josh-room`
 command. It observes the current on-disk workspace without Save, hydration, or
@@ -36,14 +42,24 @@ Use **Josh: Stop Room 3D Viewer** to stop the owned session. Starting another
 viewer asks to stop the existing one. Closing the VS Code window or changing
 workspace folders also stops it. Closing the browser tab alone does not stop
 the session: browser tab lifetime cannot be observed reliably by the extension.
-Startup can be cancelled from its progress notification.
+Startup can be cancelled from its progress notification, including during
+browser handoff. Stop/deactivation also invalidates pending selection prompts.
+Only a small OS environment allowlist and the managed runtime's own non-secret
+settings reach the viewer; ambient provider credentials are not inherited.
 
-Windows and macOS are unsupported for this live workspace action because the
-provider requires safe descriptor-relative reads. Remote SSH, WSL, Codespaces
-and devcontainer extension hosts, plus web-hosted VS Code, are explicitly unsupported: the extension does
-not forward ports, rewrite localhost to a remote host, or expose an unprotected
-listener. Use a local Linux window instead. These limits do not change the
-platform support of other Room commands.
+The desktop client and browser may run on Windows; the workspace extension and
+controller must run on Linux. In devcontainer/attached-container/SSH windows,
+Josh Room uses VS Code's `asExternalUri` to forward the tokenized server URL to
+the desktop. `remote.localPortHost` must be `localhost`, and the returned URL
+must be an HTTP desktop loopback address preserving the token. Public tunnel
+URLs and all-interfaces forwarding are refused. No Docker port publication or
+manual listener exposure is needed. Stop removes the owned Linux listener;
+VS Code owns the forwarding entry, which may remain in the Ports view after
+Stop but cannot serve Room data once the viewer has stopped.
+
+Native Windows/macOS controllers, WSL, Codespaces, other remote authorities,
+and web-hosted VS Code remain unsupported for this action. These limits do not
+change the platform support of other Room commands.
 
 **Browse Recovery Point…** remains historical Time Machine recovery.
 **Inspect Logical JAT** inspects saved metadata; **Serve Room Content…** and
@@ -64,10 +80,20 @@ denials, and listener shutdown, and writes metadata-only
 `installed.jsonl` evidence. This does **not** qualify visible browser rendering,
 3D navigation, or OS default-browser integration.
 
+For a remote desktop-to-container run, install the candidate and acceptance
+extension in the Linux workspace host. Register a desktop **UI-kind** test
+command that calls `scripts/installed_room_view_probe.js` (`probe` / `isStopped`)
+on the returned URL, and set `JOSH_ROOM_DESKTOP_PROBE_COMMAND` to that command
+in the workspace test driver. The remote driver calls the real `asExternalUri`;
+HTTP assertions execute on the desktop, not inside the container. The Linux
+side separately verifies that Stop removed its owned listener. This separates
+actual forwarding evidence from a same-host or mocked-URI test. Windows desktop
+qualification still requires an actual Windows client run.
+
 ## CLI contract
 
 ```text
-josh-room view serve  --provider <name|module:attr> [--port 0] [--interval 5] [--workspace <path>] [--manifest <file.json>] [--require-token] [--json]
+josh-room view serve  --provider <name|module:attr> [--port 0] [--interval 5] [--workspace <path>] [--manifest <file.json>] [--require-token] [--expected-room-id <id> --expected-dimension-id <id>] [--json]
 josh-room view export --provider <name|module:attr> --output <file.html> [--no-attachments] [--max-size 50MB] [--sensitivity-ack] [--workspace <path>] [--manifest <file.json>] [--room-id <id>] [--json]
 josh-room view export --from-state <state.json> [--attachments-dir <dir>] --output <file.html> [--no-attachments] [--max-size 50MB] [--sensitivity-ack] [--json]
 josh-room view inspect <file.html> [--json]
