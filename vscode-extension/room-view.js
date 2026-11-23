@@ -80,6 +80,7 @@ async function launchRoomView({
   onDiagnostic,
   sanitizeDiagnostic,
   roomBinding,
+  comparisonQuery,
 } = {}) {
   assertRoomViewHost(vscode, platform);
   if (vscode?.workspace?.isTrusted !== true) throw new Error("Room View requires a trusted VS Code workspace.");
@@ -95,6 +96,7 @@ async function launchRoomView({
   const commandArgs = ["view", "serve", "--provider", "room", "--workspace", cwd,
     "--port", "0", "--require-token", "--stop-on-stdin-eof"];
   if (roomBinding) commandArgs.push("--expected-workspace-binding", JSON.stringify(roomBinding));
+  let closeComparison;
   let child;
   let closed = false;
   let disposed = false;
@@ -173,6 +175,7 @@ async function launchRoomView({
     disposed = true;
     cleanupPromise = (async () => {
       clearTimeout(startupTimer);
+      await closeComparison?.();
       child?.stdin?.end();
       if (child?.pid && !closed) {
         signalGroup("SIGTERM");
@@ -230,6 +233,12 @@ async function launchRoomView({
 
   let startupPromise;
   try {
+    if (cancellationToken?.isCancellationRequested) throw abortError();
+    if (roomBinding && comparisonQuery) {
+      const socketPath = path.join(tempDirectory, "comparison.sock");
+      closeComparison = await require("./room-view-comparison").startComparisonBroker(socketPath, comparisonQuery);
+      commandArgs.push("--comparison-socket", socketPath);
+    }
     if (cancellationToken?.isCancellationRequested) throw abortError();
     const args = runtime.args(commandArgs, receiptFile);
     child = spawn(runtime.command, args, {

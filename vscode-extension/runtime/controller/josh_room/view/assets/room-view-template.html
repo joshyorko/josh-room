@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;f52855458ef85a72e8ae1966d5dd343060b31fae52e84c45cfbaa1f264be091e&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;6f606bf2fdccce66cdcd77ef5e6c6dccc4bfc150d8d12ae7e88b1ffb1c7626cc&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -469,8 +469,13 @@ body {
   border: 1px solid var(--border-strong);
 }
 
+.saved-point-select { display: block; max-width: 100%; margin: 4px 0 10px; }
+.saved-comparison-result dd { margin: 0 0 8px; overflow-wrap: anywhere; font-family: var(--font-mono); }
+.saved-comparison-result pre { max-width: 100%; overflow: auto; }
+
 .drawer-tabs {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
   padding: 0 8px;
   gap: 4px;
@@ -1234,11 +1239,13 @@ kbd {
       <button class="tab-btn active" role="tab" aria-selected="true" data-tab="content" type="button">Content <span id="content-count-badge" class="tab-count">0</span></button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="details" type="button">Details</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button">Evidence <span id="evidence-count-badge" class="tab-count">0</span></button>
+      <button id="btn-compare-tab" class="tab-btn" role="tab" aria-controls="tab-compare" aria-selected="false" data-tab="compare" type="button" hidden>Compare</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="timeline" type="button">Timeline</button>
     </div>
     <div id="tab-content" class="drawer-body" role="tabpanel"></div>
     <div id="tab-details" class="drawer-body" role="tabpanel" hidden></div>
     <div id="tab-evidence" class="drawer-body" role="tabpanel" hidden></div>
+    <div id="tab-compare" class="drawer-body" role="tabpanel" aria-labelledby="btn-compare-tab" hidden></div>
     <div id="tab-timeline" class="drawer-body" role="tabpanel" hidden></div>
   </aside>
 
@@ -15151,6 +15158,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.sensitivity = initialPayload.sensitivity;
       this.meta = initialPayload.meta || {};
       this.filesystem = mode === 'live' && initialPayload.server?.filesystem === true;
+      this.comparison = this.filesystem && initialPayload.server?.comparison === true;
       this.fsGeneration = null;
       this._blobCache = new Map();
       this._indexAttachments();
@@ -15200,6 +15208,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (!resp.ok) {
         const error = new Error(`Filesystem request failed (HTTP ${resp.status})`);
         error.status = resp.status;
+        if (operation === 'points' || operation === 'compare') {
+          const detail = await resp.json().catch(() => null);
+          error.code = detail?.error;
+        }
         throw error;
       }
       return resp.json();
@@ -19058,6 +19070,164 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 })(window);
 
 
+// === saved_comparison.js ===
+(function (global) {
+  'use strict';
+
+  function element(tag, text) {
+    const el = document.createElement(tag);
+    if (text != null) el.textContent = text;
+    return el;
+  }
+
+  class SavedComparison {
+    constructor(data, panel, tab) {
+      this.data = data;
+      this.panel = panel;
+      this.tab = tab;
+      this.target = null;
+      this.pending = null;
+      this.active = false;
+    }
+
+    select(target) {
+      const id = this.data.comparison && target && ['file', 'artifact'].includes(target.nodeKind)
+        ? target.objectId : null;
+      const generation = this.data.fsGeneration;
+      this.tab.hidden = !id || !generation;
+      if (!this.tab.hidden && this.target?.id === id && this.target.generation === generation) return;
+      this.close();
+      this.target = this.tab.hidden ? null : { id, generation };
+    }
+
+    close() {
+      this.pending?.abort();
+      this.pending = null;
+      this.active = false;
+      this.panel.replaceChildren();
+      this.panel.hidden = true;
+    }
+
+    open() {
+      if (!this.target || this.active) return;
+      this.active = true;
+      this.panel.hidden = false;
+      this.loadPoints();
+    }
+
+    async request(operation, extra, status) {
+      this.pending?.abort();
+      const pending = new AbortController();
+      this.pending = pending;
+      try {
+        const value = await this.data.queryFilesystem(operation, { ...this.target, ...extra }, pending.signal);
+        if (!pending.signal.aborted) {
+          if (this.target?.generation === this.data.fsGeneration) return value;
+          status.textContent = 'The Room changed. Reopen the file before comparing.';
+        }
+      } catch (err) {
+        if (!pending.signal.aborted) {
+          const reasons = {
+            'comparison-unsupported': 'This recovery format does not support selective comparison.',
+            'comparison-unavailable': 'Could not read this recovery point. Check the Room connection and try again.',
+            'comparison-stale': 'The selected recovery point changed. Reload the choices.',
+            'comparison-busy': 'Another comparison is running. Try again.',
+          };
+          status.textContent = reasons[err.code] || ({
+            403: 'Access to this comparison was denied.',
+            404: 'The selected file or recovery point is unavailable.',
+            409: 'The Room or selection changed. Reopen the file and choose a recovery point.',
+            413: 'This file exceeds the comparison limit.',
+            422: 'Comparison is unavailable for this file or recovery format.',
+            429: 'Another query is running. Try again.',
+          })[err.status] || 'Could not read the recovery point. Check the Room connection and try again.';
+        }
+      } finally {
+        if (this.pending === pending) this.pending = null;
+      }
+      return null;
+    }
+
+    async loadPoints() {
+      const status = element('p', 'Reading available recovery points…');
+      status.setAttribute('role', 'status');
+      const reload = element('button', 'Reload recovery points');
+      reload.type = 'button';
+      reload.className = 'hud-btn';
+      reload.addEventListener('click', () => this.loadPoints());
+      this.panel.replaceChildren(status, reload);
+      const result = await this.request('points', {}, status);
+      if (!result) return;
+      if (!result.points.length) {
+        status.textContent = result.portable ? 'Only portable snapshots are available. They do not support selective comparison.'
+          : 'No saved recovery points are available for this Room.';
+        return;
+      }
+      const label = element('label', 'Saved recovery point');
+      const select = element('select');
+      select.className = 'hud-btn saved-point-select';
+      const prompt = element('option', 'Choose a recovery point…');
+      prompt.value = '';
+      select.append(prompt);
+      for (const point of result.points) {
+        const option = element('option', point.date + ' · ' + point.snapshot);
+        option.value = point.id;
+        select.append(option);
+      }
+      label.append(select);
+      const compare = element('button', 'Compare with live file');
+      compare.type = 'button';
+      compare.className = 'hud-btn';
+      compare.disabled = true;
+      const output = element('div');
+      output.className = 'saved-comparison-result';
+      select.addEventListener('change', () => {
+        this.pending?.abort();
+        output.replaceChildren();
+        status.textContent = '';
+        compare.disabled = !select.value;
+      });
+      compare.addEventListener('click', async () => {
+        const point = result.points.find(entry => entry.id === select.value);
+        if (!point) return;
+        status.textContent = 'Comparing the selected file…';
+        output.replaceChildren();
+        const receipt = await this.request('compare', { point: point.id }, status);
+        if (!receipt) return;
+        if (receipt.snapshot !== point.snapshot || receipt.date !== point.date) {
+          status.textContent = 'The selected recovery point changed. Reload the choices.';
+          return;
+        }
+        status.textContent = 'Comparison at time of request · ' + receipt.change;
+        const facts = element('dl');
+        const field = (name, value) => facts.append(element('dt', name), element('dd', value));
+        field('Saved recovery point', receipt.date + ' · ' + receipt.snapshot);
+        field('Workspace snapshot', receipt.workspace_snapshot_id);
+        field('Saved tree', receipt.tree_id);
+        if (receipt.saved) {
+          field('Saved size', receipt.saved.size + ' bytes');
+          field('Saved SHA-256', receipt.saved.sha256 || 'Unavailable within the read limit');
+        } else {
+          field('Saved file', 'Absent at this point');
+        }
+        field('Live size', receipt.live.size + ' bytes');
+        field('Live SHA-256', receipt.live.sha256 || 'Unavailable within the read limit');
+        output.append(facts);
+        if (receipt.unified_diff) {
+          const diff = element('pre', receipt.unified_diff);
+          diff.setAttribute('aria-label', 'Saved to live text diff');
+          output.append(diff);
+        }
+      });
+      status.textContent = result.portable ? 'Portable snapshots cannot be compared here.' : '';
+      this.panel.replaceChildren(label, compare, status, output, reload);
+    }
+  }
+
+  global.RoomSavedComparison = SavedComparison;
+})(globalThis);
+
+
 // === evidence.js ===
 // Inspector & Read-Only Content / Evidence Viewer:
 // - Bounded sanitized typed Content (syntax-highlighted source/config/log, unified diff,
@@ -19357,6 +19527,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.tabDetailsEl = document.getElementById('tab-details');
       this.tabEvidenceEl = document.getElementById('tab-evidence');
       this.tabTimelineEl = document.getElementById('tab-timeline');
+      this.comparison = new global.RoomSavedComparison(dataLayer, document.getElementById('tab-compare'),
+        document.getElementById('btn-compare-tab'));
       this.lightboxEl = document.getElementById('lightbox-modal');
       this.lightboxImg = document.getElementById('lightbox-img');
       this.lightboxCaption = document.getElementById('lightbox-caption');
@@ -19396,6 +19568,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     switchTab(tabName) {
+      if (tabName === 'compare' && this.comparison.tab.hidden) tabName = 'content';
+      if (tabName === 'compare') this.comparison.open();
+      else this.comparison.close();
       this.activeTab = tabName;
       this.drawerEl.querySelectorAll('.tab-btn').forEach((btn) => {
         const active = btn.getAttribute('data-tab') === tabName;
@@ -19433,6 +19608,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     hide() {
+      this.comparison.select(null);
       this._attRequestSeq++;
       this._teardownPdf();
       this.lightboxEl.hidden = true;
@@ -19453,6 +19629,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
+      this.comparison.select(target);
+      if (this.activeTab === 'compare' && !this.comparison.active) this.switchTab('content');
       const sameObject = this.currentObjectId === (target.objectId || target.id);
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {

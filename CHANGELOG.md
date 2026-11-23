@@ -15,6 +15,8 @@
 
 ## [Unreleased]
 
+- Compare a selected live file with an exact saved recovery point from the native Room viewer.
+
 - Explore live Room directories in bounded pages, inspect individual files on demand, and see which folders a frozen observation covered.
 
 - Keep child folders with reserved composition metadata out of split selection, stop discovery at those boundaries, and reject ambiguous source paths and Win32 sibling aliases.

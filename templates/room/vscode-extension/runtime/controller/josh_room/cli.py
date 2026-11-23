@@ -670,7 +670,7 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(serve)
     recovery = commands.add_parser("recovery")
     recovery_commands = recovery.add_subparsers(dest="recovery_command", required=True)
-    for action in ("tree", "inspect", "diff", "extract"):
+    for action in ("tree", "inspect", "observe", "diff", "extract"):
         command = recovery_commands.add_parser(action)
         command.add_argument("--namespace", help="explicit composition namespace for a committed child Room pin")
         command.add_argument("--expected-domain", help="verify the current child marker encryption domain")
@@ -681,8 +681,12 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "tree":
             command.add_argument("--offset", type=int, default=0)
             command.add_argument("--limit", type=int, default=100)
-        if action in {"inspect", "diff"}:
+        if action in {"inspect", "observe", "diff"}:
             command.add_argument("--include-text", action="store_true")
+        if action == "observe":
+            command.add_argument("--expected-ciphertext")
+            command.add_argument("--expected-tree")
+            command.add_argument("--expected-workspace-snapshot")
         if action == "diff":
             comparison = command.add_mutually_exclusive_group(required=True)
             comparison.add_argument("--compare-snapshot")
@@ -2791,7 +2795,7 @@ def dispatch(args, instance: Path) -> dict:
                 instance, dimension, material, args.namespace
             ) as (authority, factory, _private):
                 return recover_namespace_child(args, dimension, authority, factory)
-        if args.expected_domain is not None:
+        if args.expected_domain is not None and args.recovery_command != "observe":
             raise ValueError("a child marker domain requires an explicit namespace")
         if args.snapshot == "latest":
             raise ValueError("historical recovery requires an exact recovery point")
