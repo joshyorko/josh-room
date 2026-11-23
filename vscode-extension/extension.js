@@ -1027,6 +1027,7 @@ function shellQuote(value) {
 
 function sanitizeControllerArgv(argv) {
   if (argv[0] === "composition") return ["composition", "plan", "[local selection redacted]"];
+  if (argv[0] === "agents" && argv[1] === "inventory") return ["agents", "inventory", "[local workspace redacted]"];
   const sanitized = [];
   const sensitiveFlag = /^-{1,2}(?:legacy-source-handoff|source-identity|recovery-handoff|material-handoff|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|bearer)(?:$|[-_=])/i;
   const sensitiveAssignment = /^(?:[a-z_][a-z0-9_]*(?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)\s*=/i;
@@ -2415,7 +2416,8 @@ async function saveRoom(options = {}) {
   const choiceKey = captureChoiceKey(source, targetDimensionId, selected.project?.id || name);
   imageChoice = await require("./component-picker").pickComponents(vscode, source, sessionCaptureChoices.get(choiceKey) || require("./component-picker").storedChoice(extensionContext?.globalState, choiceKey), () => runJoshRoom(["snapshot", "homebrew-capabilities"], source),
     ["minio", "s3"].includes(targetProvider) ? () => runJoshRoom(nativeRegistry.dimensionArgs(
-      ["snapshot", "agent-save-status", name, "--source", source, "--backend", targetProvider], targetDimensionId), source) : undefined,
+      ["snapshot", "agent-save-status", name, "--source", source, "--backend", targetProvider], targetDimensionId), source)
+      : async () => ({ agent_save: { contract_version: 1, mode: "history-only", available: false, profiles: [], reason: "native-save-unsupported-provider" } }),
     () => runJoshRoom(["agents", "inventory", "--workspace", source], source));
   if (!imageChoice) return "cancelled";
   const buildArgs = nativeRegistry.dimensionArgs(

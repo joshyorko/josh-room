@@ -26,10 +26,17 @@ def _result():
 
 
 def _match(result, cwd, workspace):
-    if not isinstance(cwd, str) or len(cwd) > 4096:
+    if not isinstance(cwd, str) or not cwd or len(cwd) > 4096 or "\0" in cwd:
+        result.update(state="partial", reason="unsupported-format")
         return
     path = Path(cwd)
     if not path.is_absolute() or ".." in path.parts:
+        result.update(state="partial", reason="unsupported-format")
+        return
+    try:
+        path = path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        result.update(state="partial", reason="discovery-failed")
         return
     if path == workspace:
         result["exact"] += 1
@@ -158,6 +165,7 @@ def _t3(workspace):
                 connection.execute("PRAGMA query_only=ON")
                 connection.execute("PRAGMA trusted_schema=OFF")
                 connection.set_progress_handler(lambda: time.monotonic() > deadline, 1000)
+                connection.execute("BEGIN")
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 projects = {row[1] for row in connection.execute("PRAGMA table_info(projection_projects)")}
                 thread_tables = [table for table in ("orchestration_v2_projection_threads", "projection_threads") if table in tables]

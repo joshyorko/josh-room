@@ -65,6 +65,21 @@ def test_exact_and_child_counts_exclude_parent_sibling_and_deduplicate(homes):
         assert private not in encoded
 
 
+def test_workspace_and_session_aliases_use_same_canonical_identity(homes):
+    alias = homes.parent / "alias"
+    alias.symlink_to(homes, target_is_directory=True)
+    rollout(alias)
+    for workspace in (alias, homes):
+        assert inventory.inventory(workspace)["tools"]["codex"] == {"state": "complete", "exact": 1, "descendant": 0}
+
+
+@pytest.mark.parametrize("cwd", [None, "", "relative-folder", "/invalid/../folder", 12])
+def test_unclassifiable_session_metadata_cannot_claim_complete_absence(homes, cwd):
+    path = rollout(homes)
+    path.write_text(json.dumps({"type": "session_meta", "payload": {"id": "one", "cwd": cwd}}) + "\n")
+    assert inventory.inventory(homes)["tools"]["codex"]["state"] == "partial"
+
+
 def test_absent_homes_and_empty_inventory_are_content_free(homes):
     assert inventory.inventory(homes) == {"contract_version": 1, "tools": {tool: {"state": "complete", "exact": 0, "descendant": 0} for tool in ("codex", "t3")}}
 
@@ -162,6 +177,28 @@ def test_mixed_t3_layouts_keep_distinct_histories_but_v2_overrides_legacy(homes)
     assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 1, "descendant": 1}
 
 
+def test_live_wal_migration_uses_one_read_snapshot(homes, monkeypatch):
+    writer, _path = database(homes, wal=True)
+    add_thread(writer, "one", v2=False)
+    connect = sqlite3.connect
+
+    def migrating_reader(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+
+        def on_query(sql):
+            if "SELECT coalesce(t.worktree_path" in sql:
+                add_thread(writer, "one")
+
+        connection.set_trace_callback(on_query)
+        return connection
+
+    try:
+        monkeypatch.setattr(sqlite3, "connect", migrating_reader)
+        assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 1, "descendant": 0}
+    finally:
+        writer.close()
+
+
 @pytest.mark.parametrize("kind", ["unknown-schema", "corrupt", "symlink", "locked"])
 def test_t3_errors_are_distinct_from_empty_success(homes, kind):
     connection, path = database(homes)
@@ -194,3 +231,12 @@ def test_inventory_cli_does_not_require_room_or_grant(homes, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result["session_inventory"]["tools"]["codex"]["exact"] == 1
     assert "profile_ref" not in json.dumps(result)
+
+
+def test_inventory_writes_private_managed_result_receipt(homes, capsys, monkeypatch):
+    rollout(homes)
+    target = homes.parent / "runtime/result.json"
+    monkeypatch.setenv("JOSH_ROOM_RESULT_FILE", str(target))
+    assert native_agents_cli.main(["inventory", "--workspace", str(homes), "--json"]) == 0
+    assert json.loads(target.read_text()) == json.loads(capsys.readouterr().out)
+    assert target.stat().st_mode & 0o777 == 0o600

@@ -116,6 +116,21 @@ def test_missing_authority_reason_survives_actual_discovery_without_storage(tmp_
     assert not (config_home / "josh-room").exists()
 
 
+def test_actual_status_cli_missing_authority_never_resolves_storage(tmp_path, monkeypatch, capsys):
+    from josh_room import cli
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("JOSH_ROOM_RESULT_FILE", str(tmp_path / "result.json"))
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_effective_dimension", lambda _: SimpleNamespace(provider="minio", dimension_id="synthetic"))
+    monkeypatch.setattr(cli, "_backend_for_args", lambda *_: pytest.fail("metadata contacted storage"))
+    assert cli.main(["snapshot", "agent-save-status", "demo", "--source", str(tmp_path), "--dimension", "synthetic", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["agent_save"]["reason"] == "native-room-authority-unavailable"
+    assert result["agent_save"]["available"] is False
+    assert json.loads((tmp_path / "result.json").read_text()) == result
+
+
 def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypatch):
     monkeypatch.setattr(save, "SAVE_ADAPTER_QUALIFIED", False)
     monkeypatch.setattr(save, "open_scope", lambda *a, **k: pytest.fail("disabled admission"))

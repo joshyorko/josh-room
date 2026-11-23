@@ -1778,6 +1778,50 @@ for (const mismatch of ["domain", "algorithm", "current-policy"]) test(`partial 
   assert.equal(extension.__test__.agentPartialWorkspace({ ok: false, error: "agent-save-partial", workspace_result: result }, root, "backup"), undefined);
 });
 
+test('managed inventory keeps real controller results when stdout is suppressed and redacts its workspace log', { skip: process.platform !== 'linux' }, async t => {
+  const repository = path.resolve(__dirname, '..');
+  const python = path.join(repository, '.venv/bin/python');
+  if (!fs.existsSync(python)) { t.skip('repository Python environment unavailable'); return; }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'josh-room-inventory-receipt-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'codex');
+  fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'sessions/one.jsonl'), JSON.stringify({ type: 'session_meta', payload: { id: 'one', cwd: root } }) + '\n');
+  const fixture = createVscodeMock(root);
+  const harness = createSpawnHarness(({ options }) => {
+    const child = require('node:child_process').spawnSync(python, ['-B', '-m', 'josh_room', 'agents', 'inventory', '--workspace', root, '--json'], {
+      encoding: 'utf8', env: { HOME: root, CODEX_HOME: home, T3CODE_HOME: path.join(root, 't3'), PYTHONPATH: path.join(repository, 'vscode-extension/runtime/controller'), JOSH_ROOM_RESULT_FILE: options.env.JOSH_ROOM_RESULT_FILE },
+    });
+    assert.equal(child.status, 0, child.stderr);
+    return { stdout: '' };
+  });
+  const extension = loadExtension(fixture.vscode, harness.spawn).__test__;
+  const artifact = 'sha256:' + '0'.repeat(64);
+  extension.setRuntimeForTests({ mode: 'managed', controllerArtifact: artifact, command: 'mock-rcc', args: (args, receipt) => ['--artifact', artifact, '--receipt-file', receipt, '--', ...args], env: {} });
+  const log = [];
+  extension.setOutputChannelForTests({ info: value => log.push(value), warn() {}, error() {}, show() {} });
+  const result = await extension.runJoshRoom(['agents', 'inventory', '--workspace', root], root);
+  assert.equal(result.session_inventory.tools.codex.exact, 1);
+  assert.ok(log.some(value => /START.*agents inventory/.test(value)));
+  assert.ok(log.every(value => !value.includes(root)));
+});
+
+test('R2 Save explains its known agent-history provider restriction', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'josh-room-inventory-r2-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createNativeSaveFixture(root, { provider: 'r2' });
+  const original = fixture.vscode.window.showQuickPick;
+  let detail;
+  fixture.vscode.window.showQuickPick = async (rows, options) => {
+    const history = rows.find(row => row.label?.includes('Codex HISTORY'));
+    if (history) { detail = history.detail; return undefined; }
+    return original(rows, options);
+  };
+  assert.equal(await fixture.extension.__test__.saveRoom(), 'cancelled');
+  assert.match(detail, /requires MinIO/);
+  assert.equal(fixture.spawnHarness.calls.some(call => call.args[1] === 'agent-save-status'), false);
+});
+
 test("native Save probes ordinary sessions independently without adding a capture selection", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-session-detection-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

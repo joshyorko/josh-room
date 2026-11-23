@@ -896,8 +896,8 @@ def save(
             raise
 
 
-def status(instance, dimension, material, room, workspace):
-    """Metadata-only narrow availability. Global producer capabilities stay false."""
+def _profile_status(dimension, room, workspace):
+    """Offline profile admission; never resolve encryption material or storage."""
     result = {
         "ok": True,
         "agent_save": {
@@ -913,11 +913,8 @@ def status(instance, dimension, material, room, workspace):
             "native-save-unsupported-platform" if sys.platform != "linux" else
             "native-save-unsupported-provider"
         )
-        return result
-    from .native_agent_discovery import resolve_profile, room_status
-    from .native_agent_reference import _grant
-    from .room_store_operations import scan_workspace_for_status
-    from .workspace_policy import load_capture_policy
+        return result, {"profiles": []}
+    from .native_agent_discovery import room_status
 
     discovery = room_status(dimension=dimension.dimension_id, room=room, workspace=workspace)
     if not discovery["profiles"]:
@@ -925,7 +922,24 @@ def status(instance, dimension, material, room, workspace):
         result["agent_save"]["reason"] = reason if reason in {
             "native-room-authority-unavailable", "native-room-profile-unavailable"
         } else "native-save-admission-unavailable"
+    return result, discovery
+
+
+def admission_preflight(dimension, room, workspace):
+    result, discovery = _profile_status(dimension, room, workspace)
+    return result if not discovery["profiles"] else None
+
+
+def status(instance, dimension, material, room, workspace):
+    """Metadata-only narrow availability. Global producer capabilities stay false."""
+    result, discovery = _profile_status(dimension, room, workspace)
+    if not discovery["profiles"]:
         return result
+    from .native_agent_discovery import resolve_profile
+    from .native_agent_reference import _grant
+    from .room_store_operations import scan_workspace_for_status
+    from .workspace_policy import load_capture_policy
+
     result["agent_save"]["reason"] = "native-save-profile-admission-failed"
     policy = load_capture_policy(Path(workspace))
     scan = scan_workspace_for_status(Path(workspace))

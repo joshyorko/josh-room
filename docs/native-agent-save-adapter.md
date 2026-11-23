@@ -33,6 +33,11 @@ admitted row captures only the explicitly selected dedicated profile, not the
 ordinary or child-folder sessions counted alongside it. Claude remains on the
 existing granted-profile discovery path; this probe does not read Claude turns.
 
+Inventory uses the managed controller's private result receipt as well as
+stdout, so RCC stream suppression cannot erase a successful observation. Its
+operation log redacts the local workspace argument. Unsupported Save providers
+report the known MinIO-only capture restriction independently of inventory.
+
 The probe uses `CODEX_HOME` / `T3CODE_HOME`, defaulting to `~/.codex` / `~/.t3`
 in the workspace extension host. It reads only the first Codex `session_meta`
 record from active/archived JSONL files and schema-checked T3 project/thread
@@ -42,6 +47,10 @@ the legacy layout is also supported. No messages, titles, private paths,
 session IDs, auth stores, or raw errors are returned to VS Code. No provider
 process, model request, recovery grant, database backup or capture is created.
 The existing offline `agents room-status` contract remains profile-only.
+All T3 metadata queries share one read transaction, including mixed legacy/v2
+identity filtering. Workspace and session aliases resolve to the same canonical
+folder. A missing/invalid session cwd makes the scan incomplete rather than
+claiming that no sessions exist.
 
 Closed databases without a WAL use an immutable main-file observation, fenced
 by file identity/size/timestamps and journal/WAL absence. Live WAL reads use
@@ -60,7 +69,9 @@ separately. Detection remains visible when recovery admission fails.
 
 Missing host authority now retains its bounded reason through Save status,
 without opening storage or scanning workspace contents when there are no
-granted profiles. The picker explains missing/unreadable host admission,
+granted profiles. This early check runs in the actual snapshot status CLI before
+encryption-material resolution, including a private managed result receipt.
+The picker explains missing/unreadable host admission,
 unmatched profiles, changed/failed grants, work-scope denial and unsupported
 platform/provider gates. Existing shared-home adoption and original T3 recovery
 still need #188; keep the existing native home until supported recovery exists.

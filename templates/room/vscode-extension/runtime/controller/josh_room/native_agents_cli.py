@@ -125,5 +125,10 @@ def main(argv=None) -> int:
         result = {"ok": False, "state": "blocked", "error": "Native agent operation refused unsafe or unavailable input"}
     except (KeyboardInterrupt, CLICancelled):
         result = {"ok": False, "state": "cancelled"}
+    if args.action == "inventory":
+        from .cli import _bounded_json_result, _write_runtime_result
+
+        result = _bounded_json_result(result)
+        _write_runtime_result(result)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("ok") else 1
