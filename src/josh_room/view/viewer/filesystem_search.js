@@ -48,8 +48,9 @@
   }
 
   class RoomViewFilesystemSearch {
-    constructor({ list, select, directory, root, generation }) {
+    constructor({ list, inspect, select, directory, root, generation }) {
       this.list = list;
+      this.inspect = inspect;
       this.select = select;
       this.directory = directory;
       this.root = root;
@@ -73,8 +74,31 @@
     invalidate() {
       this.controller?.abort();
       this.walk = null;
+      this.displayed = null;
       this.bar.replaceChildren();
       this.bar.hidden = true;
+    }
+
+    async validateDisplayed() {
+      const hits = this.displayed;
+      if (!hits?.length || this.validating === hits) return;
+      const signal = this.controller.signal;
+      this.validating = hits;
+      try {
+        for (const hit of hits) {
+          if (signal.aborted || hits !== this.displayed) return;
+          await this.inspect(hit.node.id, this.walk.generation, signal);
+        }
+      } catch (error) {
+        if (signal.aborted || hits !== this.displayed || error.status === 429) return;
+        this.invalidate();
+        this.bar.hidden = false;
+        this.status('Search results changed. Search again for current matches.');
+        this.button('Restart search', () => this.start());
+        throw error;
+      } finally {
+        if (this.validating === hits) this.validating = null;
+      }
     }
 
     start() {
@@ -111,6 +135,7 @@
     }
 
     async advance() {
+      this.displayed = null;
       const walk = this.walk;
       const signal = this.controller.signal;
       const hadFocus = this.bar.contains(document.activeElement);
@@ -124,6 +149,7 @@
       try {
         const {hits, more} = await walk.advance(signal);
         if (signal.aborted) return;
+        this.displayed = hits;
         const moveFocus = this.bar.contains(document.activeElement);
         this.bar.replaceChildren();
         const coverage = more ? 'Partial search' : (walk.skipped ? 'Search ended with incomplete coverage' : 'Search complete for admitted entries');

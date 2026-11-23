@@ -67,3 +67,24 @@ test('a changed generation or cancelled in-flight page cannot supply a search hi
   const stale = async () => ({...page(root, [], [src]), generation: 'g2'});
   await assert.rejects(new SearchWalk(stale, root.id, 'g1', false, 'src').advance(signal), /Observation changed/);
 });
+
+test('a poll checks displayed deep hits and removes the stale result and continuation', async () => {
+  const search = Object.create(global.RoomViewFilesystemSearch.prototype);
+  const calls = [];
+  Object.assign(search, {
+    walk: {generation: 'g1'},
+    displayed: [{node: file('deep-match')}],
+    controller: new AbortController(),
+    bar: {hidden: false, children: ['deep-match'], replaceChildren() { this.children = []; }},
+    inspect: async (id, generation) => {
+      calls.push([id, generation]);
+      throw Object.assign(new Error('changed'), {status: 409});
+    },
+    status() {}, button(label) { this.bar.children.push(label); },
+  });
+  await assert.rejects(search.validateDisplayed(), /changed/);
+  assert.deepEqual(calls, [['f-deep-match', 'g1']]);
+  assert.equal(search.controller.signal.aborted, true);
+  assert.equal(search.walk, null);
+  assert.deepEqual(search.bar.children, ['Restart search']);
+});
