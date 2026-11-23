@@ -579,9 +579,14 @@
       const native = this.data.filesystem || global.RoomViewLayout.isWorkspace(descriptor);
       this.reader = native && ['file', 'artifact'].includes(target.nodeKind);
       this.drawerEl.classList.toggle('filesystem-reader', Boolean(native));
-      this.drawerEl.querySelector('[data-tab="content"]').hidden = native && !(target.previews || []).length;
+      const attachments = target.attachments || [];
+      const fileAvailable = attachments.some(a => a.embedded !== false);
+      const hasText = (target.previews || []).some(p => p.status === 'available');
+      document.getElementById('attachment-tab-label').textContent = native ? 'File' : 'Evidence';
+      this.drawerEl.querySelector('[data-tab="content"]').hidden = native &&
+        (!(target.previews || []).length || (fileAvailable && !hasText));
       this.drawerEl.querySelector('[data-tab="timeline"]').hidden = Boolean(native);
-      this.drawerEl.querySelector('[data-tab="evidence"]').hidden = native && !(target.attachments || []).length;
+      this.drawerEl.querySelector('[data-tab="evidence"]').hidden = native && !fileAvailable;
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       const wasDeferred = sameObject && this.openCurrentVersion;
       const unchanged = preserveTab && sameObject && fingerprint === this.contentFingerprint;
@@ -638,6 +643,18 @@
 
       const deferred = changed || deferContent || wasDeferred;
       this.openCurrentVersion = null;
+      if (deferred && !native) {
+        const reopen = document.createElement('button');
+        reopen.type = 'button';
+        reopen.textContent = 'Content changed. Open current version';
+        reopen.addEventListener('click', () => this.showTarget(this.currentItem, descriptor, state, layout, { quantileBin }));
+        this.tabContentEl.replaceChildren(reopen);
+        this.tabEvidenceEl.replaceChildren();
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        this._renderTimeline(target, state);
+        this.switchTab('content');
+        return;
+      }
       if (deferred && this.reader) {
         for (const panel of [this.tabContentEl, this.tabEvidenceEl, this.tabDetailsEl, this.tabTimelineEl]) panel.replaceChildren();
         this.summaryReading = null;
@@ -942,12 +959,12 @@
       const linksSection = this._buildLinksSection(target, layout);
       if (linksSection) this.tabDetailsEl.appendChild(linksSection);
 
-      if ((target.attachments || []).length > 0) {
+      if ((target.attachments || []).some(a => !this.reader || a.embedded !== false)) {
         const hintBtn = document.createElement('button');
         hintBtn.type = 'button';
         hintBtn.className = 'hud-btn hud-btn-accent';
         hintBtn.style.marginTop = '12px';
-        hintBtn.textContent = `Open ${target.attachments.length} attached evidence file${target.attachments.length > 1 ? 's' : ''}`;
+        hintBtn.textContent = this.reader ? fileReaderAction(target).label : `Open ${target.attachments.length} attached evidence file${target.attachments.length > 1 ? 's' : ''}`;
         hintBtn.addEventListener('click', () => this.switchTab('evidence'));
         this.tabDetailsEl.appendChild(hintBtn);
       }
@@ -1031,7 +1048,7 @@
         btn.type = 'button';
         btn.className = 'att-pill';
         btn.setAttribute('data-attachment-name', att.name);
-        btn.textContent = `${att.name} (${Math.max(1, Math.round(att.size / 1024))} KB)`;
+        btn.textContent = this.reader ? `${target.label} (${att.size} bytes)` : `${att.name} (${Math.max(1, Math.round(att.size / 1024))} KB)`;
         btn.addEventListener('click', () => selectAtt(att, btn));
         buttons.push(btn);
         listEl.appendChild(btn);

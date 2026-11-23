@@ -222,3 +222,23 @@ test('changed content remains withheld across polls until explicitly reopened fr
   assert.equal(drawer.fileSummary.hidden, true);
   assert.equal(drawer.activeTab, 'content');
 });
+
+test('live inspector asks before replacing the open version of a provider item', () => {
+  const { drawer, file } = setup(false);
+  drawer.data.filesystem = drawer.data.comparison = false;
+  const descriptor = { legend: {} };
+  const target = { ...file, objectId: 'record', previews: [{ slot: 'source', status: 'available', body: 'before' }] };
+  let visible = '';
+  let reopen;
+  drawer._renderContent = item => { visible = item.previews[0].body; };
+  drawer.tabContentEl.replaceChildren = control => { reopen = control; visible = ''; };
+  drawer.showTarget(target, descriptor, {}, {});
+  assert.equal(visible, 'before');
+  target.previews = [{ ...target.previews[0], body: 'after' }];
+  drawer.showTarget(target, descriptor, {}, {}, { preserveTab: true });
+  assert.equal(visible, '');
+  assert.equal(reopen.textContent, 'Content changed. Open current version');
+  assert.equal(drawer.fileSummary.hidden, true);
+  reopen.click();
+  assert.equal(visible, 'after');
+});

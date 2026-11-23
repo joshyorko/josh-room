@@ -723,9 +723,9 @@ class RoomWorkspaceProvider:
                 PreviewContent(
                     slot=classification.slot,
                     media_type="text/plain",
-                    title="Binary evidence",
+                    title="Binary file",
                     status="unavailable",
-                    reason=f"{classification.embed_media_type} payload inspected via Evidence tab",
+                    reason=f"{classification.embed_media_type} has no text preview",
                 ),
                 0,
                 False,

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;1db1a98d20e7780cf32ea8acd0cd28c1c26aa7f0a8d3373930367972abe1eb15&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;ffe7260549d2a9aa14ff1663588918ac3a5fdb228ba97569e5ba4c93e4ea7418&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -1297,7 +1297,7 @@ body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-b
   <div id="aria-live-region" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <!-- Dismissible Contextual Inspector & Evidence Drawer (HIDDEN until selection) -->
-  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object content, details, links, and evidence" hidden>
+  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object" hidden>
     <div class="drawer-header">
       <div class="drawer-title-group">
         <span id="inspector-kind-badge" class="kind-badge"></span>
@@ -1323,7 +1323,7 @@ body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-b
     <div class="drawer-tabs" role="tablist" aria-label="Inspector sections">
       <button class="tab-btn active" role="tab" aria-selected="true" data-tab="content" type="button">Content <span id="content-count-badge" class="tab-count">0</span></button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="details" type="button">Details</button>
-      <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button">Evidence <span id="evidence-count-badge" class="tab-count">0</span></button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button"><span id="attachment-tab-label">Evidence</span> <span id="evidence-count-badge" class="tab-count">0</span></button>
       <button id="btn-compare-tab" class="tab-btn" role="tab" aria-controls="tab-compare" aria-selected="false" data-tab="compare" type="button" hidden>Compare</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="timeline" type="button">Timeline</button>
     </div>
@@ -1387,7 +1387,7 @@ body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-b
         <button id="btn-help-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close help">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="muted-text">Click a directory slab or conduit wire to fly along its branch; click any file, run, or artifact block to spotlight it and inspect bounded read-only source, diffs, JSON trees, execution logs, evidence, and relationship links. Drag to orbit, Shift-drag to pan, scroll to zoom.</p>
+        <p class="muted-text">Select a directory to follow its branch. Select a block to spotlight the object and see what you can open. Drag to orbit, Shift-drag to pan, or scroll to zoom.</p>
         <table class="shortcuts-table">
           <tbody>
             <tr><td><kbd>&#8593;</kbd> / <kbd>&#8595;</kbd></td><td>Previous / next sibling</td></tr>
@@ -20041,9 +20041,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const native = this.data.filesystem || global.RoomViewLayout.isWorkspace(descriptor);
       this.reader = native && ['file', 'artifact'].includes(target.nodeKind);
       this.drawerEl.classList.toggle('filesystem-reader', Boolean(native));
-      this.drawerEl.querySelector('[data-tab="content"]').hidden = native && !(target.previews || []).length;
+      const attachments = target.attachments || [];
+      const fileAvailable = attachments.some(a => a.embedded !== false);
+      const hasText = (target.previews || []).some(p => p.status === 'available');
+      document.getElementById('attachment-tab-label').textContent = native ? 'File' : 'Evidence';
+      this.drawerEl.querySelector('[data-tab="content"]').hidden = native &&
+        (!(target.previews || []).length || (fileAvailable && !hasText));
       this.drawerEl.querySelector('[data-tab="timeline"]').hidden = Boolean(native);
-      this.drawerEl.querySelector('[data-tab="evidence"]').hidden = native && !(target.attachments || []).length;
+      this.drawerEl.querySelector('[data-tab="evidence"]').hidden = native && !fileAvailable;
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       const wasDeferred = sameObject && this.openCurrentVersion;
       const unchanged = preserveTab && sameObject && fingerprint === this.contentFingerprint;
@@ -20100,6 +20105,18 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
       const deferred = changed || deferContent || wasDeferred;
       this.openCurrentVersion = null;
+      if (deferred && !native) {
+        const reopen = document.createElement('button');
+        reopen.type = 'button';
+        reopen.textContent = 'Content changed. Open current version';
+        reopen.addEventListener('click', () => this.showTarget(this.currentItem, descriptor, state, layout, { quantileBin }));
+        this.tabContentEl.replaceChildren(reopen);
+        this.tabEvidenceEl.replaceChildren();
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        this._renderTimeline(target, state);
+        this.switchTab('content');
+        return;
+      }
       if (deferred && this.reader) {
         for (const panel of [this.tabContentEl, this.tabEvidenceEl, this.tabDetailsEl, this.tabTimelineEl]) panel.replaceChildren();
         this.summaryReading = null;
@@ -20404,12 +20421,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const linksSection = this._buildLinksSection(target, layout);
       if (linksSection) this.tabDetailsEl.appendChild(linksSection);
 
-      if ((target.attachments || []).length > 0) {
+      if ((target.attachments || []).some(a => !this.reader || a.embedded !== false)) {
         const hintBtn = document.createElement('button');
         hintBtn.type = 'button';
         hintBtn.className = 'hud-btn hud-btn-accent';
         hintBtn.style.marginTop = '12px';
-        hintBtn.textContent = `Open ${target.attachments.length} attached evidence file${target.attachments.length > 1 ? 's' : ''}`;
+        hintBtn.textContent = this.reader ? fileReaderAction(target).label : `Open ${target.attachments.length} attached evidence file${target.attachments.length > 1 ? 's' : ''}`;
         hintBtn.addEventListener('click', () => this.switchTab('evidence'));
         this.tabDetailsEl.appendChild(hintBtn);
       }
@@ -20493,7 +20510,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         btn.type = 'button';
         btn.className = 'att-pill';
         btn.setAttribute('data-attachment-name', att.name);
-        btn.textContent = `${att.name} (${Math.max(1, Math.round(att.size / 1024))} KB)`;
+        btn.textContent = this.reader ? `${target.label} (${att.size} bytes)` : `${att.name} (${Math.max(1, Math.round(att.size / 1024))} KB)`;
         btn.addEventListener('click', () => selectAtt(att, btn));
         buttons.push(btn);
         listEl.appendChild(btn);
