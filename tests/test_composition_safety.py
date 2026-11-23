@@ -72,6 +72,24 @@ class CompositionSafetyTests(unittest.TestCase):
                          RepositoryInfo(REPOSITORY, 2), self.inventory if inventory is None else inventory,
                          expected_scope=kwargs.get('scope', body['scope']))
 
+    def test_v3_child_capture_policy_checked_against_descriptor(self):
+        self.body.update(contract="composition-safety-v3", child_updates={})
+        operation = self.body["operations"]["operation"]
+        plan = operation["plan"]
+        plan["plan_version"] = 3
+        slot = plan["children"][0]
+        slot.update(capture_mode="source-only", capture_policy_sha256="b" * 64,
+                    approved_paths_sha256="a" * 64, source_records_sha256="e" * 64)
+        operation["plan_sha256"] = plan_digest(plan)
+        self.assertTrue(self.report()["ok"])
+        slot["capture_mode"] = "full-repository"
+        operation["plan_sha256"] = plan_digest(plan)
+        with self.assertRaisesRegex(ValueError, "capture contract"):
+            self.report()
+        self.body["contract"] = "composition-safety-v2"
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
     def test_exact_historical_pin_not_latest_and_no_mutation(self):
         before = copy.deepcopy(self.body)
         self.body['dimension_catalog']['projects']['child']['latest'] = 'jat-child'

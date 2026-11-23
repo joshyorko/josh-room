@@ -14,7 +14,15 @@ import uuid
 from pathlib import Path
 
 from .catalog import Catalog, corroborate_logical_snapshot
-from .composition import MANIFEST, parse_manifest, portable_path, validate_manifest
+from .composition import (
+    MANIFEST,
+    parse_manifest,
+    portable_path,
+    validate_child_git,
+    validate_manifest,
+    validate_payload_path,
+)
+from .composition_git_integrity import verify_staged_git
 from .composition_lifecycle import (
     CONTENT_DIGEST_ALGORITHM,
     INHERITED_POLICY,
@@ -26,6 +34,7 @@ from .composition_lifecycle import (
     _finish_view,
     _records,
     _slot,
+    _verify_descriptor_contract,
 )
 from .composition_safety import CompositionSafetyState, _identifier, plan_digest
 from .composition_transaction import (
@@ -49,13 +58,6 @@ def _open(authority, namespace):
     return envelope, etag, CompositionSafetyState.from_dict(envelope['state'])
 
 
-def _v2(state):
-    body = state.to_dict()
-    body['contract'] = 'composition-safety-v2'
-    body.setdefault('child_updates', {})
-    return body
-
-
 def _descriptor(authority, state, room, snapshot):
     _identifier(room)
     _identifier(snapshot)
@@ -65,8 +67,9 @@ def _descriptor(authority, state, room, snapshot):
     value = descriptor.to_dict()
     if value['workspace']['repository_id'] != state.to_dict()['scope']['repository_id']:
         raise ValueError('descriptor repository differs from namespace')
-    if value.get('capture_mode') != 'source-only' or any(value['components'].values()):
-        raise ValueError('updates require source-only component-free snapshots')
+    _verify_descriptor_contract(state, descriptor)
+    if any(value['components'].values()):
+        raise ValueError('component-bearing namespace snapshots require component verification')
     return record, descriptor
 
 
@@ -74,11 +77,17 @@ def _proof(store, descriptor, private):
     value = descriptor.to_dict()['workspace']
     if store.snapshot(value['snapshot_id']).tree_id != value['tree_id']:
         raise ValueError('snapshot tree differs from descriptor')
-    _validate_snapshot_entries(store.entries(value['snapshot_id']))
+    entries = _validate_snapshot_entries(store.entries(value['snapshot_id']))
     target = private / ('update-proof-' + uuid.uuid4().hex)
     store.restore(value['snapshot_id'], target)
-    if load_capture_policy(target).sha256 != descriptor.to_dict()['capture_policy_sha256']:
+    policy = load_capture_policy(target)
+    if policy.capture_mode != descriptor.to_dict()['capture_mode'] or policy.sha256 != descriptor.to_dict()['capture_policy_sha256']:
         raise ValueError('saved capture policy differs')
+    scan = scan_workspace_for_status(target)
+    if set(entries) - {'.'} != scan.paths:
+        raise ValueError('saved inventory differs from effective policy')
+    validate_child_git(target, scan.paths, policy.capture_mode)
+    verify_staged_git(target, scan.paths, policy.capture_mode, private)
     return target
 
 
@@ -120,7 +129,7 @@ def _baseline_policy(workspace, expected, *, directory_fd=None):
         os.close(fd)
 
 
-def _child_view(workspace, private, namespace, room, baseline, accepted, expected_policy):
+def _child_view(workspace, private, namespace, room, baseline, accepted, expected_policy, expected_mode):
     """Stage only admitted records through one held source directory descriptor."""
     workspace = Path(os.path.abspath(workspace))
     fd = _directory(workspace)
@@ -133,12 +142,13 @@ def _child_view(workspace, private, namespace, room, baseline, accepted, expecte
         if set(guard) != {'namespace', 'room_id', 'snapshot_id'} or guard['namespace'] != namespace or guard['room_id'] != room or guard['snapshot_id'] not in accepted:
             raise ValueError('child namespace guard differs')
         policy = _baseline_policy(workspace, expected_policy, directory_fd=fd)
-        if policy.capture_mode != 'source-only' or not policy.is_excluded('.josh-room-split.json'):
-            raise ValueError('child policy must preserve the source-only namespace fence')
+        if policy.capture_mode != expected_mode or not policy.is_excluded('.josh-room-split.json'):
+            raise ValueError('child policy must preserve the authenticated capture mode and namespace fence')
         scan = scan_workspace_for_status(workspace)
+        validate_child_git(workspace, scan.paths, policy.capture_mode)
         for path in scan.paths:
             if path != '.josh-roomignore':
-                portable_path(path)
+                validate_payload_path(path)
         records = _records(workspace, scan.paths, fd)
         # Marker/guard replacement changes the root's mtime but no payload.
         evidence_records = {**records, '.': records['.'][:3]}
@@ -156,7 +166,7 @@ def _child_view(workspace, private, namespace, room, baseline, accepted, expecte
             'source_identity': [os.fstat(fd).st_dev, os.fstat(fd).st_ino],
             'source_records_sha256': plan_digest(evidence_records),
             'source_signature': scan.signature, 'capture_policy_sha256': policy.sha256,
-            'capture_mode': 'source-only', 'content_sha256': _content_digest(view),
+            'capture_mode': policy.capture_mode, 'content_sha256': _content_digest(view),
             'content_digest_algorithm': CONTENT_DIGEST_ALGORITHM,
         }
     finally:
@@ -166,6 +176,17 @@ def _child_view(workspace, private, namespace, room, baseline, accepted, expecte
 def _child_origin(state, room):
     return any(slot['room_id'] == room for op in state.to_dict()['operations'].values()
                if op['phase'] == 'committed' for slot in op['plan']['children'])
+
+
+def _recheck_source(workspace, fd, plan):
+    policy = _baseline_policy(workspace, plan['capture_policy_sha256'], directory_fd=fd)
+    now = scan_workspace_for_status(workspace)
+    records = _records(workspace, now.paths, fd)
+    if (policy.capture_mode != plan['capture_mode'] or now.signature != plan['source_signature']
+            or now.capture_policy_sha256 != policy.sha256
+            or plan_digest({**records, '.': records['.'][:3]}) != plan['source_records_sha256']):
+        raise ValueError('child source changed after approval')
+    return now
 
 
 def _bind_child(workspace, dimension, namespace, room, output, plan, authority):
@@ -182,11 +203,7 @@ def _bind_child(workspace, dimension, namespace, room, output, plan, authority):
                 or set(guard) != {'namespace', 'room_id', 'snapshot_id'}
                 or guard['namespace'] != namespace or guard['room_id'] != room or guard['snapshot_id'] not in accepted):
             raise ValueError('local namespace metadata changed before rebinding')
-        now = scan_workspace_for_status(workspace)
-        records = _records(workspace, now.paths, fd)
-        if (now.signature != plan['source_signature'] or now.capture_policy_sha256 != plan['capture_policy_sha256']
-                or plan_digest({**records, '.': records['.'][:3]}) != plan['source_records_sha256']):
-            raise ValueError('child saved remotely but local source changed; preserve marker')
+        now = _recheck_source(workspace, fd, plan)
         temp = '.josh-room-update-' + uuid.uuid4().hex
         opened = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd)
         try:
@@ -238,7 +255,10 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
     if Path(workspace).resolve() == private.resolve() or Path(workspace).resolve() in private.resolve().parents:
         raise ValueError('private runtime must be outside child source')
     expected_policy = previous.to_dict()['capture_policy_sha256']
-    view, plan = _child_view(workspace, private, namespace, room, baseline, accepted, expected_policy)
+    mode = previous.to_dict()['capture_mode']
+    view, plan = _child_view(workspace, private, namespace, room, baseline, accepted, expected_policy, mode)
+    if old is None or 'plan_version' in old['plan']:
+        plan['plan_version'] = 3
     _baseline_policy(view, expected_policy)
     marker = context_status(workspace)
     if marker.get('dimension_id') != dimension.dimension_id or marker.get('encryption_domain_id') != authority.binding['encryption_domain_id']:
@@ -265,10 +285,12 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             except (OSError, ValueError):
                 return _binding_failure(namespace, room, baseline, operation_id, False)
             return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline,
-                    'namespace': namespace, 'catalog_writes': False, 'parent_refreshed': False,
+                    'namespace': namespace, 'capture_mode': mode, 'catalog_writes': False, 'parent_refreshed': False,
                     'marker_verified': context_status(workspace).get('snapshot_id') == baseline}
         if old is None:
-            body = _v2(state)
+            body = state.to_dict()
+            body['contract'] = 'composition-safety-v3'
+            body.setdefault('child_updates', {})
             body['child_updates'][operation_id] = {'plan': plan, 'plan_sha256': plan_digest(plan), 'phase': 'reserved', 'pin': None}
             body['revision'] += 1
             state = CompositionSafetyState.from_dict(body)
@@ -282,7 +304,8 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             descriptor, scan = _capture(view, store, private, plan, dimension,
                 authority.binding['encryption_domain_id'], claim=claim, parent=previous, inherited_policy=INHERITED_POLICY)
             value = descriptor.to_dict()
-            if value['capture_policy_sha256'] != expected_policy or value['source'].get('composition_policy') != INHERITED_POLICY:
+            if (value['capture_mode'] != mode or value['capture_policy_sha256'] != expected_policy
+                    or value['source'].get('composition_policy') != INHERITED_POLICY):
                 raise ValueError('captured policy differs from authenticated inherited baseline')
             if value['parent_logical_jat_id'] != baseline or value['workspace']['parent_snapshot_id'] != record['workspace_snapshot_id']:
                 raise ValueError('child update lineage differs')
@@ -297,8 +320,9 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             body['child_updates'][operation_id].update(phase='committed', pin={'room_id': room, 'logical_jat_id': output, 'descriptor_sha256': ref.sha256})
             body['revision'] += 1
             state = CompositionSafetyState.from_dict(body)
-            _baseline_policy(workspace, expected_policy)
-            envelope, etag = _commit(authority, envelope, etag, state)
+            with _admitted_source(Path(workspace), plan) as fd:
+                _recheck_source(workspace, fd, plan)
+                envelope, etag = _commit(authority, envelope, etag, state)
         else:
             _, committed = _descriptor(authority, state, room, output)
             if committed.to_dict().get('parent_logical_jat_id') != baseline or _content_digest(_proof(store, committed, private)) != plan['content_sha256']:
@@ -308,7 +332,7 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
         except (OSError, ValueError):
             return _binding_failure(namespace, room, output, operation_id, True)
         return {'ok': True, 'status': 'saved', 'namespace': namespace, 'room_id': room,
-                'snapshot_id': output, 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
+                'snapshot_id': output, 'capture_mode': mode, 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
 
 
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,

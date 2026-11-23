@@ -41,14 +41,19 @@ after hydration; they are not reduced to the paths present at capture time. Inva
 stale approval fails closed. Approval binds namespace, source/policy/child
 inventory metadata, provider, connection, physical bucket and encryption domain.
 
-This first vertical is **source-only for both parent and children**: Git history
-is intentionally excluded. It captures one to 32 independent whole children in
-the unchanged sealed v1 manifest, not thousands of publications. Linked sources,
-unsupported layouts, existing bound Room conversion and optional RCC/Homebrew/
-Hauler components are not admitted. Source files and original ignore rules are
-never edited or removed. Private allowlisted capture copies are made outside the
-source; this trades additional scratch space and reads for explicit isolation.
-No constant-space or large-workspace performance claim is made.
+An independent child uses its ordinary workspace capture policy, which defaults
+to `full-repository`. This includes self-contained Git objects, refs, index and
+working files admitted by the policy. Review each child's `capture_mode` before
+approving. To deliberately omit a child's Git history, pass
+`--child-source-only projects/service-a` on both commands, or set the source-only
+directive in its policy. The generated policy in the restored child also
+includes inherited exclusions for future files. The original source is untouched.
+
+Choose a collection of independent directories. Save a cohesive root repository
+as one Room. Linked worktrees, borrowed object stores and unsupported Git
+layouts require another capture layout. The sealed manifest accepts one to 32
+child pins. Capture stages private copies outside the source and needs scratch
+space for the selected data. Optional child components are covered separately.
 
 Children are independently saved Logical JATs. The parent captures only its
 canonical pinned manifest, generated source-only policy, empty ancestor
@@ -88,7 +93,7 @@ Native commands are `Josh: Save Catalog Room`, `Josh: Enter Child Room`,
 `Josh: Save Child Room`, and `Josh: Refresh Catalog Child Pins`.
 New Room offers Save one Room first, or explicit Catalog configuration. Catalog
 configuration selects a source, child folders and optional parent-owned
-files/folders with native dialogs, then shows the source-only/local-only review.
+files/folders with native dialogs, then shows each child’s effective capture mode and identifies local-only content.
 Cancel before confirmation never invokes provider Save. Entry asks for the
 namespace receipt and exact relative child path; it opens the folder only after
 verified entry. Installed VSIX qualification remains separate from Node fixtures.
@@ -405,3 +410,5 @@ Experimental v1 provenance remains readable but cannot authorize child updates.
 The v2 writer requires the live/private/restored effective policy digest to match
 the exact authenticated baseline through publication, including for fresh/no-op
 operations. Policy changes require reconciliation, which remains unsupported.
+
+A full Git child requires Git to inspect its index. Catalog capture refuses an index that tracks the generated child policy, guard, or marker at its root, even when the working copy of that file is missing. Sparse directory indexes, split indexes requiring an external base, and submodule gitlinks are unsupported. Save such a repository as one ordinary Room. The same checks apply before a subsequent child Save.

@@ -270,22 +270,6 @@ def load_capture_policy(
         raise ValueError("workspace must be a directory")
     if directory_fd is not None and active_runtime_root is not None:
         raise ValueError("descriptor-bound policy does not support runtime path resolution")
-    defaults_raw, defaults = _read_defaults()
-    ignore_raw = _read_ignore(root, directory_fd=directory_fd)
-    capture_mode = "full-repository"
-    directives = [line.strip() for line in (ignore_raw or b"").decode("utf-8").splitlines()
-                  if line.strip().startswith("# josh-room capture-mode:")]
-    if directives:
-        if len(directives) != 1:
-            raise ValueError("workspace capture mode must be specified exactly once")
-        capture_mode = directives[0].split(":", 1)[1].strip()
-        if capture_mode not in {"full-repository", "source-only"}:
-            raise ValueError("unsupported workspace capture mode")
-    patterns = tuple(
-        _parts(item, rule="workspace capture default") for item in defaults["exclude"]
-    )
-    patterns += _user_patterns(ignore_raw)
-
     runtime_relative = None
     if active_runtime_root is not None:
         runtime = Path(active_runtime_root).resolve(strict=True)
@@ -303,6 +287,28 @@ def load_capture_policy(
                     "active runtime path contains unsupported glob characters"
                 )
             runtime_relative = relative.as_posix()
+
+    return policy_for_ignore(_read_ignore(root, directory_fd=directory_fd), runtime_relative)
+
+
+def policy_for_ignore(ignore_raw: bytes | None, runtime_relative: str | None = None) -> CapturePolicy:
+    """Compile the exact bytes to be installed in a private capture view."""
+    if ignore_raw is not None and len(ignore_raw) > _IGNORE_LIMIT:
+        raise ValueError("workspace ignore file exceeds 64 KiB")
+    defaults_raw, defaults = _read_defaults()
+    capture_mode = "full-repository"
+    directives = [line.strip() for line in (ignore_raw or b"").decode("utf-8").splitlines()
+                  if line.strip().startswith("# josh-room capture-mode:")]
+    if directives:
+        if len(directives) != 1:
+            raise ValueError("workspace capture mode must be specified exactly once")
+        capture_mode = directives[0].split(":", 1)[1].strip()
+        if capture_mode not in {"full-repository", "source-only"}:
+            raise ValueError("unsupported workspace capture mode")
+    patterns = tuple(
+        _parts(item, rule="workspace capture default") for item in defaults["exclude"]
+    )
+    patterns += _user_patterns(ignore_raw)
 
     digest = hashlib.sha256()
     digest.update(defaults_raw)

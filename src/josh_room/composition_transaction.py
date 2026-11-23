@@ -11,7 +11,12 @@ import json
 
 from .catalog import Catalog
 from .composition import validate_manifest
-from .composition_safety import CompositionSafetyState, _identifier, plan_digest
+from .composition_safety import (
+    _CONTRACTS,
+    CompositionSafetyState,
+    _identifier,
+    plan_digest,
+)
 
 
 def canonical(body):
@@ -33,6 +38,9 @@ def reserve(catalog, scope, operation_id, plan, *, previous=None):
         body = previous.to_dict()
         if body["scope"] != scope or body["dimension_catalog"] != catalog.body:
             raise ValueError("reservation authority or catalog changed")
+    if plan.get("plan_version") == 3:
+        body["contract"] = "composition-safety-v3"
+        body.setdefault("child_updates", {})
     operation = {"plan": copy.deepcopy(plan), "plan_sha256": plan_digest(plan),
                  "phase": "reserved", "child_pins": {}, "parent_pin": None,
                  "manifest_sha256": None, "parent_policy_sha256": None}
@@ -85,6 +93,12 @@ def _record(body, operation, slot, descriptor, object_ref, signature, name, *, c
         raise ValueError("descriptor differs from reserved slot")
     if value['workspace']['repository_id'] != body['scope']['repository_id']:
         raise ValueError('descriptor repository differs from reservation')
+    if child_path is not None and (
+        value.get("capture_mode", "full-repository") != slot.get("capture_mode", "source-only")
+        or ("capture_policy_sha256" in slot and slot["capture_policy_sha256"] != value["capture_policy_sha256"])
+        or any(value["components"].values())
+    ):
+        raise ValueError("child capture contract differs from reserved slot")
     if child_path is None:
         if operation['parent_pin'] is None and operation['phase'] != 'parent-prepared':
             raise ValueError('parent is not prepared')
@@ -222,9 +236,7 @@ def _require_extension(previous, candidate):
         changed += old != new
     old_updates = previous.get('child_updates', {})
     new_updates = candidate.get('child_updates', {})
-    if previous['contract'] != candidate['contract'] and not (
-        previous['contract'] == 'composition-safety-v1' and candidate['contract'] == 'composition-safety-v2'
-    ):
+    if _CONTRACTS.index(previous['contract']) > _CONTRACTS.index(candidate['contract']):
         raise ValueError('composition contract cannot be downgraded')
     for key, old in old_updates.items():
         new = new_updates.get(key)

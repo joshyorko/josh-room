@@ -372,7 +372,7 @@ def _validate_workspace_link(root: Path, relative: str, root_device: int, check_
             resolved.append(component)
 
 
-def _scan_workspace(root: Path, policy: CapturePolicy | None, *, capture_mode: str = "full-repository", diagnostics=None) -> WorkspaceScan:
+def _scan_workspace(root: Path, policy: CapturePolicy | None, *, capture_mode: str = "full-repository", diagnostics=None, opaque_directories=frozenset()) -> WorkspaceScan:
     try:
         resolved_root = root.resolve(strict=True)
         if any(char in str(resolved_root) for char in "\r\n"):
@@ -484,7 +484,8 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None, *, capture_mode: s
                 elif stat.S_ISDIR(metadata.st_mode):
                     paths.add(relative)
                     records.append(f"{relative}\0dir\0{mode}".encode())
-                    visit(path, relative)
+                    if relative not in opaque_directories:
+                        visit(path, relative)
                 elif stat.S_ISREG(metadata.st_mode):
                     paths.add(relative)
                     logical_bytes += metadata.st_size

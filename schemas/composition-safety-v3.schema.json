@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/composition-safety-v3.schema.json",
+  "title": "Namespace capture with exact per-child policy and inventory bindings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "contract", "scope", "revision", "dimension_catalog", "operations", "child_updates"],
+  "properties": {
+    "format_version": {"const": 4},
+    "contract": {"const": "composition-safety-v3"},
+    "scope": {"$ref": "composition-safety-v1.schema.json#/properties/scope"},
+    "revision": {"$ref": "composition-safety-v1.schema.json#/properties/revision"},
+    "dimension_catalog": {"$ref": "dimension-catalog-v3.schema.json"},
+    "operations": {
+      "type": "object", "minProperties": 1, "maxProperties": 32,
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/operation"}
+    },
+    "child_updates": {
+      "type": "object", "maxProperties": 128,
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/update"}
+    }
+  },
+  "$defs": {
+    "id": {"$ref": "composition-safety-v1.schema.json#/properties/operations/propertyNames"},
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "mode": {"enum": ["source-only", "full-repository"]},
+    "slot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "room_id", "logical_jat_id", "capture_mode", "capture_policy_sha256", "approved_paths_sha256", "source_records_sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "room_id": {"$ref": "#/$defs/id"},
+        "logical_jat_id": {"$ref": "#/$defs/id"},
+        "capture_mode": {"$ref": "#/$defs/mode"},
+        "capture_policy_sha256": {"$ref": "#/$defs/digest"},
+        "approved_paths_sha256": {"$ref": "#/$defs/digest"},
+        "source_records_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "plan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan_version", "source_path_sha256", "capture_policy_sha256", "parent_room_id", "parent_logical_jat_id", "expected_parent_logical_jat_id", "capture_mode", "children"],
+      "properties": {
+        "plan_version": {"const": 3},
+        "source_path_sha256": {"$ref": "#/$defs/digest"},
+        "capture_policy_sha256": {"$ref": "#/$defs/digest"},
+        "parent_room_id": {"$ref": "#/$defs/id"},
+        "parent_logical_jat_id": {"$ref": "#/$defs/id"},
+        "expected_parent_logical_jat_id": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "capture_mode": {"const": "source-only"},
+        "children": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/slot"}}
+      }
+    },
+    "operation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan", "plan_sha256", "phase", "child_pins", "parent_pin", "manifest_sha256", "parent_policy_sha256"],
+      "properties": {
+        "plan": {"oneOf": [{"$ref": "composition-safety-v1.schema.json#/$defs/plan"}, {"$ref": "#/$defs/plan"}]},
+        "plan_sha256": {"$ref": "#/$defs/digest"},
+        "phase": {"$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/phase"},
+        "child_pins": {"$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/child_pins"},
+        "parent_pin": {"$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/parent_pin"},
+        "manifest_sha256": {"$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/manifest_sha256"},
+        "parent_policy_sha256": {"$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/parent_policy_sha256"}
+      }
+    },
+    "updatePlan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan_version", "room_id", "logical_jat_id", "expected_logical_jat_id", "source_path_sha256", "source_records_sha256", "source_identity", "source_signature", "capture_policy_sha256", "content_sha256", "content_digest_algorithm", "capture_mode"],
+      "properties": {
+        "plan_version": {"const": 3},
+        "room_id": {"$ref": "#/$defs/id"},
+        "logical_jat_id": {"$ref": "#/$defs/id"},
+        "expected_logical_jat_id": {"$ref": "#/$defs/id"},
+        "source_path_sha256": {"$ref": "#/$defs/digest"},
+        "source_records_sha256": {"$ref": "#/$defs/digest"},
+        "source_identity": {"$ref": "composition-safety-v2.schema.json#/properties/child_updates/additionalProperties/properties/plan/properties/source_identity"},
+        "source_signature": {"$ref": "#/$defs/digest"},
+        "capture_policy_sha256": {"$ref": "#/$defs/digest"},
+        "content_sha256": {"$ref": "#/$defs/digest"},
+        "content_digest_algorithm": {"const": "sha256-framed-v2"},
+        "capture_mode": {"$ref": "#/$defs/mode"}
+      }
+    },
+    "update": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan", "plan_sha256", "phase", "pin"],
+      "properties": {
+        "plan": {"oneOf": [{"$ref": "composition-safety-v2.schema.json#/properties/child_updates/additionalProperties/properties/plan"}, {"$ref": "#/$defs/updatePlan"}]},
+        "plan_sha256": {"$ref": "#/$defs/digest"},
+        "phase": {"enum": ["reserved", "committed"]},
+        "pin": {"$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/parent_pin"}
+      }
+    }
+  }
+}

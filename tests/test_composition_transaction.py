@@ -344,3 +344,28 @@ def test_reopened_historical_manifest_ignores_new_child_latest(tmp_path):
     assert manifest_for(state, 'operation', old_approval)['children'][0]['snapshot_id'] == 'jat-child'
     assert manifest_for(state, 'second', approved)['children'][0]['snapshot_id'] == 'jat-child-2'
     reopened.db.close()
+
+
+def test_versioned_child_reservation_checks_mode_and_staged_policy_before_record():
+    initial, descriptors, _, body = setup()
+    catalog = Catalog.from_body(initial.to_dict()['dimension_catalog'])
+    plan = copy.deepcopy(body['operations']['operation']['plan'])
+    plan['plan_version'] = 3
+    slot = plan['children'][0]
+    slot.update(capture_mode='full-repository', capture_policy_sha256='b' * 64,
+                source_records_sha256='c' * 64, approved_paths_sha256='d' * 64)
+    state = reserve(catalog, body['scope'], 'operation', plan)
+    assert state.to_dict()['contract'] == 'composition-safety-v3'
+    approved = plan_digest(plan)
+    child = output(body, descriptors, 'child')
+    with pytest.raises(ValueError, match='capture contract'):
+        record_child(state, 'operation', approved, slot['path'], **child)
+    value = child['descriptor'].to_dict()
+    value.update(capture_mode='full-repository', capture_policy_sha256='0' * 64)
+    child['descriptor'] = LogicalJat.from_dict(value)
+    with pytest.raises(ValueError, match='capture contract'):
+        record_child(state, 'operation', approved, slot['path'], **child)
+    value['capture_policy_sha256'] = slot['capture_policy_sha256']
+    child['descriptor'] = LogicalJat.from_dict(value)
+    committed = record_child(state, 'operation', approved, slot['path'], **child)
+    assert committed.to_dict()['operations']['operation']['phase'] == 'children-recorded'

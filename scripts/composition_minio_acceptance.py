@@ -13,6 +13,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from git_recovery_acceptance import advance_catalog_git, catalog_repository, contents, identity as git_identity
+
 from josh_room import keyring
 from josh_room.config import save_private_config
 
@@ -201,6 +203,10 @@ def main():
         (source / "b/file.txt").write_text("synthetic child B")
         (source / "local/file.txt").write_text("synthetic local only")
         (source / "notes.txt").write_text("synthetic parent note")
+        for child_path in ("projects/a", "b"):
+            catalog_repository(source / child_path)
+        original_source = contents(source)
+        original_git = git_identity(source / "projects/a")
         legacy_inventory = None
         if args.qualify_updates:
             legacy = base / 'legacy-source'
@@ -231,6 +237,10 @@ def main():
             domain,
         ]
         plan = cli("composition", "capture-plan", *common, *selection)
+        assert all(
+            evidence["capture_mode"] == "full-repository"
+            for evidence in plan["request"]["child_evidence"].values()
+        )
         saved = cli(
             "composition",
             "save",
@@ -283,6 +293,9 @@ def main():
         ).read_text() == "synthetic child A original"
         assert not (entered / "b").exists()
         assert (source / "local/file.txt").read_text() == "synthetic local only"
+        assert git_identity(entered / "projects/a") == original_git
+        assert contents(entered / "projects/a/.git") == contents(source / "projects/a/.git")
+        assert contents(source) == original_source
         receipt = {
             "ok": True,
             "provider": "loopback-minio",
@@ -293,14 +306,18 @@ def main():
             "idempotent_save": True,
             "parent_only_then_whole_child": True,
             "source_unmodified": True,
+            "full_child_git_verified": True,
         }
         if args.qualify_updates:
             child_root = entered / 'projects/a'
-            (child_root / 'file.txt').write_text('synthetic independently saved child')
+            advance_catalog_git(child_root)
+            updated_git = git_identity(child_root)
+            assert updated_git != original_git
             update_args = ['--dimension', 'composition-fixture', '--namespace', saved['namespace'],
                            '--room', child['room_id'], '--child-snapshot', child['snapshot_id'],
                            '--workspace', str(child_root), '--operation-id', 'fixture-child-update']
             update_plan = cli('composition', 'plan-child-save', *update_args)
+            assert update_plan['changed']
             updated = cli('composition', 'save-child', *update_args, '--approve', update_plan['approval_sha256'])
             assert updated['marker_verified'] and not updated['parent_refreshed']
             assert cli('composition', 'save-child', *update_args, '--approve', update_plan['approval_sha256'])['snapshot_id'] == updated['snapshot_id']
@@ -310,15 +327,16 @@ def main():
             refreshed = cli('composition', 'refresh-parent-pins', *refresh_args, '--approve', refresh_plan['approval_sha256'])
             assert not refreshed['workspace_modified']
             assert cli('composition', 'refresh-parent-pins', *refresh_args, '--approve', refresh_plan['approval_sha256'])['snapshot_id'] == refreshed['snapshot_id']
-            for name, parent_pin, expected_child, expected_bytes in (
-                ('old', saved['parent_snapshot_id'], child['snapshot_id'], 'synthetic child A original'),
-                ('new', refreshed['snapshot_id'], updated['snapshot_id'], 'synthetic independently saved child'),
+            for name, parent_pin, expected_child, expected_git in (
+                ('old', saved['parent_snapshot_id'], child['snapshot_id'], original_git),
+                ('new', refreshed['snapshot_id'], updated['snapshot_id'], updated_git),
             ):
                 target = base / ('restore-' + name)
                 cli('composition', 'restore-parent', *common, '--parent-snapshot', parent_pin, '--destination', str(target))
                 selected = cli('composition', 'enter-child', *common, '--parent-snapshot', parent_pin, '--workspace', str(target), '--child-path', 'projects/a')
                 assert selected['snapshot_id'] == expected_child
-                assert (target / 'projects/a/file.txt').read_text() == expected_bytes
+                assert (target / 'projects/a/file.txt').read_text() == 'synthetic child A original'
+                assert git_identity(target / 'projects/a') == expected_git
                 assert not (target / 'b').exists() and not (target / 'local').exists()
             noop_args = [*update_args]
             noop_args[noop_args.index('--child-snapshot') + 1] = updated['snapshot_id']
@@ -337,6 +355,7 @@ def main():
             assert (source / 'b/file.txt').read_text() == 'synthetic child B'
             assert (source / 'notes.txt').read_text() == 'synthetic parent note'
             receipt.update(child_update_pin=updated['snapshot_id'], refreshed_parent_pin=refreshed['snapshot_id'],
+                git_only_update_verified=True, historical_git_states_verified=True,
                 old_parent_old_child_bytes_verified=True, new_parent_new_child_bytes_verified=True,
                 update_and_refresh_retry_verified=True, child_noop_verified=True, parent_noop_verified=True, legacy_inventory_unchanged=True)
         receipt["source_sha"] = subprocess.run(

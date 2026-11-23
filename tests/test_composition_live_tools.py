@@ -260,6 +260,78 @@ def test_actual_child_parent_save_and_whole_child_hydration(runtime, monkeypatch
         )
 
 
+def test_git_only_child_update_and_historical_cold_hydration(runtime):
+    from josh_room.composition_updates import refresh_parent, save_child
+    from scripts.git_recovery_acceptance import (
+        advance_catalog_git,
+        catalog_repository,
+        contents,
+        identity,
+    )
+
+    r = runtime
+    for name in ("a", "b"):
+        catalog_repository(r.source / name)
+    original = contents(r.source)
+    expected = identity(r.source / "a")
+    preview = capture_plan(r.source, r.dimension, NAMESPACE, "parent", r.assignments)
+    saved = save(r)
+    initial_parent = saved["parent_snapshot_id"]
+
+    def hydrate(label, parent):
+        root = r.tmp / label
+        args = (r.dimension, NAMESPACE, "parent", parent, root, r.authority, r.factory, r.private)
+        hydrate_composition(*args)
+        assert (root / "notes.txt").is_file()
+        assert all(not (root / path).exists() for path in ("a", "b", "local", ".git"))
+        receipt = hydrate_composition(*args, child_path="a")
+        assert not (root / "b").exists()
+        return root / "a", receipt
+
+    child, receipt = hydrate("initial", initial_parent)
+    assert (child / ".git").is_dir(), "Catalog child lost repository metadata"
+    assert identity(child) == expected
+    assert contents(child / ".git") == contents(r.source / "a/.git")
+    assert all(row["capture_mode"] == "full-repository" for row in preview["request"]["child_evidence"].values())
+    room = receipt["room_id"]
+    old_pin = receipt["snapshot_id"]
+    envelope, _ = r.authority.read()
+    record = envelope["state"]["dimension_catalog"]["projects"][room]["snapshots"][old_pin]
+    assert r.authority.descriptor(record).to_dict()["capture_mode"] == "full-repository"
+
+    advance_catalog_git(child)
+    changed = identity(child)
+    assert changed != expected
+
+    def update(pin, operation, approval=None):
+        return save_child(child, r.dimension, NAMESPACE, room, pin, operation,
+                          r.authority, r.factory, r.private, approval=approval)
+
+    plan = update(old_pin, "git-only")
+    assert plan["changed"]
+    updated = update(old_pin, "git-only", plan["approval_sha256"])
+    new_pin = updated["snapshot_id"]
+    assert updated["marker_verified"] and old_pin != new_pin
+    envelope, _ = r.authority.read()
+    projects = envelope["state"]["dimension_catalog"]["projects"]
+    assert projects["parent"]["latest"] == initial_parent
+    assert r.authority.descriptor(projects[room]["snapshots"][new_pin]).to_dict()["parent_logical_jat_id"] == old_pin
+    noop = update(new_pin, "noop")
+    assert not noop["changed"]
+    assert update(new_pin, "noop", noop["approval_sha256"])["catalog_writes"] is False
+
+    args = (r.dimension, NAMESPACE, "parent", initial_parent, "refresh", {"a": new_pin}, r.authority, r.factory, r.private)
+    refresh = refresh_parent(*args)
+    new_parent = refresh_parent(*args, approval=refresh["approval_sha256"])["snapshot_id"]
+    for label, parent, pin, state in (("old", initial_parent, old_pin, expected), ("new", new_parent, new_pin, changed)):
+        restored, entered = hydrate(label, parent)
+        assert entered["snapshot_id"] == pin
+        assert identity(restored) == state
+        assert (restored / "unstaged.txt").read_bytes() == (child / "unstaged.txt").read_bytes()
+        assert (restored / "untracked.txt").read_bytes() == (child / "untracked.txt").read_bytes()
+    assert contents(r.source) == original
+
+
 def test_stale_approval_and_unassigned_capture_are_zero_provider_writes(runtime):
     r = runtime
     with pytest.raises(ValueError, match="approval"):
@@ -330,8 +402,6 @@ def test_dirty_parent_and_wrong_namespace_never_create_child(runtime):
 
 
 def test_inherited_exclusions_nested_child_and_legacy_optimize(runtime):
-    import subprocess
-
     from josh_room.minio import MinioBackend, MinioConfig
     from josh_room.room_store_lifecycle import optimize_room_store
 
@@ -340,15 +410,18 @@ def test_inherited_exclusions_nested_child_and_legacy_optimize(runtime):
     (r.source / "a").rename(r.source / "projects/a")
     (r.source / "projects/a/private").mkdir()
     (r.source / "projects/a/private/never.txt").write_text("excluded synthetic payload")
-    (r.source / ".josh-roomignore").write_text("projects/a/private/**\n")
+    from scripts.git_recovery_acceptance import git
+
+    git(r.source, "init", "-q")
+    git(r.source, "add", ".")
+    r.assignments[1]["path"] = "projects/a"
+    with pytest.raises(ValueError, match="cohesive Git repository"):
+        capture_plan(r.source, r.dimension, NAMESPACE, "parent", r.assignments)
+    assert r.transport.writes == 0
+    (r.source / ".josh-roomignore").write_text("# josh-room capture-mode: source-only\nprojects/a/private/**\n")
     (r.source / "projects/a/.josh-roomignore").write_text("generated/**\n")
     (r.source / "projects/a/restricted").mkdir(mode=0o700)
     (r.source / "projects/a/restricted/file.txt").write_text("permission fixture")
-    # Root Git history contains all fixture payloads; source-only parent and
-    # children must contain zero Git administrative entries.
-    subprocess.run(["git", "init", "-q", str(r.source)], check=True)
-    subprocess.run(["git", "-C", str(r.source), "add", "."], check=True)
-    r.assignments[1]["path"] = "projects/a"
     result = save(r)
     envelope, _ = r.authority.read()
     records = envelope["state"]["dimension_catalog"]["projects"]
