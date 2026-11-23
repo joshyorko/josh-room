@@ -10,18 +10,20 @@ test("catalog confirmation binds child, parent and local-only selections before 
   const dialogs = [[{ fsPath: "/synthetic/root" }], [{ fsPath: "/synthetic/root/notes.txt" }]];
   const picks = [{ id: "parent" }, { id: "continue" }, { dimension: { id: "dimension", provider: "minio", display_name: "Storage", endpoint: "https://STORAGE.example.invalid:443/", bucket: "fixture", connection_id: "synthetic-connection" } }];
   let approved = false;
-  const vscode = { Uri: { file: fsPath => ({ fsPath }) }, window: {
+  let receipt;
+  const vscode = { env: { clipboard: { writeText: async text => { receipt = JSON.parse(text); } } }, Uri: { file: fsPath => ({ fsPath }) }, window: {
     showInputBox: () => assert.fail("Catalog creation requested a manual UUID"),
     showOpenDialog: async () => dialogs.shift(), showQuickPick: async () => picks.shift(),
     showWarningMessage: async (_, options, choice) => { assert.match(options.detail, /Storage.*MinIO.*synthetic-connection/i); assert.ok(options.detail.includes(binding.physical_bucket)); assert.match(options.detail, /unprotected/); assert.match(options.detail, /a.*Files and Git history/); approved = true; return choice; },
-    showInformationMessage: async () => {},
+    showInformationMessage: async (_, action) => { assert.equal(action, "Copy recovery receipt"); return action; },
   } };
   const result = await saveCatalog(vscode, {
     selectChildren: async () => ["a"], dimensions: async () => [{ id: "dimension", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" }],
     plan: async (selection) => { assert.equal(approved, false); assert.deepEqual(selection.assignments, [{ path: ".", outcome: "local-only" }, { path: "a", outcome: "child" }, { path: "notes.txt", outcome: "parent" }]); return { request: { destination_binding: binding, child_evidence: { a: { capture_mode: "full-repository" } } }, approval_sha256: "approved" }; },
-    save: async (selection, approval) => { assert.equal(approved, true); assert.equal(approval, "approved"); return { ok: true, namespace: selection.namespace, parent_snapshot_id: "exact-pin" }; },
+    save: async (selection, approval) => { assert.equal(approved, true); assert.equal(approval, "approved"); return { ok: true, namespace: selection.namespace, parent_room_id: selection.parentRoom, parent_snapshot_id: "exact-pin" }; },
   });
   assert.equal(result.ok, true);
+  assert.deepEqual(receipt, { dimension_id: "dimension", namespace: result.namespace, parent_room_id: result.parent_room_id, parent_snapshot_id: "exact-pin" });
 });
 
 test("cancelling catalog review never invokes Save", async () => {

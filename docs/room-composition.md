@@ -101,7 +101,7 @@ to 32 independent folders. Overlapping selections must be corrected.
 Continue with each folder's existing Git policy and workspace files, or apply
 Git and component settings to all selected folders or a subset. Add parent-owned
 files separately. Review the storage destination, child contents, parent contents
-and local-only remainder before confirming. The original files stay on disk.
+and local-only remainder before confirming. The original files stay on disk. Choose **Copy recovery receipt** in the Save confirmation and keep the receipt for cold parent restore.
 
 In a restored Catalog parent, **Enter Child Room** lets you choose a saved child.
 **Refresh Catalog Child Pins** lets you choose a child and a particular saved

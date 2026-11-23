@@ -126,7 +126,15 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
   }, "Save catalog");
   if (approved !== "Save catalog") return "cancelled";
   const result = await save(selection, preview.approval_sha256);
-  await vscode.window.showInformationMessage(`Catalog saved with ${children.length} child Room${children.length === 1 ? "" : "s"}.`);
+  const copy = "Copy recovery receipt";
+  if (await vscode.window.showInformationMessage(`Catalog saved with ${children.length} child Room${children.length === 1 ? "" : "s"}.`, copy) === copy) {
+    await vscode.env.clipboard.writeText(JSON.stringify({
+      dimension_id: preview.request.destination_binding.dimension_id,
+      namespace: result.namespace,
+      parent_room_id: result.parent_room_id,
+      parent_snapshot_id: result.parent_snapshot_id,
+    }, null, 2));
+  }
   return result;
 }
 
