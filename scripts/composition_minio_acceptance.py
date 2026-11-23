@@ -1,6 +1,7 @@
 """Task-owned real CLI/MinIO check; credentials generated in memory only."""
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -11,12 +12,28 @@ import sys
 import tempfile
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
-from git_recovery_acceptance import advance_catalog_git, catalog_repository, contents, identity as git_identity
+import boto3
+from git_recovery_acceptance import advance_catalog_git, catalog_repository, contents
+from git_recovery_acceptance import identity as git_identity
+from minio_acceptance_audit import MinioAudit
 
 from josh_room import keyring
-from josh_room.config import save_private_config
+from josh_room.config import persisted_config, save_private_config
+
+
+def create_source(source):
+    (source / "projects/a").mkdir(parents=True)
+    (source / "b").mkdir()
+    (source / "local").mkdir()
+    (source / "projects/a/file.txt").write_text("synthetic child A original")
+    (source / "b/file.txt").write_text("synthetic child B")
+    (source / "local/file.txt").write_text("synthetic local only")
+    (source / "notes.txt").write_text("synthetic parent note")
+    for child_path in ("projects/a", "b"):
+        catalog_repository(source / child_path)
 
 
 def main():
@@ -38,6 +55,7 @@ def main():
     parser.add_argument("--scratch", type=Path, required=True)
     parser.add_argument("--minio", type=Path, required=True)
     parser.add_argument("--secret-service-bus", type=Path, required=True)
+    parser.add_argument('--qualify-domain', action='store_true', help='verify uncached domain resolution and audit provider mutations')
     parser.add_argument('--qualify-updates', action='store_true', help='also verify independent child Save and explicit parent pin refresh')
     parser.add_argument('--hold-for-native', action='store_true', help='keep only this owned fixture server until its stop-native file exists')
     args = parser.parse_args()
@@ -76,6 +94,10 @@ def main():
         "MINIO_ROOT_PASSWORD": secret,
         "MINIO_BROWSER": "off",
     }
+    audit = MinioAudit() if args.qualify_domain else None
+    if audit:
+        env.update(MINIO_AUDIT_WEBHOOK_ENABLE_FIXTURE="on",
+                   MINIO_AUDIT_WEBHOOK_ENDPOINT_FIXTURE=f"http://127.0.0.1:{audit.server.server_port}")
     fd = os.open(base / "minio.log", os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -118,6 +140,9 @@ def main():
             "composition-fixture-profile",
             {"access-key-id": access, "secret-access-key": secret},
         )
+        if audit:
+            client = boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1",
+                                  aws_access_key_id=access, aws_secret_access_key=secret)
         del access, secret, env
         save_private_config(
             {
@@ -141,7 +166,7 @@ def main():
             }
         )
 
-        def cli(*args):
+        def cli(*args, rejected=False):
             result = subprocess.run(
                 [sys.executable, "-m", "josh_room", *args, "--json"],
                 capture_output=True,
@@ -156,6 +181,9 @@ def main():
                 raise RuntimeError(
                     "CLI entry did not return JSON; exit " + str(result.returncode)
                 ) from None
+            if rejected:
+                assert result.returncode != 0 and body.get("ok") is False
+                return body
             if result.returncode:
                 raise RuntimeError(
                     "CLI failed at "
@@ -196,15 +224,7 @@ def main():
         finally:
             recovery.unlink(missing_ok=True)
         source = base / "provider-source"
-        (source / "projects/a").mkdir(parents=True)
-        (source / "b").mkdir()
-        (source / "local").mkdir()
-        (source / "projects/a/file.txt").write_text("synthetic child A original")
-        (source / "b/file.txt").write_text("synthetic child B")
-        (source / "local/file.txt").write_text("synthetic local only")
-        (source / "notes.txt").write_text("synthetic parent note")
-        for child_path in ("projects/a", "b"):
-            catalog_repository(source / child_path)
+        create_source(source)
         original_source = contents(source)
         original_git = git_identity(source / "projects/a")
         legacy_inventory = None
@@ -233,14 +253,40 @@ def main():
             "b=child",
             "--assign",
             "notes.txt=parent",
-            "--expected-domain",
-            domain,
         ]
+        if audit:
+            uncached = persisted_config()
+            uncached["dimensions"]["composition-fixture"].pop("encryption_domain_id", None)
+            save_private_config(uncached)
+            before = audit.checkpoint(client)
+            assert before > 0, "audit must observe enrollment writes"
+        else:
+            selection.extend(["--expected-domain", domain])
         plan = cli("composition", "capture-plan", *common, *selection)
         assert all(
             evidence["capture_mode"] == "full-repository"
             for evidence in plan["request"]["child_evidence"].values()
         )
+        if audit:
+            assert plan["request"]["destination_binding"]["encryption_domain_id"] == domain
+            assert domain.replace("-", "") != plan["request"]["namespace"]
+            assert cli("composition", "capture-plan", *common, *selection) == plan
+            assert cli("composition", "capture-plan", *common, *selection, "--expected-domain", domain) == plan
+            wrong = str(uuid.uuid4())
+            for assertion in ["malformed", wrong]:
+                cli("composition", "capture-plan", *common, *selection, "--expected-domain", assertion, rejected=True)
+            apply = [*common, *selection, "--approve", plan["approval_sha256"], "--ack-local-only"]
+            stale = copy.deepcopy(uncached)
+            stale["dimensions"]["composition-fixture"]["encryption_domain_id"] = wrong
+            save_private_config(stale)
+            cli("composition", "save", *apply, "--expected-domain", domain, rejected=True)
+            stale = copy.deepcopy(uncached)
+            stale["connections"]["fixture-alias"] = stale["connections"]["composition-connection"]
+            stale["dimensions"]["composition-fixture"]["connection"] = "fixture-alias"
+            save_private_config(stale)
+            cli("composition", "save", *apply, rejected=True)
+            save_private_config(uncached)
+            assert audit.checkpoint(client) == before, "read-only and rejected operations issued a provider mutation"
         saved = cli(
             "composition",
             "save",
@@ -358,6 +404,12 @@ def main():
                 git_only_update_verified=True, historical_git_states_verified=True,
                 old_parent_old_child_bytes_verified=True, new_parent_new_child_bytes_verified=True,
                 update_and_refresh_retry_verified=True, child_noop_verified=True, parent_noop_verified=True, legacy_inventory_unchanged=True)
+        if audit:
+            assert audit.checkpoint(client) > before
+            assert persisted_config() == uncached
+            receipt.update(uncached_domain_verified=True, matching_assertion_verified=True,
+                           deterministic_plan=True, mutation_count_during_plans_and_rejections=0,
+                           stale_connection_rejected=True, conflicting_cache_rejected=True)
         receipt["source_sha"] = subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
         ).stdout.strip()
@@ -366,12 +418,20 @@ def main():
         if args.hold_for_native:
             ready = {'fixture_root': str(base), 'parent_working': str(base / 'restore-new' if args.qualify_updates else entered),
                      'child_room': child['room_id'], 'receipt': receipt, 'legacy_inventory': legacy_inventory}
+            if audit:
+                ready["native_sources"] = {}
+                for route in ("joshRoom.saveCatalog", "joshRoom.new"):
+                    folder = base / route
+                    create_source(folder)
+                    ready["native_sources"][route] = str(folder)
             (scratch / 'native-ready.json').write_text(json.dumps(ready))
             while not (base / 'stop-native').exists():
                 time.sleep(0.5)
     finally:
         server.terminate()
         server.wait(timeout=20)
+        if audit:
+            audit.close()
 
 
 if __name__ == "__main__":

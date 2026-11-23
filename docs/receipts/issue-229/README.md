@@ -1,0 +1,7 @@
+# Uncached Dimension acceptance on Linux
+
+Use the [private MinIO and Secret Service setup](../../recovery-acceptance.md). Run `scripts/composition_minio_acceptance.py` with `--qualify-domain --hold-for-native`, the private bus, the pinned MinIO binary and the synthetic scratch directory. The subscribed MinIO audit webhook counts potentially mutating requests and discards the original events. Unique read-only barrier requests confirm event delivery at each checkpoint. Enrollment and the subsequent actual Save establish positive mutation controls.
+
+Run the [installed Catalog driver](../../../scripts/installed_catalog_acceptance.js) twice using the [private editor procedure](../issue-226/README.md). Set `JOSH_ROOM_ACCEPTANCE_ENTRY` to `joshRoom.saveCatalog` or `joshRoom.new` and use a fresh editor profile for each. The fixture provides an unbound synthetic source for each entry point. The driver supplies the OS file chooser paths and exercises the actual registered commands, selection widgets, approval, controller and provider. It checks SecretStorage before Save and compares the approved domain and the restored descriptor-derived marker domains to the enrolled keyset. See [the sanitized receipt](linux.json).
+
+The installed controller used an existing Python runtime. Qualification covers Linux x64 and the private MinIO provider. R2, AWS S3, native Windows and an immutable managed controller require separate evidence.
