@@ -36,6 +36,14 @@
     return `node/${encodePart(nodeId)}`;
   }
 
+  function isWorkspace(descriptor) {
+    return descriptor?.tool === 'josh-room' && descriptor.group_label === 'Directory';
+  }
+
+  function isFailureKind(kind) {
+    return kind === 'fail' || kind === 'error' || kind === 'critical';
+  }
+
   function shapeToSymbol(shape) {
     if (shape === 'notch') return '×';
     if (shape === 'hollow') return '○';
@@ -49,7 +57,7 @@
       const shape = (def && def.shape) || 'solid';
       const label = (def && def.label) || kind;
       const color = (def && def.color) || '#8A93A6';
-      const isFailure = shape === 'notch' || kind === 'fail' || kind === 'error' || kind === 'critical';
+      const isFailure = isFailureKind(kind);
       entries.push({
         kind,
         label,
@@ -80,12 +88,12 @@
         color: def.color || '#8A93A6',
         shape,
         symbol: shapeToSymbol(shape),
-        isFailure: shape === 'notch' || kind === 'fail' || kind === 'error' || kind === 'critical',
+        isFailure: isFailureKind(kind),
       };
     }
     // Never silently rewrite an unrecognized kind to PASS
     const safeKind = kind || 'unknown';
-    const isFailure = safeKind === 'fail' || safeKind === 'error' || safeKind === 'critical';
+    const isFailure = isFailureKind(safeKind);
     return {
       kind: safeKind,
       label: safeKind,
@@ -112,7 +120,7 @@
       byKind[kind] = (byKind[kind] || 0) + 1;
       const entry = getLegendEntry(descriptor, kind);
       if (entry.isFailure) fail += 1;
-      else if (entry.shape === 'hollow' || kind === 'skip') skip += 1;
+      else if (kind === 'skip') skip += 1;
       else if (kind === 'pass') pass += 1;
       else other += 1;
     }
@@ -150,18 +158,12 @@
     return Math.min(4, bin);
   }
 
-  function degreeOfInterestScore(item, descriptor) {
-    const entry = getLegendEntry(descriptor, item.kind);
-    const kindWeight = entry.isFailure ? 1000000 : (entry.shape === 'hollow' ? 0 : 10000);
-    const metricVal = typeof item.metric === 'number' && Number.isFinite(item.metric) ? item.metric : 0;
-    return kindWeight + metricVal;
-  }
-
   function sortItemsByInterest(items, descriptor) {
+    const filesystem = isWorkspace(descriptor);
     return (items || []).slice().sort((a, b) => {
-      const diff = degreeOfInterestScore(b, descriptor) - degreeOfInterestScore(a, descriptor);
-      if (diff !== 0) return diff;
-      return String(a.id).localeCompare(String(b.id));
+      if (filesystem) return a.label.localeCompare(b.label) || a.id.localeCompare(b.id);
+      const priority = (item) => isFailureKind(item.kind) ? 2 : Number(item.kind !== 'skip');
+      return priority(b) - priority(a) || (b.metric || 0) - (a.metric || 0) || a.id.localeCompare(b.id);
     });
   }
 
@@ -238,12 +240,16 @@
             summary: raw.summary || null,
             updated_at: raw.updated_at,
             fields: raw.fields || {},
+            previews: raw.previews || [],
+            attachments: raw.attachments || [],
+            links: raw.links || [],
             dirChildren: [],
             leafChildren: [],
             allDescendantLeaves: [],
             counts: null,
           };
           allTreeNodesById.set(treeId, dirNode);
+          recordIncomingLinks(raw.id, path, raw.label, dirNode.links);
           const kids = childrenByParent.get(raw.id) || [];
           for (const kid of kids) {
             const built = buildRec(kid, treeId, path, depth + 1);
@@ -269,7 +275,7 @@
           path,
           parentPath,
           depth,
-          kind: raw.kind || 'pass',
+          kind: raw.kind || 'unknown',
           metric: raw.metric != null ? raw.metric : null,
           updated_at: raw.updated_at,
           summary: raw.summary || null,
@@ -444,6 +450,11 @@
     const expandedPedestals = opts.expandedPedestals || new Set();
 
     const unified = buildUnifiedTree(descriptor, state);
+    const selected = unified.allTreeNodesById.get(opts.selectedNodeId);
+    const selectedAncestors = new Set();
+    for (let node = selected; node; node = unified.allTreeNodesById.get(node.parentId)) {
+      selectedAncestors.add(node.id);
+    }
     const breaks = computeQuantileBreaks(unified.allLeaves);
 
     const pedestals = [];
@@ -459,14 +470,13 @@
     const DEPTH_STEP_Z = unified.isUnixTree ? 10.6 : 13.0;
 
     // Pass 1: Measure every directory's pedestal dimensions & recursive subtree width
-    const planByDirId = new Map();
-
     const measureDir = (dir) => {
       const isRoot = dir.depth === 0;
       const autoCollapsed = (
         !isRoot &&
         dir.dirChildren.length > 0 &&
         dir.allDescendantLeaves.length > SUBTREE_COLLAPSE_THRESHOLD &&
+        !selectedAncestors.has(dir.id) &&
         !expandedDirs.has(dir.id) &&
         !(dir.groupId && expandedDirs.has(dir.groupId))
       );
@@ -519,7 +529,7 @@
         subtreeWidth = Math.max(dims.width, childrenSpan);
       }
 
-      const plan = {
+      return {
         dir,
         autoCollapsed,
         aggregatedLeaves,
@@ -532,8 +542,6 @@
         gap,
         subtreeWidth,
       };
-      planByDirId.set(dir.id, plan);
-      return plan;
     };
 
     const rootPlan = measureDir(unified.treeRoot);
@@ -545,6 +553,13 @@
       const ranked = sortItemsByInterest(leaves, descriptor);
       const visible = plan.aggregatedLeaves ? ranked.slice(0, AGGREGATE_TOP_K) : ranked;
       const hidden = plan.aggregatedLeaves ? ranked.slice(AGGREGATE_TOP_K) : [];
+      if (hidden.length && selected?.parentId === plan.dir.id && selected.nodeType === 'item') {
+        const index = hidden.indexOf(selected);
+        if (index >= 0) {
+          hidden[index] = visible[visible.length - 1];
+          visible[visible.length - 1] = selected;
+        }
+      }
       const totalSlots = visible.length + (hidden.length > 0 ? 1 : 0);
       const cols = Math.min(plan.dims.cols, Math.max(1, totalSlots));
       const rows = Math.ceil(totalSlots / cols);
@@ -641,6 +656,7 @@
         // Keep `.depth` numeric pedestal Z dimension for scene3d compatibility + `.treeDepth` for level
         depth: plan.dims.depth,
         treeDepth: d.depth,
+        coverage: d.fields?.coverage,
         height: plan.dims.height,
         counts: d.counts,
         collapsed: plan.autoCollapsed,
@@ -696,6 +712,10 @@
       if (!plan.childPlans.length) return pedNode;
 
       const stepZ = d.depth === 0 ? DEPTH_STEP_Z_FIRST : DEPTH_STEP_Z;
+      const deepestDeck = (row) => row.reduce((depth, child) => Math.max(depth, child.dims.depth), 0);
+      const rowSpacing = (nearDepth, farDepth) => Math.max(stepZ, (nearDepth + farDepth) / 2 + 4.8);
+      const frontDepth = deepestDeck(plan.frontRow);
+      const frontZ = z - rowSpacing(pedNode.depth, frontDepth);
       const placeChildRow = (rowPlans, rowZ, isBackRow, aisleX) => {
         if (!rowPlans.length) return;
         const rowSpan = (
@@ -703,8 +723,7 @@
           Math.max(0, rowPlans.length - 1) * plan.gap
         );
         let curX = x - rowSpan / 2;
-        const busZ = (z - pedNode.depth / 2 + rowZ + 1.5) * 0.5;
-        const clampedBusZ = Math.min(z - pedNode.depth / 2 - 2.0, Math.max(rowZ + 2.2, busZ));
+        const busZ = (z - pedNode.depth / 2 + rowZ + deepestDeck(rowPlans) / 2) / 2;
 
         for (const cp of rowPlans) {
           const cx = curX + cp.subtreeWidth / 2;
@@ -718,8 +737,8 @@
               childId: childPed.id,
               points: [
                 [pedNode.x, 0.04, pedNode.z - pedNode.depth / 2],
-                [pedNode.x, 0.04, clampedBusZ],
-                [childPed.x, 0.04, clampedBusZ],
+                [pedNode.x, 0.04, busZ],
+                [childPed.x, 0.04, busZ],
                 [childPed.x, 0.04, childPed.z + childPed.depth / 2],
               ],
             });
@@ -744,17 +763,16 @@
       };
 
       if (plan.useTwoTierRows) {
-        const frontZ = z - stepZ;
-        const backZ = frontZ - stepZ;
+        const backZ = frontZ - rowSpacing(frontDepth, deepestDeck(plan.backRow));
         const frontSpan = (
           plan.frontRow.reduce((acc, cp) => acc + cp.subtreeWidth, 0) +
           Math.max(0, plan.frontRow.length - 1) * plan.gap
         );
-        const aisleX = x + (plan.frontRow.length % 2 === 0 ? 0 : (frontSpan / 2 + 1.5));
+        const aisleX = x + frontSpan / 2 + 0.9;
         placeChildRow(plan.frontRow, frontZ, false, aisleX);
         placeChildRow(plan.backRow, backZ, true, aisleX);
       } else {
-        placeChildRow(plan.childPlans, z - stepZ, false, x);
+        placeChildRow(plan.childPlans, frontZ, false, x);
       }
 
       return pedNode;
@@ -812,6 +830,7 @@
   global.RoomViewLayout = {
     BLOCK_WIDTH,
     BLOCK_GAP,
+    isWorkspace,
     QUANTILE_HEIGHTS,
     makeGroupNodeId,
     makeStageNodeId,

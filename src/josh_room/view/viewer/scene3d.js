@@ -1003,7 +1003,35 @@
     }
 
     setLayout(layout, { descriptor = null, runEstablishingShot = false, preserveCamera = false } = {}) {
+      const previous = this.layout?.nodeById.get(this.selectedNodeId);
+      const selected = layout.nodeById.get(this.selectedNodeId);
       this.layout = layout;
+      if (selected?.nodeType === 'item' && this.spotState.targetActive) {
+        this._bindSpotlight(selected);
+      } else if (!selected && this.selectedNodeId) {
+        this.flight = null;
+        this.selectedNodeId = null;
+        this.focusedPedestalId = 'root';
+        Object.assign(this.spotState, { active: false, targetActive: false, dimL: 0, spotL: 0 });
+        this._applyLightingAndDimming();
+      }
+      for (const id of this._blockLodState.keys()) {
+        if (!layout.nodeById.has(id)) this._blockLodState.delete(id);
+      }
+      if (preserveCamera && previous && selected) {
+        const delta = new this.THREE.Vector3(
+          selected.x - previous.x, selected.y - previous.y, selected.z - previous.z
+        );
+        if (this.flight) {
+          this.flight.toPos.add(delta);
+          this.flight.toTarget.add(delta);
+        } else {
+          this.camPos.add(delta);
+          this.camTarget.add(delta);
+          this.camera.position.copy(this.camPos);
+          this.camera.lookAt(this.camTarget);
+        }
+      }
       if (descriptor) this.descriptor = descriptor;
       this._clearWorldGroup();
       this._buildWorldGeometry(layout);
@@ -1615,7 +1643,9 @@
 
       for (const ped of layout.pedestals) {
         const failSuffix = ped.counts.fail ? ` · ${ped.counts.fail} fail` : '';
-        const sub = ped.collapsed
+        const sub = global.RoomViewLayout.isWorkspace(this.descriptor)
+          ? `${ped.childDirCount + ped.directLeafCount} listed · ${ped.coverage || 'coverage unknown'}`
+          : ped.collapsed
           ? `${ped.counts.total} items (expand)`
           : `${ped.counts.total} items${failSuffix}`;
         const labelTitle = layout.isUnixTree ? ped.path : ped.label;
@@ -1625,14 +1655,19 @@
       }
 
       for (const sNode of layout.summaryBlocks) {
-        addLabelEntry(sNode, sNode.label, `${sNode.counts.fail} fail`, 60, 1.75, sNode.y + sNode.height + 0.42, 0.0, -45);
+        const subtitle = global.RoomViewLayout.isWorkspace(this.descriptor)
+          ? `${sNode.counts.total} listed files`
+          : `${sNode.counts.fail} fail`;
+        addLabelEntry(sNode, sNode.label, subtitle, 60, 1.75, sNode.y + sNode.height + 0.42, 0.0, -45);
       }
 
       for (const b of layout.blocks) {
         const unit = this.descriptor && this.descriptor.metric && this.descriptor.metric.unit
           ? ` ${this.descriptor.metric.unit}`
           : '';
-        const mText = b.item.metric != null ? `${b.item.metric}${unit}` : '';
+        const mText = Number.isSafeInteger(b.item.fields?.file_bytes) && global.RoomViewLayout.isWorkspace(this.descriptor)
+          ? `${b.item.fields.file_bytes} B`
+          : b.item.metric != null ? `${b.item.metric}${unit}` : '';
         addLabelEntry(b, b.label, mText, 30, 1.65, b.y + b.height + 0.46, 0.0, -40);
       }
       // Keep both variants of current labels, including shared and temporarily hidden ones.
@@ -1803,21 +1838,25 @@
       }
     }
 
-    _startSpotlightOnBlock(blockNode) {
-      const clickStart = performance.now();
+    _bindSpotlight(blockNode) {
       const s = this.spotState;
-      const moved = s.targetX !== blockNode.x || s.targetZ !== blockNode.z || !s.targetActive;
       s.targetX = blockNode.x;
       s.targetZ = blockNode.z;
       s.floorY = blockNode.y;
       s.blockTop = blockNode.y + blockNode.height;
       s.blockHalfDiag = Math.hypot(blockNode.width * 0.5, blockNode.depth * 0.5);
+      this._positionSpotlightOnState();
+    }
+
+    _startSpotlightOnBlock(blockNode) {
+      const clickStart = performance.now();
+      const s = this.spotState;
+      this._bindSpotlight(blockNode);
       s.fromDimL = s.dimL;
       s.fromSpotL = s.spotL;
       s.targetActive = true;
       s.active = true;
       s.startTime = performance.now();
-      if (moved) this._positionSpotlightOnState();
       this.requestRender();
       this.stats.lastFirstClickMs = Math.round((performance.now() - clickStart) * 10) / 10;
     }
@@ -1833,7 +1872,20 @@
       this.requestRender();
     }
 
-    _flyTo(destPos, destTarget, { instant = false } = {}) {
+    _directoryWaypoints(fromId, toId) {
+      const from = [...this._ancestorChainSet(fromId)];
+      const to = [...this._ancestorChainSet(toId)];
+      if (!from.length || !to.length) return [];
+      while (from.length > 1 && to.length > 1 && from.at(-2) === to.at(-2)) {
+        from.pop();
+        to.pop();
+      }
+      // The shared ancestor occurs once on the path. Endpoints already have a camera pose.
+      return from.concat(to.slice(0, -1).reverse()).slice(1, -1)
+        .map((id) => this.layout.nodeById.get(id));
+    }
+
+    _flyTo(destPos, destTarget, { instant = false, fromId = 'root', toId = 'root' } = {}) {
       this.cancelIntroAndTour();
       destPos.y = Math.max(0.75, destPos.y);
       if (instant || this.reducedMotion) {
@@ -1867,15 +1919,24 @@
         fromTarget: this.camTarget.clone(),
         toTarget: destTarget.clone(),
       };
+      const stops = this._directoryWaypoints(fromId, toId);
+      if (stops.length) {
+        const { Vector3, CatmullRomCurve3 } = this.THREE;
+        const positions = stops.map((p) => new Vector3(p.x + 1.2, p.height + 5, p.z + p.depth / 2 + 3));
+        const targets = stops.map((p) => new Vector3(p.x, p.height + 1, p.z));
+        this.flight.positionCurve = new CatmullRomCurve3([this.flight.fromPos, ...positions, this.flight.toPos]);
+        this.flight.targetCurve = new CatmullRomCurve3([this.flight.fromTarget, ...targets, this.flight.toTarget]);
+      }
       this.requestRender();
     }
 
     frameOverview({ instant = false } = {}) {
+      const fromId = this.focusedPedestalId;
       this.selectedNodeId = null;
       this.focusedPedestalId = 'root';
       this.clearSpotlight();
       this._updateColorsAndSelection();
-      this._flyTo(this.overviewPos.clone(), this.overviewTarget.clone(), { instant });
+      this._flyTo(this.overviewPos.clone(), this.overviewTarget.clone(), { instant, fromId });
     }
 
     focusNode(nodeId, { moveCamera = true, instant = false } = {}) {
@@ -1883,6 +1944,7 @@
       const node = this.layout.nodeById.get(nodeId);
       if (!node) return null;
       const THREE = this.THREE;
+      const fromId = this.focusedPedestalId;
 
       if (node.nodeType === 'item') {
         this.selectedNodeId = node.id;
@@ -1900,7 +1962,7 @@
             node.y + Math.sin(elev) * dist + 1.35,
             node.z + Math.cos(elev) * dist
           );
-          this._flyTo(pos, target, { instant });
+          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       } else if (node.nodeType === 'root') {
         this.frameOverview({ instant });
@@ -1924,7 +1986,7 @@
             node.height + Math.sin(elev) * dist + 1.25,
             node.z + node.depth / 2 + Math.cos(elev) * dist * 0.78
           );
-          this._flyTo(pos, target, { instant });
+          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       } else if (node.nodeType === 'more' || node.nodeType === 'stage-summary') {
         this.selectedNodeId = node.id;
@@ -1934,7 +1996,7 @@
         if (moveCamera) {
           const target = new THREE.Vector3(node.x, node.y + 1.0, node.z);
           const pos = new THREE.Vector3(node.x + 1.8, node.y + 4.4, node.z + 7.2);
-          this._flyTo(pos, target, { instant });
+          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       }
       return node;
@@ -2058,14 +2120,20 @@
         const f = this.flight;
         const tRaw = (now - f.startTime) / f.durationMs;
         const e = sigmoidEase(tRaw);
-        const omt = 1 - e;
-        this.camPos.set(
-          omt * omt * f.fromPos.x + 2 * omt * e * f.midPos.x + e * e * f.toPos.x,
-          Math.max(0.75, omt * omt * f.fromPos.y + 2 * omt * e * f.midPos.y + e * e * f.toPos.y),
-          omt * omt * f.fromPos.z + 2 * omt * e * f.midPos.z + e * e * f.toPos.z
-        );
-        const lookE = sigmoidEase(Math.min(1, tRaw * 1.15));
-        this.camTarget.lerpVectors(f.fromTarget, f.toTarget, lookE);
+        if (f.positionCurve) {
+          f.positionCurve.getPoint(e, this.camPos);
+          f.targetCurve.getPoint(e, this.camTarget);
+          this.camPos.y = Math.max(0.75, this.camPos.y);
+        } else {
+          const omt = 1 - e;
+          this.camPos.set(
+            omt * omt * f.fromPos.x + 2 * omt * e * f.midPos.x + e * e * f.toPos.x,
+            Math.max(0.75, omt * omt * f.fromPos.y + 2 * omt * e * f.midPos.y + e * e * f.toPos.y),
+            omt * omt * f.fromPos.z + 2 * omt * e * f.midPos.z + e * e * f.toPos.z
+          );
+          const lookE = sigmoidEase(Math.min(1, tRaw * 1.15));
+          this.camTarget.lerpVectors(f.fromTarget, f.toTarget, lookE);
+        }
         this.camera.position.copy(this.camPos);
         this.camera.lookAt(this.camTarget);
         if (tRaw >= 1) this.flight = null;
