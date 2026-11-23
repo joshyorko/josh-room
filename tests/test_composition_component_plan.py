@@ -25,3 +25,40 @@ def test_planning_refuses_missing_required_rcc(tmp_path):
         'rcc_environment': 'refresh', 'homebrew_recovery': 'omit', 'hauler_content': 'omit'}}}
     with pytest.raises((ValueError, RuntimeError), match='unavailable'):
         component_plan(tmp_path, SimpleNamespace(dimension_id='dim'), 'child', '1'*64, options)
+
+
+@pytest.mark.parametrize('changed', [False, True])
+def test_lost_component_backup_reply_reuses_only_exact_reserved_bytes(tmp_path, changed):
+    import shutil
+
+    from josh_room.composition_components import _CaptureStore
+    from josh_room.restic_store import SnapshotEntry
+
+    stage = tmp_path / 'stage'
+    stage.mkdir()
+    name = 'homebrew-recovery.tar.zst'
+    (stage / name).write_bytes(b'approved')
+    saved = tmp_path / 'saved'
+    snapshot = SimpleNamespace(snapshot_id='a'*64, parent_snapshot_id=None)
+    def backup(source, *, parent, cancellation, tags):
+        assert tags == ('composition-component:output:homebrew_recovery',)
+        shutil.copytree(source, saved)
+        raise ConnectionError('lost reply')
+    claims = []
+    store = SimpleNamespace(
+        repository_info=SimpleNamespace(repository_id='b'*64, repository_format=2),
+        snapshots=lambda **_: [snapshot] if saved.exists() else [],
+        backup=backup, snapshot=lambda _: snapshot,
+        entries=lambda _: [SnapshotEntry(name, 'file', 8, 0o644, None)],
+        restore=lambda _, target: shutil.copytree(saved, target),
+    )
+    opened = _CaptureStore(store, 'output', claims.append, tmp_path)
+    with pytest.raises(ConnectionError):
+        opened.backup(stage, parent=None, cancellation=None)
+    if changed:
+        (stage / name).write_bytes(b'changed!')
+        with pytest.raises(ValueError, match='bytes differ'):
+            opened.backup(stage, parent=None, cancellation=None)
+    else:
+        assert opened.backup(stage, parent=None, cancellation=None).snapshot_id == snapshot.snapshot_id
+    assert claims == ['homebrew_recovery']

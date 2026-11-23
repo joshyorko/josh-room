@@ -79,7 +79,7 @@ def recipe_validator(runtime, monkeypatch):
     monkeypatch.setenv("JOSH_ROOM_JAT_ROOT", str(runtime.private))
 
 
-def test_component_only_child_save_and_historical_recipes(runtime, recipe_validator):
+def test_component_only_child_save_and_historical_recipes(runtime, recipe_validator, monkeypatch):
     r = runtime
     recipe = r.tmp / "recipe"
     recipe.mkdir()
@@ -114,8 +114,29 @@ def test_component_only_child_save_and_historical_recipes(runtime, recipe_valida
         update(old, "recipe-update", change["approval_sha256"])
     assert r.transport.writes == writes
     (recipe / "Brewfile").write_bytes(updated)
+    class ProcessLoss(BaseException):
+        pass
+
+    component_backups = []
+    original_backup = ResticStore.backup
+
+    def interrupt_after_component_backup(store, *args, **kwargs):
+        result = original_backup(store, *args, **kwargs)
+        if any(tag.startswith("composition-component:") for tag in kwargs.get("tags", ())):
+            component_backups.append(result.snapshot_id)
+            if len(component_backups) == 1:
+                raise ProcessLoss()
+        return result
+
+    monkeypatch.setattr(ResticStore, "backup", interrupt_after_component_backup)
+    with pytest.raises(ProcessLoss):
+        update(old, "recipe-update", change["approval_sha256"])
+    envelope, _ = r.authority.read()
+    assert envelope["state"]["dimension_catalog"]["projects"][child["room_id"]]["latest"] == old
     new = update(old, "recipe-update", change["approval_sha256"])["snapshot_id"]
     assert new != old
+    component = descriptor(r, child["room_id"], new).to_dict()["components"]["homebrew_recovery"]
+    assert component_backups == [component["snapshot"]["snapshot_id"]]
     args = (r.dimension, NAMESPACE, "parent", parent, "recipe-refresh", {"a": new},
             r.authority, r.factory, r.private)
     plan = refresh_parent(*args)
