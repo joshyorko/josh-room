@@ -347,6 +347,30 @@
       this.tabTimelineEl.hidden = tabName !== 'timeline';
     }
 
+    captureReadingPosition() {
+      if (!this.isOpen() || !this.currentItem) return null;
+      const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
+      const page = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot')).find(
+        slot => slot.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top);
+      return {
+        id: this.currentObjectId, tab: this.activeTab, slot: this.activePreviewSlot,
+        digest: this._contentDigest(this.currentItem),
+        attachment: this.tabEvidenceEl.querySelector('.att-pill.active')?.getAttribute('data-attachment-name'),
+        page: Number(page?.dataset.pageNum) || 1, fit: this._pdfFitMode, scale: this._pdfScale,
+        top: this.tabContentEl.scrollTop, detailsTop: this.tabDetailsEl.scrollTop,
+      };
+    }
+
+    async _contentDigest(target) {
+      const bytes = new TextEncoder().encode(JSON.stringify([target.previews || [], target.attachments || []]));
+      const hash = await crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(hash)).join(',');
+    }
+
+    async readingUnchanged(target, position) {
+      return target.objectId === position.id && await position.digest === await this._contentDigest(target);
+    }
+
     hide() {
       this._attRequestSeq++;
       this._teardownPdf();
@@ -367,7 +391,7 @@
       return !this.drawerEl.hidden;
     }
 
-    showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false } = {}) {
+    showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
       const sameObject = this.currentObjectId === (target.objectId || target.id);
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {
@@ -405,7 +429,7 @@
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
-      if (changed) {
+      if (changed || deferContent) {
         this.tabContentEl.textContent = '';
         this.tabEvidenceEl.textContent = '';
         const reopen = document.createElement('button');
@@ -418,12 +442,17 @@
         this.switchTab('content');
         return;
       }
+      if (reading) this.activePreviewSlot = reading.slot;
       this._renderContent(target, descriptor, layout);
       this._renderDetails(target, descriptor, layout, quantileBin);
       this._renderTimeline(target, state);
-      this._renderEvidence(target);
+      this._renderEvidence(target, reading);
 
-      if (preserveTab) {
+      if (reading) {
+        this.switchTab(reading.tab);
+        this.tabContentEl.scrollTop = reading.top;
+        this.tabDetailsEl.scrollTop = reading.detailsTop;
+      } else if (preserveTab) {
         this.switchTab(this.activeTab);
       } else if (previews.length > 0) {
         this.switchTab('content');
@@ -710,7 +739,7 @@
       this.tabTimelineEl.appendChild(ul);
     }
 
-    _renderEvidence(target) {
+    _renderEvidence(target, reading) {
       this.tabEvidenceEl.textContent = '';
       const objId = target.objectId || target.id;
       const atts = target.attachments || [];
@@ -733,7 +762,8 @@
       const images = sortedAtts.filter((a) => a.media_type.startsWith('image/'));
       const buttons = [];
 
-      const selectAtt = (att, btn) => {
+      const initial = sortedAtts.find(att => att.name === reading?.attachment) || sortedAtts[0];
+      const selectAtt = (att, btn, position) => {
         buttons.forEach((b) => b.classList.remove('active'));
         if (btn) btn.classList.add('active');
         this._attRequestSeq += 1;
@@ -741,7 +771,7 @@
         this._teardownPdf();
         stageEl.textContent = '';
         if (att.media_type === 'application/pdf') {
-          this._openPdf(objId, att, stageEl, reqSeq);
+          this._openPdf(objId, att, stageEl, reqSeq, position);
         } else if (att.media_type.startsWith('image/')) {
           this._openImages(objId, images.length >= 2 ? images : [att], stageEl, reqSeq);
         } else if (att.media_type === 'text/html') {
@@ -755,7 +785,7 @@
         }
       };
 
-      sortedAtts.forEach((att, idx) => {
+      sortedAtts.forEach((att) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'att-pill';
@@ -764,7 +794,7 @@
         btn.addEventListener('click', () => selectAtt(att, btn));
         buttons.push(btn);
         listEl.appendChild(btn);
-        if (idx === 0) selectAtt(att, btn);
+        if (att === initial) selectAtt(att, btn, reading);
       });
     }
 
@@ -793,7 +823,7 @@
       }
     }
 
-    async _openPdf(itemId, att, container, reqSeq) {
+    async _openPdf(itemId, att, container, reqSeq, reading) {
       const startMs = performance.now();
       const status = document.createElement('div');
       status.className = 'muted-text';
@@ -825,8 +855,8 @@
           return;
         }
         this._pdfDoc = pdfDoc;
-        this._pdfFitMode = 'width';
-        this._pdfScale = 1.0;
+        this._pdfFitMode = reading?.fit || 'width';
+        this._pdfScale = reading?.scale || 1;
 
         container.textContent = '';
 
@@ -944,7 +974,10 @@
           { root: viewportEl, rootMargin: '120px 0px' }
         );
         slots.forEach((s) => this._pdfObserver.observe(s));
-        await renderPageIntoSlot(slots[0]);
+        const landing = slots[(reading?.page || 1) - 1] || slots[0];
+        await renderPageIntoSlot(landing);
+        if (reqSeq !== this._attRequestSeq) return;
+        if (reading) viewportEl.scrollTop = landing.offsetTop - slots[0].offsetTop;
 
         btnFitW.addEventListener('click', () => { this._pdfFitMode = 'width'; this._pdfScale = 1.0; rerenderVisible(); });
         btnFitP.addEventListener('click', () => { this._pdfFitMode = 'page'; this._pdfScale = 1.0; rerenderVisible(); });

@@ -362,14 +362,20 @@ class WorkspaceFilesystem:
         attachment = None
         refs = ()
         media = kind.embed_media_type
-        if media and self.provider._include_attachments:
-            limit = min(self.provider._max_attachment_bytes, 1024 * 1024)
+        limit = min(self.provider._max_attachment_bytes, 1024 * 1024)
+        if media and not self.provider._include_attachments:
+            preview = replace(preview, reason="binary evidence disabled for this session")
+        elif media and entry.info.st_size > limit:
+            preview = replace(preview, reason="file exceeds bounded binary evidence size")
+        elif media:
             data = self.provider._read_regular_file_bytes(fd, directory, name, entry.info, limit)
             signatures = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff",
                           "application/pdf": b"%PDF-", "image/webp": b"RIFF"}
             if data and data.startswith(signatures[media]) and (media != "image/webp" or data[8:12] == b"WEBP"):
                 attachment = Attachment("evidence" + Path(name).suffix.lower(), media, data)
                 refs = (AttachmentRef(attachment.name, media, len(data), attachment.sha256),)
+            else:
+                preview = replace(preview, reason="file unreadable or evidence signature does not match its type")
         fields = {**node.fields, "preview_status": preview.status}
         return replace(node, previews=(preview,), attachments=refs, fields=fields), attachment
 

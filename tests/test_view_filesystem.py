@@ -174,3 +174,22 @@ def test_relisting_parent_cannot_rebind_old_sibling_cursor(tmp_path):
     with pytest.raises(ViewValidationError) as failure:
         adapter.listing(target, gen, partial["cursor"])
     assert failure.value.code == "filesystem-stale"
+
+
+def test_selected_file_revalidated_after_read(tmp_path, monkeypatch):
+    target = tmp_path / "sample.py"
+    target.write_text("original")
+    provider = RoomWorkspaceProvider(tmp_path)
+    adapter = provider.open_filesystem()
+    gen, nodes = entries(adapter)
+    read = provider._read_regular_file_bytes
+
+    def change_after_read(*args):
+        raw = read(*args)
+        target.write_text("replacement")
+        return raw
+
+    monkeypatch.setattr(provider, "_read_regular_file_bytes", change_after_read)
+    with pytest.raises(ViewValidationError) as failure:
+        adapter.preview(nodes["sample.py"]["id"], gen)
+    assert failure.value.code == "filesystem-stale"
