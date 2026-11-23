@@ -48,7 +48,7 @@ def _file_version(info):
     return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_nlink, info.st_ctime_ns, info.st_mtime_ns)
 
 
-def _local_file(provider, entry, directory, policy):
+def _local_file(provider, entry, directory, policy, text_limit):
     name = entry.parts[-1]
     if _classify_file(name).is_secret or not stat.S_ISREG(entry.info.st_mode) or entry.info.st_nlink != 1:
         fail("comparison-unsupported")
@@ -58,8 +58,7 @@ def _local_file(provider, entry, directory, policy):
                                              name, entry.info, MAX_FILE)
     if data is None:
         fail("filesystem-stale")
-    allowed = provider._include_previews and len(data) <= provider._max_preview_bytes
-    text = _text("/".join(entry.parts), data, policy, provider._max_preview_bytes) if allowed else None
+    text = _text("/".join(entry.parts), data, policy, text_limit) if text_limit is not None else None
     return {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}, text
 
 
@@ -80,7 +79,7 @@ def _historical_file(name, value, policy=DEFAULT_SANITIZATION_POLICY, max_bytes=
         fail()
     envelope = value.get("text_preview", {})
     summary = {"size": size, "sha256": digest}
-    if envelope.get("state") != "available":
+    if max_bytes is None or envelope.get("state") != "available":
         return summary, None
     if (size > MAX_TEXT_BYTES or envelope.get("encoding") != "base64-utf8"
             or envelope.get("sha256") != digest or envelope.get("size") != size):
@@ -158,8 +157,10 @@ class SavedComparison:
             if not HEX.fullmatch(result["tree_id"]) or not HEX.fullmatch(result["workspace_snapshot_id"]):
                 fail()
             source = _point(result)
-            saved, before = _historical_file(path, result["file"], self.policy, adapter.provider._max_preview_bytes)
-            live, after = _local_file(adapter.provider, entry, directory, self.policy)
+            provider = adapter.provider
+            text_limit = provider._max_preview_bytes if provider._include_previews else None
+            saved, before = _historical_file(path, result["file"], self.policy, text_limit)
+            live, after = _local_file(provider, entry, directory, self.policy, text_limit)
             if saved is None:
                 change = "added"
             elif saved["size"] != live["size"]:

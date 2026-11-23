@@ -102,3 +102,32 @@ def test_custom_session_preview_limits_apply_to_saved_text():
     assert _historical_file("tools/Makefile", file)[1] == value.decode()
     assert _historical_file("tools/Makefile", file, SanitizationPolicy(max_digit_run=2))[1] is None
     assert _historical_file("tools/Makefile", file, max_bytes=5)[1] is None
+
+
+
+@pytest.mark.parametrize("include_previews,limit,digits", [(False, 512, 8), (True, 256, 8), (True, 512, 2)])
+def test_comparison_is_digest_only_under_session_and_server_policy(tmp_path, monkeypatch, include_previews, limit, digits):
+    from josh_room.view.sanitizer import SanitizationPolicy
+    name = "code.py"
+    saved = b"123" + b"x" * 260
+    current = b"123" + b"y" * 260
+    (tmp_path / name).write_bytes(current)
+    provider = RoomWorkspaceProvider(tmp_path, include_previews=include_previews, max_preview_bytes=limit)
+    service = SavedComparison(tmp_path / "broker", SanitizationPolicy(max_digit_run=digits))
+    adapter = provider.open_filesystem()
+    try:
+        page = adapter.listing("root")
+        entry = next(node for node in page["entries"] if node["label"] == name)
+        preview = text_preview(name, saved)
+        file = {"type": "file", "size": len(saved), "sha256": preview["sha256"], "text_preview": preview}
+        monkeypatch.setattr("josh_room.view.saved_comparison._query", lambda *_: {
+            "snapshot": "point-a", "date": "2026-11-23T00:00:00Z", "tree_id": "a" * 64,
+            "workspace_snapshot_id": "b" * 64, "file": file,
+        })
+        receipt = service.query(adapter, entry["id"], page["generation"], "a" * 32)
+        assert receipt["change"] == "modified"
+        assert receipt["saved"]["sha256"] == hashlib.sha256(saved).hexdigest()
+        assert receipt["live"]["sha256"] == hashlib.sha256(current).hexdigest()
+        assert receipt["unified_diff"] is None
+    finally:
+        adapter.close()
