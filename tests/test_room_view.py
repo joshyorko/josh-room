@@ -572,6 +572,43 @@ def test_scoped_filesystem_transport_boundary(tmp_path):
         assert "filesystem" not in generic.collector.current_payload()["server"]
 
 
+def test_foreground_listing_can_follow_an_active_directory_sample(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    (tmp_path / "child").mkdir()
+    with RoomViewServer(RoomWorkspaceProvider(tmp_path), interval_seconds=60) as server:
+        root = json.loads(_raw_http(server.port, "GET", "/fs/list?id=root")[2])
+        route = "/fs/list?" + urlencode({"id": root["entries"][0]["id"], "generation": root["generation"]})
+        active = Event()
+        release = Event()
+        original = server._filesystem.listing
+
+        def hold_sample(*args, **kwargs):
+            if kwargs.get("sample"):
+                active.set()
+                assert release.wait(3)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(server._filesystem, "listing", hold_sample)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            sample = executor.submit(_raw_http, server.port, "GET", route + "&sample=1")
+            try:
+                assert active.wait(3)
+                foreground = executor.submit(_raw_http, server.port, "GET", route)
+                deadline = time.monotonic() + 1
+                while not server._fs_admission.locked() and time.monotonic() < deadline:
+                    time.sleep(0.002)
+                assert server._fs_admission.locked()
+                assert _raw_http(server.port, "GET", route + "&sample=1")[0] == 429
+            finally:
+                release.set()
+            assert foreground.result()[0] == 200
+            assert sample.result()[0] == 200
+        for url in ("/fs/list?id=root&sample=1", route + "&sample=0", route + "&cursor=other&sample=1"):
+            assert _raw_http(server.port, "GET", url)[0] == 400
+
+
 def test_scoped_query_rechecks_binding_before_writing_response(tmp_path, monkeypatch):
     root = tmp_path / "room"
     root.mkdir()
