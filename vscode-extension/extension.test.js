@@ -8092,3 +8092,31 @@ test("review regression: viewer excludes ambient MinIO credentials", async t => 
     return { active: false, dispose() {} };
   } });
 });
+
+test("Stop releases a pending picker so an explicit Room can launch immediately", async t => {
+  const { extension, vscode, item } = roomViewCommandFixture(t);
+  const [target] = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders);
+  const picker = Promise.withResolvers();
+  vscode.window.showQuickPick = () => picker.promise;
+  let launches = 0;
+  const options = { launch: async () => { launches++; return { active: true, dispose() {} }; } };
+  const old = extension.__test__.exploreRoom3D(undefined, options);
+  await extension.__test__.stopRoomView();
+  await extension.__test__.exploreRoom3D(item, options);
+  picker.resolve(target); await old.catch(() => {});
+  assert.equal(launches, 1);
+  await extension.deactivate();
+});
+
+test("Room selection refuses an encryption-domain switch before the picker returns", async t => {
+  const { extension, vscode, root } = roomViewCommandFixture(t);
+  writeStatMarker(root, { dimension_id: "archive", encryption_domain_id: "domain-one" });
+  const [target] = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders);
+  vscode.window.showQuickPick = async () => {
+    writeStatMarker(root, { dimension_id: "archive", encryption_domain_id: "domain-two" });
+    return target;
+  };
+  let launched = false;
+  await assert.rejects(extension.__test__.exploreRoom3D(undefined, { launch: async () => { launched = true; } }), /binding changed/);
+  assert.equal(launched, false);
+});

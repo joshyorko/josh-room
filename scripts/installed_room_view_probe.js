@@ -1,5 +1,6 @@
 "use strict";
 const http = require("node:http");
+const net = require("node:net");
 
 function request(url, method = "GET", capture = false) {
   return new Promise((resolve, reject) => {
@@ -41,4 +42,15 @@ async function probe(url) {
 async function isStopped(url) {
   try { return (await request(url)).status >= 400; } catch { return true; }
 }
-module.exports = { probe, isStopped };
+
+function isListenerStopped(url) {
+  const endpoint = new URL(url);
+  return new Promise(resolve => {
+    const socket = net.connect({ host: endpoint.hostname, port: Number(endpoint.port) });
+    const finish = stopped => { socket.destroy(); resolve(stopped); };
+    socket.once("connect", () => finish(false));
+    socket.once("error", error => finish(error.code === "ECONNREFUSED"));
+    socket.setTimeout(2000, () => finish(false));
+  });
+}
+module.exports = { probe, isStopped, isListenerStopped };

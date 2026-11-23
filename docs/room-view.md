@@ -23,9 +23,9 @@ attached container or Remote SSH), open an entered Room folder, right-click
 its Room row in the Josh Room sidebar and choose **Explore Room in 3D…**.
 The Command Palette also offers **Josh: Explore Room in 3D…** with an explicit
 choice among open, entered Rooms. The marker must match the folder, Dimension,
-and Room. The controller verifies the selected IDs at startup and keeps the
-Room/Dimension, encryption domain, namespace and directory identity pinned for
-the session. A changed or removed binding invalidates the session's workspace
+and Room. The controller verifies the Room/Dimension, encryption domain,
+namespace and directory identity against the original selection at startup
+and pins them for the session. A changed or removed binding invalidates the session's workspace
 state and attachments; launch it again after entering the intended Room. Save
 within the same Room does not invalidate the viewer. Enter/open a Room first if
 it is not loaded in this window.
@@ -51,7 +51,9 @@ The desktop client and browser may run on Windows; the workspace extension and
 controller must run on Linux. In devcontainer/attached-container/SSH windows,
 Josh Room uses VS Code's `asExternalUri` to forward the tokenized server URL to
 the desktop. `remote.localPortHost` must be `localhost`, and the returned URL
-must be an HTTP desktop loopback address preserving the token. Public tunnel
+must be an HTTP desktop loopback address preserving the token. Token-protected
+sessions accept a remapped loopback Host/port; non-loopback Host headers stay
+forbidden. Public tunnel
 URLs and all-interfaces forwarding are refused. No Docker port publication or
 manual listener exposure is needed. Stop removes the owned Linux listener;
 VS Code owns the forwarding entry, which may remain in the Ports view after

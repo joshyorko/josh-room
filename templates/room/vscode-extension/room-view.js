@@ -31,7 +31,7 @@ function assertRoomViewHost(vscode, platform = process.platform) {
       throw new Error("This remote VS Code host cannot privately forward Room View. Use desktop VS Code with a Linux devcontainer or SSH workspace.");
     }
     const localHost = vscode.workspace.getConfiguration?.("remote")?.get("localPortHost", "localhost");
-    if (localHost !== "localhost") throw new Error("Room View requires remote.localPortHost set to localhost before forwarding.");
+    if (localHost !== "localhost") throw launcherError("ROOM_VIEW_FORWARD_PRIVATE_REQUIRED", "Room View requires remote.localPortHost set to localhost before forwarding.");
   }
 }
 
@@ -94,7 +94,7 @@ async function launchRoomView({
   const receiptFile = path.join(tempDirectory, "receipt.json");
   const commandArgs = ["view", "serve", "--provider", "room", "--workspace", cwd,
     "--port", "0", "--require-token"];
-  if (roomBinding) commandArgs.push("--expected-room-id", roomBinding.roomId, "--expected-dimension-id", roomBinding.dimensionId);
+  if (roomBinding) commandArgs.push("--expected-workspace-binding", JSON.stringify(roomBinding));
   let child;
   let closed = false;
   let disposed = false;
@@ -343,6 +343,7 @@ async function launchRoomView({
     let browserUri = vscode.Uri.parse(url);
     if (vscode.env.remoteName) {
       try {
+        assertRoomViewHost(vscode, platform);
         browserUri = await Promise.race([vscode.env.asExternalUri(browserUri), interrupted]);
         url = validateForwardedUri(browserUri, url);
       } catch (error) {

@@ -374,6 +374,7 @@ class RoomWorkspaceProvider:
         sensitivity: str = "internal",
         expected_room_id: str | None = None,
         expected_dimension_id: str | None = None,
+        expected_binding: dict | None = None,
     ) -> None:
         if not _HAS_DIR_FD or not getattr(os, "O_NOFOLLOW", 0):
             raise ViewValidationError("workspace-platform-unsupported", "safe descriptor-relative workspace reads unavailable")
@@ -420,6 +421,15 @@ class RoomWorkspaceProvider:
             self._context = context_status(self._root)
             self._binding = self._binding_identity(self._context)
             self._binding_invalidated = False
+            actual_binding = {
+                "room_id": self._context.get("project_id"),
+                "dimension_id": self._context.get("dimension_id"),
+                "encryption_domain_id": self._context.get("encryption_domain_id"),
+                "composition_namespace": self._context.get("composition_namespace"),
+                "device": str(root_stat.st_dev), "inode": str(root_stat.st_ino),
+            }
+            if expected_binding is not None and expected_binding != actual_binding:
+                raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
             if (expected_room_id is None) != (expected_dimension_id is None):
                 raise ViewValidationError("workspace-binding-required", "Room View requires both expected Room and Dimension")
             if expected_room_id is not None and (
@@ -812,8 +822,8 @@ class RoomWorkspaceProvider:
             root_dev = root_stat.st_dev
             root_stamp = stamp(root_stat)
             root_mount = _safe_mount_id(root_fd)
-            policy = self._capture_policy(root_fd)
             ctx = self._assert_binding(root_fd)
+            policy = self._capture_policy(root_fd)
 
             nodes_list: list[NodeState] = []
             items_list: list[ItemState] = []

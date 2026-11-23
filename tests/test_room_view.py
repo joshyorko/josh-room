@@ -1239,3 +1239,90 @@ def test_room_provider_requires_selected_binding_but_allows_save_in_same_room(tm
     bind("snap-2")
     with pytest.raises(ViewValidationError, match="binding changed"):
         provider.state()
+
+
+def test_rebind_invalidates_even_when_new_capture_policy_is_invalid(tmp_path):
+    from josh_room.view.server import ViewCollector
+    from josh_room.workspace_state import write_workspace_marker
+
+    def bind(dimension):
+        write_workspace_marker(tmp_path, dimension_id=dimension, project_id="demo",
+                               display_name=dimension, snapshot_id="snap", workspace_fingerprint="a" * 64)
+    bind("alpha")
+    (tmp_path / "alpha.txt").write_text("synthetic")
+    provider = RoomWorkspaceProvider(tmp_path)
+    collector = ViewCollector(provider, workspace=tmp_path)
+    assert collector.current_payload()["state"]["items"]
+    bind("beta")
+    (tmp_path / ".josh-roomignore").write_text("# josh-room capture-mode: invalid\n")
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+    bind("alpha")
+    (tmp_path / ".josh-roomignore").unlink()
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+
+
+def test_controller_startup_checks_selected_domain_namespace_and_directory(tmp_path):
+    from josh_room.workspace_state import write_stat_workspace_marker
+
+    write_stat_workspace_marker(tmp_path, dimension_id="alpha", encryption_domain_id="domain-two",
+                                project_id="demo", snapshot_id="snap", display_name="Synthetic",
+                                workspace_signature="a" * 64, signature_algorithm="josh-room-stat-v1", capture_policy_sha256="b" * 64)
+    info = tmp_path.stat()
+    binding = {"room_id": "demo", "dimension_id": "alpha", "encryption_domain_id": "domain-one",
+               "composition_namespace": None, "device": str(info.st_dev), "inode": str(info.st_ino)}
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_binding=binding)
+    binding["encryption_domain_id"] = "domain-two"
+    assert load_provider("room", workspace=tmp_path, expected_binding=binding).state()
+    binding["composition_namespace"] = "a" * 32
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_binding=binding)
+    binding["composition_namespace"] = None
+    binding["inode"] = str(info.st_ino + 1)
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_binding=binding)
+
+
+def test_token_protected_view_survives_private_port_remap_without_allowing_dns_hosts():
+    import http.client
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    with RoomViewServer(SyntheticPipelineProvider(preset="small"), port=0, require_token=True) as server:
+        class Forward(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=3)
+                try:
+                    connection.request("GET", self.path, headers={"Host": self.headers["Host"]})
+                    response = connection.getresponse()
+                    body = response.read()
+                    self.send_response(response.status)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                finally:
+                    connection.close()
+
+        proxy = ThreadingHTTPServer(("127.0.0.1", 0), Forward)
+        thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+        thread.start()
+        try:
+            mapped_port = proxy.server_port
+            assert mapped_port != server.port
+            status, _, _ = _raw_http(mapped_port, "GET", f"/state.json?token={server.token}")
+            assert status == 200
+            status, _, _ = _raw_http(mapped_port, "GET", f"/state.json?token={server.token}", headers={"Host": f"[::1]:{mapped_port}"})
+            assert status == 200
+            status, _, _ = _raw_http(mapped_port, "GET", "/state.json")
+            assert status == 403
+            status, _, _ = _raw_http(mapped_port, "GET", f"/state.json?token={server.token}", headers={"Host": f"untrusted.invalid:{mapped_port}"})
+            assert status == 403
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+            thread.join(timeout=3)

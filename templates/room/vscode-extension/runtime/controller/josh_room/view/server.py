@@ -262,7 +262,19 @@ class RoomViewServer:
 
             def _check_host(self) -> bool:
                 host = (self.headers.get("Host") or "").strip().lower()
-                if host not in self._allowed_hosts():
+                forwarded_loopback = False
+                if owner._token:
+                    try:
+                        authority = urlsplit(f"http://{host}")
+                        forwarded_loopback = (
+                            authority.hostname in {"localhost", "127.0.0.1", "::1"}
+                            and authority.port is not None and 0 < authority.port <= 65535
+                            and not authority.username and not authority.password
+                            and not authority.path and not authority.query and not authority.fragment
+                        )
+                    except ValueError:
+                        pass
+                if host not in self._allowed_hosts() and not forwarded_loopback:
                     self._send_json(
                         HTTPStatus.FORBIDDEN,
                         {"ok": False, "error": "forbidden-host-header"},

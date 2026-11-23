@@ -251,8 +251,10 @@ test("review regression: provider overlap refusal stays actionable without expos
 
 test("launcher sends the exact selected Room binding to the controller", async () => {
   const h = createHarness();
-  const session = await launchRoomView({ ...h, cwd: process.cwd(), roomBinding: { roomId: "demo", dimensionId: "alpha" } });
-  assert.deepEqual(h.calls.find(call => call.args).args.slice(-4), ["--expected-room-id", "demo", "--expected-dimension-id", "alpha"]);
+  const session = await launchRoomView({ ...h, cwd: process.cwd(), roomBinding: { room_id: "demo", dimension_id: "alpha", encryption_domain_id: "domain", composition_namespace: null, device: "1", inode: "2" } });
+  const args = h.calls.find(call => call.args).args;
+  assert.equal(args.at(-2), "--expected-workspace-binding");
+  assert.equal(JSON.parse(args.at(-1)).encryption_domain_id, "domain");
   await session.dispose();
 });
 
@@ -309,4 +311,16 @@ test("cancelling a pending private forward settles and cleans the Linux process"
   assert.equal(h.child.closed, true);
   assert.equal(h.opened.length, 0);
   forwarding.resolve({ toString: () => "http://localhost:53123/?token=synthetic-token" });
+});
+
+test("private forwarding setting is checked again after runtime startup", async () => {
+  let setting = "localhost";
+  const h = createHarness({ onSpawn: () => { setting = "allInterfaces"; } });
+  h.vscode.env.remoteName = "dev-container";
+  h.vscode.workspace.getConfiguration = () => ({ get: () => setting });
+  let forwards = 0;
+  h.vscode.env.asExternalUri = async () => { forwards++; };
+  await assert.rejects(launchRoomView({ ...h, cwd: process.cwd() }), { code: "ROOM_VIEW_FORWARD_PRIVATE_REQUIRED" });
+  assert.equal(forwards, 0);
+  assert.equal(h.child.closed, true);
 });
