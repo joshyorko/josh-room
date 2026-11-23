@@ -180,11 +180,11 @@ def test_picker_pages_round_trip_every_row_through_cli_json(inventory):
         # Each component fits a native 255-byte filename. The escaped JSON
         # encoding of all 32 paths together exceeds a single controller reply.
         prefix = "/".join(["🦕" * 59] * 8)
-        rows = [dict(path=f"{prefix}/{i}", room_id=f"child-{i}", snapshot_id=f"jat-{i}", other_point_count=1)
+        rows = [{'path': f"{prefix}/{i}", 'room_id': f"child-{i}", 'snapshot_id': f"jat-{i}", 'other_point_count': 1}
                 for i in range(32)]
         key = "children"
     else:
-        rows = [dict(snapshot_id=f"jat-{i}", created_at="2026-11-18T12:00:00Z") for i in range(129)]
+        rows = [{'snapshot_id': f"jat-{i}", 'created_at': "2026-11-18T12:00:00Z"} for i in range(129)]
         key = "recovery_points"
     offset, received, pages = 0, [], 0
     while offset is not None:

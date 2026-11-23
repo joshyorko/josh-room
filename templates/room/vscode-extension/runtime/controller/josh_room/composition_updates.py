@@ -27,6 +27,7 @@ from .composition_git_integrity import verify_staged_git
 from .composition_lifecycle import (
     CONTENT_DIGEST_ALGORITHM,
     INHERITED_POLICY,
+    CompositionAdmissionError,
     _admitted_source,
     _capture,
     _commit,
@@ -379,7 +380,7 @@ def parent_children(workspace, authority, namespace, room, snapshot, *, child_pa
     body = state.to_dict()
     if ((revision is not None and revision != body['revision'])
             or (offset or child_path is not None) and revision is None):
-        raise ValueError('Catalog choices changed; reopen the picker')
+        raise CompositionAdmissionError('composition-picker-stale', 'Catalog choices changed; reopen the picker')
     committed = [op for op in body['operations'].values() if op['phase'] == 'committed']
     parent = next((op for op in committed if (op['parent_pin']['room_id'],
                    op['parent_pin']['logical_jat_id']) == (room, snapshot)), None)
