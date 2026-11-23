@@ -923,6 +923,7 @@
           list: (id, generation, cursor, signal) => this.data.queryFilesystem('list', {
             id, ...(generation ? { generation } : {}), ...(cursor ? { cursor } : {}),
           }, signal),
+          inspect: (id, generation, signal) => this.data.queryFilesystem('inspect', { id, generation }, signal),
           select: hit => this._openFilesystem(hit.id, { kind: hit.node_kind }),
           directory: () => this.fsPage?.directory.id || 'root',
           root: () => 'root',
@@ -1020,6 +1021,7 @@
           const page = this.fsPage;
           try {
             await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
+            if (page === this.fsPage && !this.fsBusy) await this.filesystemSearch.validateDisplayed();
           } catch (error) {
             if (error.status === 429) return;
             if (page === this.fsPage && !this.fsBusy) {
