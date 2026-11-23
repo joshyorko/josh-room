@@ -245,7 +245,7 @@ use `/fs/attachment` with the admitted name and digest. The server rejects
 arbitrary paths. These routes operate only on the live native workspace.
 File sizes are reported in bytes. Block heights use a bounded visual scale.
 
-### Investigate a file or a recorded outcome
+### Find a Room file and compare its saved version
 
 Start with the directory that looks relevant. Its connected platforms show
 containment. Select a candidate to see its path, type, size and available
@@ -265,11 +265,9 @@ point and live observation before restoring its result. To inspect that point
 in native Time Machine, choose the Room and dated point again in VS Code, then
 use **Josh Room: Browse Recovery Point…**. Room View cannot launch that command.
 
-For a recorded tool run, the primary action opens the provider's evidence.
-Read its reported outcome, timestamped steps, and any declared links to inputs
-or outputs. A linked output opens as its own object. An attachment with
-omitted bytes offers metadata inspection. Ordinary filesystem entries report
-their file facts independently of run outcomes.
+After hydration the landscape shows the files currently present in the Room.
+Opening a directory does not establish which of its files existed at any
+particular saved point. Compare the selected path to answer that question.
 
 ## Embedded `room-view-v1` SQLite schema
 

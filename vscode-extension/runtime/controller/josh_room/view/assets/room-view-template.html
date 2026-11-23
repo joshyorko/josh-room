@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;291a2ea196ef718c858a553318c8d5baa22cfe3699aabb4703ab92f0f562a06f&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;1db1a98d20e7780cf32ea8acd0cd28c1c26aa7f0a8d3373930367972abe1eb15&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -499,8 +499,6 @@ body {
 .filesystem-reader:has(#file-summary:not([hidden])) .drawer-body { display: none; }
 #file-summary { padding: 6px 12px 12px; }
 #file-summary-info { margin: 4px 0 10px; color: var(--text-muted); }
-#run-related { margin: 0 0 10px; }
-#run-related .links-section { margin: 0; }
 .file-summary-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .filesystem-reader:has(#btn-reader-back:not([hidden])) {
   width: min(800px, calc(100vw - 24px));
@@ -1317,7 +1315,6 @@ body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-b
     </div>
     <section id="file-summary" aria-label="Selected object actions" hidden>
       <p id="file-summary-info"></p>
-      <div id="run-related" hidden></div>
       <div class="file-summary-actions">
         <button id="btn-read-file" class="hud-btn" type="button">Read file</button>
         <button id="btn-compare-file" class="hud-btn" type="button" hidden>Compare saved version</button>
@@ -19688,7 +19685,6 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     } catch (_) {
       return renderCodeViewer(bodyText, { language: 'log' });
     }
-    if (!run || typeof run !== 'object') return renderCodeViewer(bodyText, { language: 'json' });
     const card = document.createElement('div');
     card.className = 'run-card';
 
@@ -19700,8 +19696,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     const right = document.createElement('span');
     right.className = 'muted-text';
     right.style.fontFamily = 'var(--font-mono)';
-    right.textContent = [run.status && 'Reported ' + run.status, run.exit_code != null && 'exit ' + run.exit_code,
-      run.duration_ms != null && run.duration_ms + ' ms'].filter(Boolean).join(' · ');
+    const exitStr = run.exit_code != null ? `exit ${run.exit_code}` : (run.status || '');
+    const durStr = run.duration_ms != null ? ` · ${run.duration_ms} ms` : '';
+    right.textContent = `${exitStr}${durStr}`;
     header.append(left, right);
     card.appendChild(header);
 
@@ -19723,17 +19720,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       heading.textContent = 'Execution Steps';
       card.appendChild(heading);
       for (const st of run.steps) {
-        if (!st || typeof st !== 'object') continue;
-        const state = String(st.status || '').toLowerCase();
-        const isFail = ['fail', 'failed', 'error', 'timeout', 'timed out'].includes(state);
-        const isPass = ['pass', 'passed', 'success'].includes(state);
+        const isFail = st.status === 'fail' || st.status === 'failed' || st.status === 'error';
         const row = document.createElement('div');
-        row.className = 'run-step-row' + (isFail ? ' run-step-fail' : isPass ? ' run-step-pass' : '');
+        row.className = `run-step-row ${isFail ? 'run-step-fail' : 'run-step-pass'}`;
         const name = document.createElement('span');
-        name.textContent = `${isFail ? '×' : isPass ? '✓' : '–'} ${st.name}`;
+        name.textContent = `${isFail ? '×' : '●'} ${st.name}`;
         const meta = document.createElement('span');
         meta.className = 'muted-text';
-        meta.textContent = `${st.status || 'Status unavailable'}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
+        meta.textContent = `${st.status}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
         row.append(name, meta);
         card.appendChild(row);
       }
@@ -19749,36 +19743,19 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     return card;
   }
 
-  function readerAction(target, descriptor, steps) {
-    const native = global.RoomViewLayout.isWorkspace(descriptor);
+  function fileReaderAction(target) {
     const previews = target.previews || [];
     const text = previews.find(p => p.status === 'available' && p.body != null);
-    const execution = !native && previews.find(p => p.status === 'available' && p.media_type === 'application/x-josh-run+json');
     const attachments = (target.attachments || []).filter(a => a.embedded !== false);
     const pdf = attachments.find(a => a.media_type === 'application/pdf');
     const image = attachments.find(a => a.media_type?.startsWith('image/'));
-    const reportedRun = !native && (execution || target.nodeKind === 'run');
-    if (reportedRun && (execution || steps.length)) {
-      let detail = target.summary;
-      if (execution) {
-        try {
-          const run = JSON.parse(execution.body);
-          const failed = Array.isArray(run?.steps) && run.steps.find(step =>
-            ['failed', 'fail', 'error', 'timeout', 'timed out'].includes(String(step?.status || '').toLowerCase()));
-          detail = [run?.status && 'Reported ' + run.status, failed?.name && 'First failed step: ' + failed.name,
-            run?.exit_code != null && 'exit ' + run.exit_code].filter(Boolean).join(' · ') || detail;
-        } catch { /* The content view displays the admitted text. */ }
-      }
-      return { label: 'Investigate run', tab: execution ? 'content' : 'timeline', slot: execution?.slot, detail };
-    }
     if (text) {
       const label = text.media_type === 'text/x-diff' ? 'Read diff' : text.media_type === 'application/json'
         ? 'Inspect JSON' : text.slot === 'log' || text.language === 'log' ? 'Read log' : 'Read file';
       return { label, tab: 'content', slot: text.slot };
     }
     if (pdf || image) return { label: pdf ? 'Read PDF' : 'View image', tab: 'evidence' };
-    if (attachments.length) return { label: 'Inspect evidence', tab: 'evidence' };
-    if (!native && steps.length) return { label: 'View timeline', tab: 'timeline' };
+    if (attachments.length) return { label: 'Open file', tab: 'evidence' };
     return { label: 'File details', tab: 'details', detail: target.attachments?.length ? 'Attachment bytes omitted from this observation' : previews.find(p => p.reason)?.reason || 'No preview available' };
   }
 
@@ -19801,7 +19778,6 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         document.getElementById('btn-compare-tab'));
       this.fileSummary = document.getElementById('file-summary');
       this.summaryInfo = document.getElementById('file-summary-info');
-      this.runRelated = document.getElementById('run-related');
       this.readButton = document.getElementById('btn-read-file');
       this.compareButton = document.getElementById('btn-compare-file');
       this.readerBack = document.getElementById('btn-reader-back');
@@ -20030,7 +20006,6 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.returnFocus = null;
       this.readerOpener = null;
       this.summaryInfo.textContent = '';
-      this.runRelated.replaceChildren();
       this.layout = null;
       this.descriptor = null;
       this.fileSummary.hidden = true;
@@ -20061,17 +20036,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
       if (!sameObject) { this.summaryReading = null; this.readingBeforeCompare = null; }
       const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
-      this.reader = ['file', 'artifact', 'run'].includes(target.nodeKind);
       this.descriptor = descriptor;
       this.layout = layout;
       const native = this.data.filesystem || global.RoomViewLayout.isWorkspace(descriptor);
-      const steps = (state.steps || []).filter(s => s.item_id === (target.objectId || target.id));
-      this.drawerEl.classList.toggle('filesystem-reader', this.reader || native);
-      if (this.reader || native) {
-        this.drawerEl.querySelector('[data-tab="content"]').hidden = !(target.previews || []).length;
-        this.drawerEl.querySelector('[data-tab="timeline"]').hidden = native || !steps.length;
-        this.drawerEl.querySelector('[data-tab="evidence"]').hidden = !(target.attachments || []).length;
-      }
+      this.reader = native && ['file', 'artifact'].includes(target.nodeKind);
+      this.drawerEl.classList.toggle('filesystem-reader', Boolean(native));
+      this.drawerEl.querySelector('[data-tab="content"]').hidden = native && !(target.previews || []).length;
+      this.drawerEl.querySelector('[data-tab="timeline"]').hidden = Boolean(native);
+      this.drawerEl.querySelector('[data-tab="evidence"]').hidden = native && !(target.attachments || []).length;
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       const wasDeferred = sameObject && this.openCurrentVersion;
       const unchanged = preserveTab && sameObject && fingerprint === this.contentFingerprint;
@@ -20109,22 +20081,15 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
-      this.readerBack.textContent = target.nodeKind === 'run' ? 'Back to run' : 'Back to file';
       const summary = this.reader && (reading ? reading.summary : !sameObject || wasSummary);
       this.fileSummary.hidden = !summary;
       this.readerBack.hidden = !this.reader || summary;
       if (this.reader) {
-        const action = readerAction(target, descriptor, steps);
-        this.runRelated.replaceChildren();
-        this.runRelated.hidden = true;
-        if (action.label === 'Investigate run' && (target.links || []).length) {
-          this.runRelated.appendChild(this._buildLinksSection(target, layout, true));
-          this.runRelated.hidden = false;
-        }
+        const action = fileReaderAction(target);
         this.readButton.textContent = action.label;
         this.summaryInfo.textContent = [
           Number.isSafeInteger(target.fields?.file_bytes) ? target.fields.file_bytes + ' bytes' : null,
-          action.detail || (!native && target.summary),
+          action.detail,
         ].filter(Boolean).join(' · ');
         this.compareButton.hidden = this.comparison.tab.hidden;
         if (!sameObject || !preserveTab) {
@@ -20194,7 +20159,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.showTarget(item, descriptor, state, layout || null, { quantileBin, preserveTab: false });
     }
 
-    _buildLinksSection(target, layout, compact = false) {
+    _buildLinksSection(target, layout) {
       const objId = target.objectId || target.id;
       const outgoing = target.links || [];
       const incoming = (layout && layout.incomingLinksByObjectId && layout.incomingLinksByObjectId.get(objId)) || [];
@@ -20205,7 +20170,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
       const heading = document.createElement('div');
       heading.className = 'links-heading';
-      heading.textContent = compact ? 'Related evidence' : 'Related objects';
+      heading.textContent = 'Object Relationships (Click to Fly)';
       section.appendChild(heading);
 
       const list = document.createElement('div');
@@ -20219,8 +20184,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         return { path: targetId, label: targetId };
       };
 
-      const compactLabels = compact ? outgoing.map(link => resolveLabelAndPath(link.target_id).label) : [];
-      for (const lk of (compact ? outgoing.slice(0, 4) : outgoing)) {
+      for (const lk of outgoing) {
         const info = resolveLabelAndPath(lk.target_id);
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -20233,11 +20197,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         rel.textContent = `${lk.relation} →`;
         const pathSpan = document.createElement('span');
         pathSpan.className = 'link-target-path';
-        const uniqueLabel = compactLabels.indexOf(info.label) === compactLabels.lastIndexOf(info.label);
-        pathSpan.textContent = compact && uniqueLabel ? info.label : info.path;
-        pathSpan.title = info.path;
+        pathSpan.textContent = info.path;
         btn.append(rel, pathSpan);
-        if (lk.label && !compact) {
+        if (lk.label) {
           const desc = document.createElement('span');
           desc.className = 'link-desc';
           desc.textContent = lk.label;
@@ -20249,7 +20211,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         list.appendChild(btn);
       }
 
-      for (const back of (compact ? [] : incoming)) {
+      for (const back of incoming) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'link-chip';

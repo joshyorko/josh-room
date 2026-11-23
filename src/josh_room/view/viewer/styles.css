@@ -490,8 +490,6 @@ body {
 .filesystem-reader:has(#file-summary:not([hidden])) .drawer-body { display: none; }
 #file-summary { padding: 6px 12px 12px; }
 #file-summary-info { margin: 4px 0 10px; color: var(--text-muted); }
-#run-related { margin: 0 0 10px; }
-#run-related .links-section { margin: 0; }
 .file-summary-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .filesystem-reader:has(#btn-reader-back:not([hidden])) {
   width: min(800px, calc(100vw - 24px));

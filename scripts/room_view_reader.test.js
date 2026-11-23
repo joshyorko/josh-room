@@ -56,7 +56,7 @@ function setup(available) {
   drawer._contentDigest = async () => 'same-content';
   const file = {
     objectId: 'file', label: 'sample.pdf', path: '/sample.pdf', nodeKind: 'artifact',
-    fields: { file_bytes: 19 }, attachments: available ? [{ name: 'sample.pdf' }] : [],
+    fields: { file_bytes: 19 }, attachments: available ? [{ name: 'sample.pdf', media_type: 'application/pdf' }] : [],
     previews: available ? [] : [{ status: 'omitted', reason: 'File exceeds the preview limit' }],
   };
   const select = options => drawer.showTarget(file, { legend: {} }, {}, {}, options);
@@ -68,6 +68,7 @@ test('selection opens a summary; reading, refresh, comparison and Back keep the 
   const { drawer, select, queries, attachments } = setup(true);
   assert.equal(drawer.fileSummary.hidden, false);
   assert.equal(drawer.summaryInfo.textContent, '19 bytes');
+  assert.equal(drawer.readButton.textContent, 'Read PDF');
   assert.equal(attachments(), 0);
   assert.deepEqual(queries, []);
   drawer.readButton.click();
@@ -123,31 +124,6 @@ test('closing from the scene or a detached opener focuses the selected workspace
   }
 });
 
-test('generic investigation presents only reported failure, source, and timeline capabilities', () => {
-  const { drawer } = setup(false);
-  drawer.data.filesystem = drawer.data.comparison = false;
-  const run = { objectId: 'run1', nodeKind: 'run', label: 'Build', kind: 'fail',
-    previews: [{ slot: 'execution', status: 'available', media_type: 'application/x-josh-run+json',
-      body: JSON.stringify({ status: 'failed', exit_code: 1, steps: [{ name: 'compile', status: 'fail' }] }) }],
-    links: [{ relation: 'output', target_id: 'log', label: 'Build log' }],
-  };
-  drawer.showTarget(run, { legend: {} }, { steps: [{ item_id: 'run1', name: 'compile' }] }, {});
-  assert.equal(drawer.readButton.textContent, 'Investigate run');
-  assert.match(drawer.summaryInfo.textContent, /failed.*compile.*exit 1/);
-  assert.equal(drawer.runRelated.hidden, false);
-  assert.equal(drawer.compareButton.hidden, true);
-  drawer.readButton.click();
-  assert.equal(drawer.activeTab, 'content');
-  assert.equal(drawer.activePreviewSlot, 'execution');
-  assert.equal(drawer.drawerEl.querySelector('[data-tab="timeline"]').hidden, false);
-  drawer.showTarget({ ...run, objectId: 'log', nodeKind: 'file', links: [],
-    previews: [{ slot: 'log', language: 'log', status: 'available', body: 'synthetic log' }] },
-    { legend: {} }, { steps: [] }, {});
-  assert.equal(drawer.readButton.textContent, 'Read log');
-  assert.equal(drawer.runRelated.hidden, true);
-  assert.equal(drawer.drawerEl.querySelector('[data-tab="timeline"]').hidden, true);
-});
-
 test('closing and reopening restores the same PDF position only with matching admitted content', async () => {
   const { drawer, select } = setup(true);
   drawer._contentDigest = async target => JSON.stringify(target.attachments);
@@ -181,7 +157,7 @@ test('a frozen observation containing only PDF metadata offers details', () => {
   drawer.data.mode = 'offline';
   drawer.showTarget({ ...file, objectId: 'frozen', attachments: [
     { name: 'guide.pdf', media_type: 'application/pdf', size: 42, embedded: false },
-  ] }, { legend: {} }, {}, {});
+  ] }, { tool: 'josh-room', group_label: 'Directory', legend: {} }, {}, {});
   assert.equal(drawer.readButton.textContent, 'File details');
   assert.match(drawer.summaryInfo.textContent, /omitted/);
   drawer.readButton.click();
@@ -245,16 +221,4 @@ test('changed content remains withheld across polls until explicitly reopened fr
   assert.equal(rendered, 'new text');
   assert.equal(drawer.fileSummary.hidden, true);
   assert.equal(drawer.activeTab, 'content');
-});
-
-test('generic live timeline reconciles new provider steps while the preview is unchanged', () => {
-  const { drawer, file } = setup(true);
-  drawer.data.filesystem = false;
-  let steps;
-  drawer._renderTimeline = (target, state) => { steps = state.steps; };
-  drawer.showTarget(file, { legend: {} }, { steps: [] }, {});
-  const updated = [{ item_id: file.objectId, name: 'published' }];
-  drawer.showTarget(file, { legend: {} }, { steps: updated }, {}, { preserveTab: true });
-  assert.deepEqual(steps, updated);
-  assert.equal(drawer.drawerEl.querySelector('[data-tab="timeline"]').hidden, false);
 });

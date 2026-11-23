@@ -223,7 +223,6 @@
     } catch (_) {
       return renderCodeViewer(bodyText, { language: 'log' });
     }
-    if (!run || typeof run !== 'object') return renderCodeViewer(bodyText, { language: 'json' });
     const card = document.createElement('div');
     card.className = 'run-card';
 
@@ -235,8 +234,9 @@
     const right = document.createElement('span');
     right.className = 'muted-text';
     right.style.fontFamily = 'var(--font-mono)';
-    right.textContent = [run.status && 'Reported ' + run.status, run.exit_code != null && 'exit ' + run.exit_code,
-      run.duration_ms != null && run.duration_ms + ' ms'].filter(Boolean).join(' · ');
+    const exitStr = run.exit_code != null ? `exit ${run.exit_code}` : (run.status || '');
+    const durStr = run.duration_ms != null ? ` · ${run.duration_ms} ms` : '';
+    right.textContent = `${exitStr}${durStr}`;
     header.append(left, right);
     card.appendChild(header);
 
@@ -258,17 +258,14 @@
       heading.textContent = 'Execution Steps';
       card.appendChild(heading);
       for (const st of run.steps) {
-        if (!st || typeof st !== 'object') continue;
-        const state = String(st.status || '').toLowerCase();
-        const isFail = ['fail', 'failed', 'error', 'timeout', 'timed out'].includes(state);
-        const isPass = ['pass', 'passed', 'success'].includes(state);
+        const isFail = st.status === 'fail' || st.status === 'failed' || st.status === 'error';
         const row = document.createElement('div');
-        row.className = 'run-step-row' + (isFail ? ' run-step-fail' : isPass ? ' run-step-pass' : '');
+        row.className = `run-step-row ${isFail ? 'run-step-fail' : 'run-step-pass'}`;
         const name = document.createElement('span');
-        name.textContent = `${isFail ? '×' : isPass ? '✓' : '–'} ${st.name}`;
+        name.textContent = `${isFail ? '×' : '●'} ${st.name}`;
         const meta = document.createElement('span');
         meta.className = 'muted-text';
-        meta.textContent = `${st.status || 'Status unavailable'}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
+        meta.textContent = `${st.status}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
         row.append(name, meta);
         card.appendChild(row);
       }
@@ -284,36 +281,19 @@
     return card;
   }
 
-  function readerAction(target, descriptor, steps) {
-    const native = global.RoomViewLayout.isWorkspace(descriptor);
+  function fileReaderAction(target) {
     const previews = target.previews || [];
     const text = previews.find(p => p.status === 'available' && p.body != null);
-    const execution = !native && previews.find(p => p.status === 'available' && p.media_type === 'application/x-josh-run+json');
     const attachments = (target.attachments || []).filter(a => a.embedded !== false);
     const pdf = attachments.find(a => a.media_type === 'application/pdf');
     const image = attachments.find(a => a.media_type?.startsWith('image/'));
-    const reportedRun = !native && (execution || target.nodeKind === 'run');
-    if (reportedRun && (execution || steps.length)) {
-      let detail = target.summary;
-      if (execution) {
-        try {
-          const run = JSON.parse(execution.body);
-          const failed = Array.isArray(run?.steps) && run.steps.find(step =>
-            ['failed', 'fail', 'error', 'timeout', 'timed out'].includes(String(step?.status || '').toLowerCase()));
-          detail = [run?.status && 'Reported ' + run.status, failed?.name && 'First failed step: ' + failed.name,
-            run?.exit_code != null && 'exit ' + run.exit_code].filter(Boolean).join(' · ') || detail;
-        } catch { /* The content view displays the admitted text. */ }
-      }
-      return { label: 'Investigate run', tab: execution ? 'content' : 'timeline', slot: execution?.slot, detail };
-    }
     if (text) {
       const label = text.media_type === 'text/x-diff' ? 'Read diff' : text.media_type === 'application/json'
         ? 'Inspect JSON' : text.slot === 'log' || text.language === 'log' ? 'Read log' : 'Read file';
       return { label, tab: 'content', slot: text.slot };
     }
     if (pdf || image) return { label: pdf ? 'Read PDF' : 'View image', tab: 'evidence' };
-    if (attachments.length) return { label: 'Inspect evidence', tab: 'evidence' };
-    if (!native && steps.length) return { label: 'View timeline', tab: 'timeline' };
+    if (attachments.length) return { label: 'Open file', tab: 'evidence' };
     return { label: 'File details', tab: 'details', detail: target.attachments?.length ? 'Attachment bytes omitted from this observation' : previews.find(p => p.reason)?.reason || 'No preview available' };
   }
 
@@ -336,7 +316,6 @@
         document.getElementById('btn-compare-tab'));
       this.fileSummary = document.getElementById('file-summary');
       this.summaryInfo = document.getElementById('file-summary-info');
-      this.runRelated = document.getElementById('run-related');
       this.readButton = document.getElementById('btn-read-file');
       this.compareButton = document.getElementById('btn-compare-file');
       this.readerBack = document.getElementById('btn-reader-back');
@@ -565,7 +544,6 @@
       this.returnFocus = null;
       this.readerOpener = null;
       this.summaryInfo.textContent = '';
-      this.runRelated.replaceChildren();
       this.layout = null;
       this.descriptor = null;
       this.fileSummary.hidden = true;
@@ -596,17 +574,14 @@
       if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
       if (!sameObject) { this.summaryReading = null; this.readingBeforeCompare = null; }
       const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
-      this.reader = ['file', 'artifact', 'run'].includes(target.nodeKind);
       this.descriptor = descriptor;
       this.layout = layout;
       const native = this.data.filesystem || global.RoomViewLayout.isWorkspace(descriptor);
-      const steps = (state.steps || []).filter(s => s.item_id === (target.objectId || target.id));
-      this.drawerEl.classList.toggle('filesystem-reader', this.reader || native);
-      if (this.reader || native) {
-        this.drawerEl.querySelector('[data-tab="content"]').hidden = !(target.previews || []).length;
-        this.drawerEl.querySelector('[data-tab="timeline"]').hidden = native || !steps.length;
-        this.drawerEl.querySelector('[data-tab="evidence"]').hidden = !(target.attachments || []).length;
-      }
+      this.reader = native && ['file', 'artifact'].includes(target.nodeKind);
+      this.drawerEl.classList.toggle('filesystem-reader', Boolean(native));
+      this.drawerEl.querySelector('[data-tab="content"]').hidden = native && !(target.previews || []).length;
+      this.drawerEl.querySelector('[data-tab="timeline"]').hidden = Boolean(native);
+      this.drawerEl.querySelector('[data-tab="evidence"]').hidden = native && !(target.attachments || []).length;
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       const wasDeferred = sameObject && this.openCurrentVersion;
       const unchanged = preserveTab && sameObject && fingerprint === this.contentFingerprint;
@@ -644,22 +619,15 @@
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
-      this.readerBack.textContent = target.nodeKind === 'run' ? 'Back to run' : 'Back to file';
       const summary = this.reader && (reading ? reading.summary : !sameObject || wasSummary);
       this.fileSummary.hidden = !summary;
       this.readerBack.hidden = !this.reader || summary;
       if (this.reader) {
-        const action = readerAction(target, descriptor, steps);
-        this.runRelated.replaceChildren();
-        this.runRelated.hidden = true;
-        if (action.label === 'Investigate run' && (target.links || []).length) {
-          this.runRelated.appendChild(this._buildLinksSection(target, layout, true));
-          this.runRelated.hidden = false;
-        }
+        const action = fileReaderAction(target);
         this.readButton.textContent = action.label;
         this.summaryInfo.textContent = [
           Number.isSafeInteger(target.fields?.file_bytes) ? target.fields.file_bytes + ' bytes' : null,
-          action.detail || (!native && target.summary),
+          action.detail,
         ].filter(Boolean).join(' · ');
         this.compareButton.hidden = this.comparison.tab.hidden;
         if (!sameObject || !preserveTab) {
@@ -729,7 +697,7 @@
       this.showTarget(item, descriptor, state, layout || null, { quantileBin, preserveTab: false });
     }
 
-    _buildLinksSection(target, layout, compact = false) {
+    _buildLinksSection(target, layout) {
       const objId = target.objectId || target.id;
       const outgoing = target.links || [];
       const incoming = (layout && layout.incomingLinksByObjectId && layout.incomingLinksByObjectId.get(objId)) || [];
@@ -740,7 +708,7 @@
 
       const heading = document.createElement('div');
       heading.className = 'links-heading';
-      heading.textContent = compact ? 'Related evidence' : 'Related objects';
+      heading.textContent = 'Object Relationships (Click to Fly)';
       section.appendChild(heading);
 
       const list = document.createElement('div');
@@ -754,8 +722,7 @@
         return { path: targetId, label: targetId };
       };
 
-      const compactLabels = compact ? outgoing.map(link => resolveLabelAndPath(link.target_id).label) : [];
-      for (const lk of (compact ? outgoing.slice(0, 4) : outgoing)) {
+      for (const lk of outgoing) {
         const info = resolveLabelAndPath(lk.target_id);
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -768,11 +735,9 @@
         rel.textContent = `${lk.relation} →`;
         const pathSpan = document.createElement('span');
         pathSpan.className = 'link-target-path';
-        const uniqueLabel = compactLabels.indexOf(info.label) === compactLabels.lastIndexOf(info.label);
-        pathSpan.textContent = compact && uniqueLabel ? info.label : info.path;
-        pathSpan.title = info.path;
+        pathSpan.textContent = info.path;
         btn.append(rel, pathSpan);
-        if (lk.label && !compact) {
+        if (lk.label) {
           const desc = document.createElement('span');
           desc.className = 'link-desc';
           desc.textContent = lk.label;
@@ -784,7 +749,7 @@
         list.appendChild(btn);
       }
 
-      for (const back of (compact ? [] : incoming)) {
+      for (const back of incoming) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'link-chip';
