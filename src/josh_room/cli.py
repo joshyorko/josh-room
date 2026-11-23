@@ -488,7 +488,7 @@ def build_parser() -> argparse.ArgumentParser:
     composition_reconcile = composition_commands.add_parser("reconcile", help="inspect offline evidence; never repair")
     composition_reconcile.add_argument("--evidence-file", type=Path, required=True)
     _json_option(composition_reconcile)
-    for action in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
+    for action in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'parent-children'):
         operation = composition_commands.add_parser(action)
         operation.add_argument('--dimension', required=True)
         operation.add_argument('--namespace', required=True)
@@ -504,13 +504,18 @@ def build_parser() -> argparse.ArgumentParser:
         if action == 'save':
             operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
             operation.add_argument('--ack-local-only', action='store_true')
-        if action in ('restore-parent', 'enter-child'):
+        if action in ('restore-parent', 'enter-child', 'parent-children'):
             operation.add_argument('--parent-snapshot', required=True)
         if action == 'restore-parent':
             operation.add_argument('--destination', type=Path, required=True)
-        if action == 'enter-child':
+        if action in ('enter-child', 'parent-children'):
             operation.add_argument('--workspace', type=Path, required=True)
+        if action == 'enter-child':
             operation.add_argument('--child-path', required=True)
+        if action == 'parent-children':
+            operation.add_argument('--child-path', help='list alternative exact recovery points for this child')
+            operation.add_argument('--offset', type=int, default=0)
+            operation.add_argument('--revision', type=int, help='namespace revision from the child list')
         _json_option(operation)
     for action in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
         operation = composition_commands.add_parser(action)
@@ -525,6 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
         else:
             operation.add_argument('--parent-room', required=True)
             operation.add_argument('--parent-snapshot', required=True)
+            operation.add_argument('--workspace', type=Path, help='verify the entered parent marker and manifest')
             operation.add_argument('--set-child', action='append', required=True, help='relative-path=exact-logical-snapshot')
         if action in ('save-child', 'refresh-parent-pins'):
             operation.add_argument('--approve', required=True)
@@ -1861,10 +1867,11 @@ def dispatch(args, instance: Path) -> dict:
                             raise ValueError('select distinct child-path=exact-pin entries')
                         pins[path] = snapshot
                     return refresh_parent(dimension, args.namespace, args.parent_room, args.parent_snapshot,
-                        args.operation_id, pins, authority, factory, private, approval=getattr(args, 'approve', None))
+                        args.operation_id, pins, authority, factory, private, approval=getattr(args, 'approve', None),
+                            workspace=args.workspace)
             except Exception:  # noqa: BLE001 - bounded credential-free provider failure boundary.
                 raise ValueError('Composition update could not be verified; preserve source and retry the same operation ID') from None
-        if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
+        if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'parent-children'):
             from .composition_lifecycle import (
                 CompositionAdmissionError,
                 capture_plan,
@@ -1913,10 +1920,15 @@ def dispatch(args, instance: Path) -> dict:
                 if preview['local_only_acknowledgement_required'] and not args.ack_local_only:
                     raise ValueError('explicit acknowledgement of unprotected local-only content is required')
             try:
-                with provider_runtime(instance, dimension, material, args.namespace, authority_session=session) as (authority, factory, private):
+                with provider_runtime(instance, dimension, material, args.namespace, authority_session=session,
+                                      authority_only=args.composition_command == 'parent-children') as (authority, factory, private):
                     if args.composition_command == 'save':
                         return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
                                                 args.approve, authority, factory, private)
+                    if args.composition_command == 'parent-children':
+                        from .composition_updates import parent_children
+                        return parent_children(args.workspace, authority, args.namespace, args.parent_room, args.parent_snapshot,
+                                               child_path=args.child_path, offset=args.offset, revision=args.revision)
                     return hydrate_composition(dimension, args.namespace, args.parent_room, args.parent_snapshot,
                                                args.workspace if args.composition_command == 'enter-child' else args.destination,
                                                authority, factory, private, child_path=getattr(args, 'child_path', None))

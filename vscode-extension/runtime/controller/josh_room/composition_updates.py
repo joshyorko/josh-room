@@ -27,6 +27,7 @@ from .composition_git_integrity import verify_staged_git
 from .composition_lifecycle import (
     CONTENT_DIGEST_ALGORITHM,
     INHERITED_POLICY,
+    CompositionAdmissionError,
     _admitted_source,
     _capture,
     _commit,
@@ -37,7 +38,12 @@ from .composition_lifecycle import (
     _slot,
     _verify_descriptor_contract,
 )
-from .composition_safety import CompositionSafetyState, _identifier, plan_digest
+from .composition_safety import (
+    MAX_BYTES,
+    CompositionSafetyState,
+    _identifier,
+    plan_digest,
+)
 from .composition_transaction import (
     canonical,
     manifest_for,
@@ -352,8 +358,83 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
                 'snapshot_id': output, 'capture_mode': mode, 'components': descriptor.to_dict()['components'], 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
 
 
+def _verify_parent_workspace(workspace, authority, room, snapshot, operation):
+    marker = context_status(workspace)
+    if (not marker.get('path_matches') or marker.get('composition_namespace') != authority.namespace
+            or marker.get('dimension_id') != authority.binding['dimension_id']
+            or marker.get('encryption_domain_id') != authority.binding['encryption_domain_id']
+            or marker.get('project_id') != room or marker.get('snapshot_id') != snapshot):
+        raise ValueError('open the restored parent at its exact saved location')
+    fd = _directory(workspace)
+    try:
+        raw = _read_regular(fd, MANIFEST, MAX_BYTES)
+    finally:
+        os.close(fd)
+    if hashlib.sha256(raw).hexdigest() != operation['manifest_sha256']:
+        raise ValueError('local parent manifest differs from its saved recovery point')
+
+
+def parent_children(workspace, authority, namespace, room, snapshot, *, child_path=None, offset=0, revision=None):
+    """Read immutable choices for the exact entered parent from its namespace ledger."""
+    _, _, state = _open(authority, namespace)
+    body = state.to_dict()
+    if ((revision is not None and revision != body['revision'])
+            or (offset or child_path is not None) and revision is None):
+        raise CompositionAdmissionError('composition-picker-stale', 'Catalog choices changed; reopen the picker')
+    committed = [op for op in body['operations'].values() if op['phase'] == 'committed']
+    parent = next((op for op in committed if (op['parent_pin']['room_id'],
+                   op['parent_pin']['logical_jat_id']) == (room, snapshot)), None)
+    if parent is None:
+        raise ValueError('parent recovery point is unavailable')
+    _verify_parent_workspace(workspace, authority, room, snapshot, parent)
+    history = {}
+    for op in committed:
+        for pin in op['child_pins'].values():
+            history.setdefault(pin['room_id'], set()).add(pin['logical_jat_id'])
+    for update in body.get('child_updates', {}).values():
+        if update['phase'] == 'committed':
+            pin = update['pin']
+            history.setdefault(pin['room_id'], set()).add(pin['logical_jat_id'])
+    projects = body['dimension_catalog']['projects']
+    result = {'ok': True, 'namespace': namespace, 'parent_room_id': room, 'parent_snapshot_id': snapshot,
+              'revision': body['revision'], 'current_parent': projects[room]['latest'] == snapshot}
+    if child_path is None:
+        rows = [{'path': path, 'room_id': pin['room_id'], 'snapshot_id': pin['logical_jat_id'],
+                 'other_point_count': len(history[pin['room_id']]) - 1}
+                for path, pin in sorted(parent['child_pins'].items())]
+        key = 'children'
+    else:
+        pin = parent['child_pins'].get(child_path)
+        if pin is None:
+            raise ValueError('selected child path is absent from the saved parent')
+        child, current = pin['room_id'], pin['logical_jat_id']
+        records = projects[child]['snapshots']
+        points = sorted(history[child] - {current}, key=lambda point: (records[point]['created_at'], point), reverse=True)
+        rows = [{'snapshot_id': point, 'created_at': records[point]['created_at']} for point in points]
+        result.update(child_path=child_path, child_room_id=child, pinned_snapshot_id=current)
+        key = 'recovery_points'
+    return _picker_page(result, key, rows, offset)
+
+
+def _picker_page(result, key, rows, offset):
+    if type(offset) is not int or offset < 0 or offset >= len(rows) and offset != 0:
+        raise ValueError('invalid Catalog picker offset')
+    # Leave room under the CLI/extension 64 KiB ceiling for the envelope and
+    # escaped Unicode, and under the JSON sanitizer's 128-item array limit.
+    page = []
+    size = 0
+    for row in rows[offset:offset + 64]:
+        row_size = len(json.dumps(row, ensure_ascii=True)) + 2
+        if size + row_size > 48 * 1024:
+            break
+        page.append(row)
+        size += row_size
+    end = offset + len(page)
+    return {**result, key: page, 'next_offset': end if end < len(rows) else None}
+
+
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
-                   authority, store_factory, private, *, approval=None):
+                   authority, store_factory, private, *, approval=None, workspace=None):
     """Publish a new immutable parent from saved bytes and explicitly selected pins."""
     _identifier(operation_id)
     envelope, etag, state = _open(authority, namespace)
@@ -362,6 +443,8 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
         and op['parent_pin']['room_id'] == room and op['parent_pin']['logical_jat_id'] == baseline), None)
     if previous_op is None:
         raise ValueError('parent baseline is not committed')
+    if workspace is not None:
+        _verify_parent_workspace(workspace, authority, room, baseline, previous_op)
     old = body['operations'].get(operation_id)
     output = 'jat-' + _slot(namespace, 'parent-refresh:' + operation_id)
     if old and (old['plan']['expected_parent_logical_jat_id'], old['plan']['parent_logical_jat_id']) != (baseline, output):

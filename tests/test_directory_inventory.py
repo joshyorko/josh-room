@@ -251,3 +251,46 @@ def test_recoverable_lookup_does_not_close_session(tmp_path):
     assert records[-2]['ok'] is False and records[-2]['recoverable'] is True
     assert records[-1]['selected'] == 'safe'
     assert records[-1]['id'].isdigit()
+
+
+
+def test_inventory_protocol_page_limit_preserves_all_candidates(tmp_path):
+    import io
+
+    from josh_room.directory_inventory import serve
+
+    names = [f"repo-{i:02}" for i in range(59)]
+    for name in names:
+        (tmp_path / name).mkdir()
+    records = []
+
+    def frames():
+        while not records or records[-1]["status"] != "complete":
+            yield {"action": "advance"}
+        yield {"action": "page"}
+        assert len(records[-1]["candidates"]) == 50
+        for invalid in (0, 51, True, "32"):
+            yield {"action": "page", "limit": invalid}
+            assert records[-1]["recoverable"]
+        yield {"action": "page", "limit": 32}
+        first = records[-1]
+        assert len(first["candidates"]) == 32
+        yield {"action": "page", "limit": 32, "after": first["next"]}
+        last = records[-1]
+        assert last["next"] is None
+        assert [r["path"] for r in first["candidates"] + last["candidates"]] == names
+        yield {"action": "close"}
+
+    class Input:
+        def __init__(self):
+            self.frames = frames()
+
+        def readline(self, _limit):
+            return json.dumps(next(self.frames)) + "\n"
+
+    class Output(io.StringIO):
+        def write(self, response):
+            records.append(json.loads(response))
+            return super().write(response)
+
+    serve(tmp_path, Input(), Output())

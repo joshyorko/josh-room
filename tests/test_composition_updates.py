@@ -131,3 +131,67 @@ def test_full_repository_child_update_stages_git_only_changes(tmp_path, monkeypa
     assert first['capture_mode'] == second['capture_mode'] == 'full-repository'
     assert first['content_sha256'] != second['content_sha256']
     assert (original / '.git/HEAD').read_bytes() != (current / '.git/HEAD').read_bytes()
+
+
+def test_parent_children_reads_only_exact_parent_and_committed_points(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from josh_room import composition_updates as updates
+    from josh_room.composition import MANIFEST
+    from josh_room.composition_transaction import canonical, manifest_for
+
+    state = stages()[-1]
+    body = state.to_dict()
+    namespace = '1' * 32
+    authority = SimpleNamespace(namespace=namespace, binding=body['scope'], read=lambda: ({'state': body}, 'etag'))
+    marker = {'path_matches': True, 'composition_namespace': namespace, 'project_id': 'parent',
+              'snapshot_id': 'jat-parent', 'dimension_id': body['scope']['dimension_id'],
+              'encryption_domain_id': body['scope']['encryption_domain_id']}
+    monkeypatch.setattr(updates, 'context_status', lambda _: marker)
+    parent = body['operations']['operation']
+    manifest = tmp_path / MANIFEST
+    manifest.write_bytes(canonical(manifest_for(state, 'operation', parent['plan_sha256'])))
+    result = updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')
+    assert result['current_parent'] and result['parent_snapshot_id'] == 'jat-parent'
+    assert result['children'] == [{'path': 'projects/-child folder', 'room_id': 'child', 'snapshot_id': 'jat-child',
+                                   'other_point_count': 0}]
+    history = updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent',
+                                      revision=result['revision'], child_path='projects/-child folder')
+    assert history['recovery_points'] == [] and history['next_offset'] is None
+    with pytest.raises(ValueError, match='choices changed'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent', revision=result['revision'] - 1)
+    with pytest.raises(ValueError, match='unavailable'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'latest')
+    marker['path_matches'] = False
+    with pytest.raises(ValueError, match='exact saved location'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')
+    marker['path_matches'] = True
+    manifest.write_text('{}')
+    with pytest.raises(ValueError, match='manifest differs'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')
+
+
+@pytest.mark.parametrize("inventory", ["32-long-child-paths", "129-versions"])
+def test_picker_pages_round_trip_every_row_through_cli_json(inventory):
+    from josh_room.cli import _bounded_json_result
+    from josh_room.composition_updates import _picker_page
+
+    if inventory == "32-long-child-paths":
+        # Each component fits a native 255-byte filename. The escaped JSON
+        # encoding of all 32 paths together exceeds a single controller reply.
+        prefix = "/".join(["🦕" * 59] * 8)
+        rows = [{'path': f"{prefix}/{i}", 'room_id': f"child-{i}", 'snapshot_id': f"jat-{i}", 'other_point_count': 1}
+                for i in range(32)]
+        key = "children"
+    else:
+        rows = [{'snapshot_id': f"jat-{i}", 'created_at': "2026-11-18T12:00:00Z"} for i in range(129)]
+        key = "recovery_points"
+    offset, received, pages = 0, [], 0
+    while offset is not None:
+        page = _picker_page({'ok': True, 'revision': 42}, key, rows, offset)
+        wire = _bounded_json_result(page)
+        assert len(json.dumps(wire).encode()) < 65536 and wire == page
+        received.extend(wire[key])
+        pages += 1
+        offset = wire['next_offset']
+    assert pages > 1 and received == rows

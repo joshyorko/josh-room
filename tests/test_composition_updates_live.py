@@ -101,14 +101,14 @@ def test_changed_child_save_and_explicit_refresh_keep_old_parent_exact(runtime, 
     r = runtime
     parent, target, child = entered(r)
     @contextmanager
-    def provider(*_args):
+    def provider(*_args, **_kwargs):
         yield r.authority, r.factory, r.private
     monkeypatch.setattr(composition_lifecycle, 'provider_runtime', provider)
     monkeypatch.setattr(cli, '_effective_dimension', lambda _: r.dimension)
     def invoke(command, approval=None, pin=None):
         args = ['composition', command, '--dimension', 'dimension', '--namespace', NAMESPACE,
                 '--operation-id', 'refresh' if pin else 'update']
-        args += ['--parent-room', 'parent', '--parent-snapshot', parent, '--set-child', 'a=' + pin] if pin else [
+        args += ['--parent-room', 'parent', '--parent-snapshot', parent, '--workspace', str(target), '--set-child', 'a=' + pin] if pin else [
             '--room', child['room_id'], '--child-snapshot', child['snapshot_id'], '--workspace', str(target / 'a')]
         if approval:
             args += ['--approve', approval]
@@ -141,10 +141,23 @@ def test_changed_child_save_and_explicit_refresh_keep_old_parent_exact(runtime, 
     assert not same['changed']
     assert refresh(r, parent, {'a': child['snapshot_id']}, operation='same-pins', approval=same['approval_sha256'])['status'] == 'unchanged'
     assert r.transport.writes == writes
+    def choices(*extra):
+        parsed = cli.build_parser().parse_args(['composition', 'parent-children', '--workspace', str(target),
+            '--parent-room', 'parent', '--parent-snapshot', parent, '--namespace', NAMESPACE, '--dimension', 'dimension', *extra])
+        return cli.dispatch(parsed, r.tmp / 'instance')
+    available = choices()
+    assert available['current_parent']
+    row = next(row for row in available['children'] if row['path'] == 'a')
+    assert row['snapshot_id'] == child['snapshot_id']
+    assert row['other_point_count'] == 1
+    history_page = choices('--child-path', 'a', '--revision', str(available['revision']))
+    assert [point['snapshot_id'] for point in history_page['recovery_points']] == [saved['snapshot_id']]
+    assert r.transport.writes == writes
     plan = invoke('plan-parent-refresh', pin=saved['snapshot_id'])
     latest = invoke('refresh-parent-pins', pin=saved['snapshot_id'], approval=plan['approval_sha256'])
     assert latest['snapshot_id'] != parent and not latest['workspace_modified']
     assert context_status(target)['snapshot_id'] == parent
+    assert not choices()['current_parent']
     for selected, expected, name in ((parent, 'child a original\n', 'old'), (latest['snapshot_id'], 'new independent child bytes\n', 'new')):
         root = r.tmp / name
         hydrate_composition(r.dimension, NAMESPACE, 'parent', selected, root, r.authority, r.factory, r.private)

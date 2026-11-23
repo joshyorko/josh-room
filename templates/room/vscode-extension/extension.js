@@ -2250,7 +2250,20 @@ async function saveCatalogRoom() {
       ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : []),
       ...(row.component_options ? ["--child-components", row.path, JSON.stringify(row.component_options)] : [])])];
   return require("./catalog-actions").saveCatalog(vscode, {
-    chooseComponents: chooseCatalogComponents,
+    selectChildren: async root => {
+      let paths;
+      await executeJoshRoom(["composition", "inventory", "--workspace", root], root, undefined, undefined, undefined, {
+        inventoryHandler: async request => { paths = await require("./catalog-selection").selectCatalogChildren(vscode, request); },
+      });
+      return paths;
+    },
+    chooseComponents: async sources => {
+      const selected = await require("./component-picker").pickComponents(vscode, sources[0],
+        { request: { components: { rcc_environment: "omit", homebrew_recovery: "omit", hauler_content: "omit" } } },
+        () => runJoshRoom(["snapshot", "homebrew-capabilities"], sources[0]), undefined, undefined, sources);
+      if (!selected) return undefined;
+      return Object.values(selected.request.components).every(mode => mode === "omit") ? null : selected.componentOptions;
+    },
     dimensions: async (root) => dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true })),
     plan: async (selection) => {
       const { root, dimension } = selection;
@@ -2263,19 +2276,28 @@ async function saveCatalogRoom() {
   });
 }
 
+function listCatalogChildren(root, dimension, marker, { childPath, offset, revision }) {
+  return runSelectedEncryption(["composition", "parent-children", "--workspace", root,
+    "--dimension", marker.dimension_id, "--namespace", marker.composition_namespace,
+    "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id,
+    ...(childPath ? ["--child-path", childPath] : []), ...(offset ? ["--offset", String(offset)] : []),
+    ...(revision === undefined ? [] : ["--revision", String(revision)])], root,
+  dimension, { title: "Reading saved child Rooms…", action: "read the entered Catalog parent" });
+}
+
 async function enterChildRoom() {
   assertWorkspaceTrusted("enter a child Room");
   const root = activeWorkspace();
+  const marker = currentRoom(root);
+  if (!marker?.composition_namespace) throw new Error("Open a restored Catalog parent first.");
+  const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
+  const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
+  if (!dimension) throw new Error("The parent Dimension is not configured.");
   return require("./catalog-actions").enterChild(vscode, {
-    root, marker: currentRoom(root),
-    enter: async ({ namespace, child, marker }) => {
-      const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
-      const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
-      if (!dimension) throw new Error("The parent Dimension is not configured.");
-      return runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
-        "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
-      dimension, { title: "Entering pinned child Room…", action: "enter a child Room" });
-    },
+    root, marker, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
+    enter: ({ namespace, child }) => runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
+      "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
+    dimension, { title: "Entering pinned child Room…", action: "enter a child Room" }),
     open: (target) => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(target), false),
   });
 }
@@ -2301,12 +2323,12 @@ async function updateCompositionRoom(kind) {
     const command = kind === "child" ? (apply ? "save-child" : "plan-child-save") : (apply ? "refresh-parent-pins" : "plan-parent-refresh");
     const args = ["composition", command, "--dimension", marker.dimension_id, "--namespace", ticket.namespace, "--operation-id", ticket.operationId,
       ...(kind === "child" ? ["--room", ticket.room, "--child-snapshot", ticket.baseline, "--workspace", root]
-        : ["--parent-room", ticket.room, "--parent-snapshot", ticket.baseline, "--set-child", `${ticket.child}=${ticket.pin}`]),
+        : ["--workspace", root, "--parent-room", ticket.room, "--parent-snapshot", ticket.baseline, "--set-child", `${ticket.child}=${ticket.pin}`]),
       ...(ticket.component_options ? ["--component-options", JSON.stringify(ticket.component_options)] : []),
       ...(apply ? ["--approve", ticket.approval] : [])];
     return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
   };
-  return require("./catalog-actions").updateRoom(vscode, { marker, kind,
+  return require("./catalog-actions").updateRoom(vscode, { marker, kind, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     chooseComponents: () => chooseCatalogComponents(root, marker.project_id, true), pending: extensionContext.workspaceState.get(key),
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
 }

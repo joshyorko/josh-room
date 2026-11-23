@@ -1,0 +1,74 @@
+{
+  "platform": "Linux x64",
+  "source_sha": "c2dc4c66f0578afd420420fd88ffdc5e0ddc05fa",
+  "vsix_sha256": "0ee575863fe5db4fc3fd1e6f843e66c791381cfa75f5659d8744d00c4f85cbbf",
+  "installed_files_verified": 161,
+  "editor": "VS Code 1.147.0",
+  "fixture": "disposable enrolled loopback MinIO and private native Secret Service",
+  "runtime": "packaged controller with an existing Python interpreter",
+  "registered_creation": [
+    {
+      "command": "joshRoom.saveCatalog",
+      "empty_encryption_cache_verified": true,
+      "uncached_dimension": true,
+      "verified_plan_and_restored_descriptor_domains": true,
+      "manual_domain_input": false,
+      "runtime": "packaged-controller-existing-Python",
+      "file_chooser": "synthetic paths",
+      "bulk_selection_count": 2,
+      "sibling_capture_mode": "full-repository",
+      "select_all_then_clear_then_select_all": true,
+      "receipt_ids_hidden_in_review": true,
+      "visible_full_repository_approval": true,
+      "provider": "loopback-minio",
+      "parent_pin": "jat-7ed1155aa708533ebe4eb38476309aeb",
+      "child_pin": "jat-03eb736d3f615429a953001a5b0ed679",
+      "git_verified": true,
+      "sibling_absent": true,
+      "selected_components": []
+    },
+    {
+      "command": "joshRoom.new",
+      "empty_encryption_cache_verified": true,
+      "uncached_dimension": true,
+      "verified_plan_and_restored_descriptor_domains": true,
+      "manual_domain_input": false,
+      "runtime": "packaged-controller-existing-Python",
+      "file_chooser": "synthetic paths",
+      "bulk_selection_count": 2,
+      "sibling_capture_mode": "source-only",
+      "select_all_then_clear_then_select_all": true,
+      "receipt_ids_hidden_in_review": true,
+      "visible_full_repository_approval": true,
+      "provider": "loopback-minio",
+      "parent_pin": "jat-3625593e70e05a98bfe6bd91747bafc0",
+      "child_pin": "jat-4342bce0917b5835832bda02fd21edd4",
+      "git_verified": true,
+      "sibling_absent": true,
+      "selected_components": []
+    }
+  ],
+  "cancel": {
+    "command": "joshRoom.saveCatalog",
+    "save_calls": 0,
+    "namespace_absent": true
+  },
+  "refresh": {
+    "command": "joshRoom.refreshCatalogPins",
+    "namespace": "c88fa44b51e94d2691a219183f852ad2",
+    "child_path": "projects/a",
+    "baseline_child": "jat-0183ee34d80f550ca4e46ce75af684da",
+    "updated_child": "jat-3ffb03b85a1d5718bb70790780eac964",
+    "baseline_parent": "jat-81c5a3775c2252b6950af6e4338aafa1",
+    "refreshed_parent": "jat-bccc49780ae4505680f2f53f7e67ad3b"
+  },
+  "enter": {
+    "command": "joshRoom.enterChild",
+    "child_path": "projects/a",
+    "pin": "jat-3ffb03b85a1d5718bb70790780eac964",
+    "opened_child": true,
+    "sibling_absent": true
+  },
+  "child_and_pin_selection": "Arrow/Home/Enter select authenticated rows; no IDs entered",
+  "retained_harness_failure": "First refresh observer inspected the picker before rows loaded. Reused committed child update on retry after checking visible choices."
+}

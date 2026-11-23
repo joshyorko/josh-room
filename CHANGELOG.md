@@ -15,6 +15,8 @@
 
 ## [Unreleased]
 
+- Select Catalog children in bulk and browse authenticated child recovery points from an entered parent.
+
 - Resolve the selected Catalog Dimension’s existing encryption domain during planning and verify it again before Save.
 
 - Preserve self-contained Git history in Catalog children across initial capture, child Save and exact-pin entry. Show the effective Git capture mode before approval.

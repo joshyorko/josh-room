@@ -361,7 +361,11 @@ def serve(root, input_stream, output_stream):
                 if action in ('advance', 'cancel'):
                     result = inventory.advance(cancelled=action == 'cancel')
                 elif action == 'page':
-                    result = inventory.page(after=request.get('after', ''), query=request.get('query', ''), suggested=request.get('suggested', False))
+                    limit = request.get('limit', 50)
+                    if type(limit) is not int or not 1 <= limit <= 50:
+                        raise ValueError('inventory page limit must be between 1 and 50')
+                    result = inventory.page(after=request.get('after', ''), query=request.get('query', ''),
+                                            suggested=request.get('suggested', False), limit=limit)
                 elif action == 'lookup':
                     result = inventory.lookup(request.get('path'), request.get('id'))
                 else:

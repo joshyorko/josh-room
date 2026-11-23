@@ -8237,8 +8237,19 @@ for (const [command, provider, readiness, expected] of [
   const dimension = { id: "fixture", display_name: "Example", provider, connection_id: "storage" };
   if (readiness === "domain-mismatch") dimension.encryption_domain_id = "00000000-0000-4000-8000-000000000002";
   const operations = [];
-  const harness = createSpawnHarness(({ args, options }) => {
+  const harness = createSpawnHarness(({ args, options, child }) => {
     const result = body => ({ stdout: JSON.stringify({ ok: true, ...body }) });
+    if (args[1] === "inventory") {
+      const candidate = { id: "first", path: "a", selectable: true, kind: "git-directory-unverified", evidence_code: "git-boundary" };
+      child.stdin.write = line => {
+        const action = JSON.parse(line).action;
+        const value = { ok: true, status: "complete", directories_indexed: 1,
+          ...(action === "lookup" ? { id: candidate.id, selected: candidate.path } : { candidates: [candidate] }) };
+        setImmediate(() => child.stdout.emit("data", Buffer.from(JSON.stringify(value) + "\n")));
+      };
+      child.stdin.end = () => setImmediate(() => child.closeWith(result({})));
+      return { autoClose: false };
+    }
     if (args[0] === "dimensions") {
       assert.deepEqual(args, ["dimensions", "list", "--json"]);
       return result({ dimensions: [dimension] });
@@ -8272,9 +8283,9 @@ for (const [command, provider, readiness, expected] of [
       ? JSON.stringify({ identity: "synthetic-identity" }) : undefined } });
   vscode.window.showInputBox = () => assert.fail("manual UUID requested");
   if (command === "joshRoom.new") fixture.quickPickResponses.push({ id: "catalog" });
-  fixture.quickPickResponses.push({ id: "policy" }, { id: "default" }, { id: "metadata" }, { dimension });
+  fixture.quickPickResponses.push({ action: "all" }, { action: "continue" }, { id: "continue" }, { dimension });
   fixture.openDialogResponses.push([{ fsPath: root }], [{ fsPath: path.join(root, "a") }]);
-  if (expected === "saved") fixture.warningResponses.push("Save and acknowledge local-only content");
+  if (expected === "saved") fixture.warningResponses.push("Save catalog");
   const response = await fixture.commandCallbacks.get(command)();
   assert.equal(response?.status || response, expected, JSON.stringify(fixture.errorCalls));
   assert.deepEqual(operations, expected === "saved" ? ["capture-plan", "save"] : []);

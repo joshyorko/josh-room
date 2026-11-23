@@ -340,7 +340,7 @@ def resolve_capture_destination(dimension, selected_material, *, expected_domain
 
 
 @contextmanager
-def provider_runtime(instance, dimension, material, namespace, *, authority_session=None):
+def provider_runtime(instance, dimension, material, namespace, *, authority_session=None, authority_only=False):
     from .room_store_bridge import (
         _create_backend,
         _private_operation_directory,
@@ -369,6 +369,9 @@ def provider_runtime(instance, dimension, material, namespace, *, authority_sess
             material,
             private,
         )
+        if authority_only:
+            yield authority, None, private
+            return
         password = private / "password"
         cache = private / "cache"
         cache.mkdir(mode=0o700)
@@ -1187,6 +1190,7 @@ def hydrate_composition(
             original = context_status(root)
             if (
                 not original["ok"]
+                or original.get("composition_namespace") != namespace
                 or original.get("project_id") != room
                 or original.get("snapshot_id") != snapshot
                 or original.get("dimension_id") != dimension.dimension_id
