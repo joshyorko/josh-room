@@ -386,10 +386,13 @@ test("leader close kills descendants before receipt IO and disposal awaits recei
   const session = await launchRoomView({ ...h, cwd: "/workspace" });
   const receipt = h.calls.find(call => call.receipt).receipt;
   const original = promises.open;
+  const originalRemove = promises.rm;
+  let removalStarted = false;
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   promises.open = async (...args) => { if (args[0] === receipt) await gate; return original(...args); };
-  t.after(() => { promises.open = original; release(); });
+  promises.rm = (...args) => { if (args[0] === require("node:path").dirname(receipt)) removalStarted = true; return originalRemove(...args); };
+  t.after(() => { promises.open = original; promises.rm = originalRemove; release(); });
   h.child.closed = true;
   h.child.emit("close", 0);
   assert.equal(h.child.lastSignal, "SIGKILL");
@@ -397,6 +400,7 @@ test("leader close kills descendants before receipt IO and disposal awaits recei
   const disposal = session.dispose().then(() => { finished = true; });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(finished, false);
+  assert.equal(removalStarted, false, "Receipt directory removal must wait for validation");
   assert.equal(fs.existsSync(require("node:path").dirname(receipt)), true);
   release();
   await disposal;
