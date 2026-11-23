@@ -131,7 +131,7 @@
     }
 
     async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
-      refresh = false, instant = false, moveCamera = true } = {}) {
+      refresh = false, instant = false, moveCamera = true, reading = null, reconcile = true } = {}) {
       this.fsRequest?.abort();
       this.fsResume = null;
       const previousPage = this.fsPage;
@@ -197,8 +197,12 @@
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
         if (target && ((!refresh && (!cursor || wasReading) && (file || id !== 'root')) || (refresh && wasReading))) {
+          const restoring = reading && target.objectId === reading.id;
+          const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
+          if (request.signal.aborted) return;
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
             quantileBin: block?.quantileBin, preserveTab: previousId === selectedId,
+            reading: unchanged ? reading : null, deferContent: restoring && !unchanged,
           });
         } else if (!refresh) this.evidence.hide();
       } catch (error) {
@@ -208,6 +212,7 @@
           this.fsResume = () => this._openFilesystem(id, { pushHistory, cursor, kind, refresh, instant, moveCamera });
           return;
         }
+        const position = this.evidence.captureReadingPosition?.();
         this.filesystemSearch?.invalidate();
         this.evidence.hide();
         this.scene3d?.clearSpotlight();
@@ -219,9 +224,9 @@
         this.data.applyFilesystemNodes([this._placeholderRoot()], null);
         this.currentNodeId = 'root';
         this._syncFromData();
-        if ((error.status === 409 || error.status === 404) && previousChain.length) {
+        if (reconcile && (error.status === 409 || error.status === 404) && previousChain.length) {
           try {
-            await this._restoreFilesystem(previousChain, request.signal, wasReading);
+            await this._restoreFilesystem(previousChain, request.signal, wasReading, position);
           } catch (_) {
             if (!request.signal.aborted) {
               this.fsRetry = true;
@@ -237,7 +242,7 @@
       }
     }
 
-    async _restoreFilesystem(chain, signal, wasReading) {
+    async _restoreFilesystem(chain, signal, wasReading, reading) {
       let index = 1;
       let directory = 'root';
       let generation;
@@ -265,7 +270,7 @@
               this.fsPage = page;
               this.fsRetry = false;
               await this._openFilesystem(next?.id || directory, {
-                kind: next?.node_kind || 'directory', pushHistory: false, instant: true,
+                kind: next?.node_kind || 'directory', pushHistory: false, instant: true, reading, reconcile: false,
               });
               if (!wasReading) this.evidence.hide();
               return;

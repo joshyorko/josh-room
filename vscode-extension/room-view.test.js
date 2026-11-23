@@ -363,7 +363,9 @@ test("real Python starts outside a Room containing shadowing modules and stops w
   const url = new URL(fs.readFileSync(urlFile, "utf8"));
   const http = require("node:http");
   const state = await new Promise((resolve, reject) => {
-    http.get(new URL('/state.json' + url.search, url), response => {
+    const listing = new URL('/fs/list' + url.search, url);
+    listing.searchParams.set('id', 'root');
+    http.get(listing, response => {
       let body=''; response.on('data', chunk=>body+=chunk); response.on('end',()=>resolve({status:response.statusCode,body}));
     }).on('error', reject);
   });

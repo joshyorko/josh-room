@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;ea571925c7e3bd8e29c6bb04c8d96925d12646df943aaed0c7aa74d7d4e48001&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;f52855458ef85a72e8ae1966d5dd343060b31fae52e84c45cfbaa1f264be091e&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -19408,6 +19408,30 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.tabTimelineEl.hidden = tabName !== 'timeline';
     }
 
+    captureReadingPosition() {
+      if (!this.isOpen() || !this.currentItem) return null;
+      const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
+      const page = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot')).find(
+        slot => slot.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top);
+      return {
+        id: this.currentObjectId, tab: this.activeTab, slot: this.activePreviewSlot,
+        digest: this._contentDigest(this.currentItem),
+        attachment: this.tabEvidenceEl.querySelector('.att-pill.active')?.getAttribute('data-attachment-name'),
+        page: Number(page?.dataset.pageNum) || 1, fit: this._pdfFitMode, scale: this._pdfScale,
+        top: this.tabContentEl.scrollTop, detailsTop: this.tabDetailsEl.scrollTop,
+      };
+    }
+
+    async _contentDigest(target) {
+      const bytes = new TextEncoder().encode(JSON.stringify([target.previews || [], target.attachments || []]));
+      const hash = await crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(hash)).join(',');
+    }
+
+    async readingUnchanged(target, position) {
+      return target.objectId === position.id && await position.digest === await this._contentDigest(target);
+    }
+
     hide() {
       this._attRequestSeq++;
       this._teardownPdf();
@@ -19428,7 +19452,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       return !this.drawerEl.hidden;
     }
 
-    showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false } = {}) {
+    showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
       const sameObject = this.currentObjectId === (target.objectId || target.id);
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {
@@ -19466,7 +19490,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
-      if (changed) {
+      if (changed || deferContent) {
         this.tabContentEl.textContent = '';
         this.tabEvidenceEl.textContent = '';
         const reopen = document.createElement('button');
@@ -19479,12 +19503,17 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.switchTab('content');
         return;
       }
+      if (reading) this.activePreviewSlot = reading.slot;
       this._renderContent(target, descriptor, layout);
       this._renderDetails(target, descriptor, layout, quantileBin);
       this._renderTimeline(target, state);
-      this._renderEvidence(target);
+      this._renderEvidence(target, reading);
 
-      if (preserveTab) {
+      if (reading) {
+        this.switchTab(reading.tab);
+        this.tabContentEl.scrollTop = reading.top;
+        this.tabDetailsEl.scrollTop = reading.detailsTop;
+      } else if (preserveTab) {
         this.switchTab(this.activeTab);
       } else if (previews.length > 0) {
         this.switchTab('content');
@@ -19771,7 +19800,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.tabTimelineEl.appendChild(ul);
     }
 
-    _renderEvidence(target) {
+    _renderEvidence(target, reading) {
       this.tabEvidenceEl.textContent = '';
       const objId = target.objectId || target.id;
       const atts = target.attachments || [];
@@ -19794,7 +19823,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const images = sortedAtts.filter((a) => a.media_type.startsWith('image/'));
       const buttons = [];
 
-      const selectAtt = (att, btn) => {
+      const initial = sortedAtts.find(att => att.name === reading?.attachment) || sortedAtts[0];
+      const selectAtt = (att, btn, position) => {
         buttons.forEach((b) => b.classList.remove('active'));
         if (btn) btn.classList.add('active');
         this._attRequestSeq += 1;
@@ -19802,7 +19832,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this._teardownPdf();
         stageEl.textContent = '';
         if (att.media_type === 'application/pdf') {
-          this._openPdf(objId, att, stageEl, reqSeq);
+          this._openPdf(objId, att, stageEl, reqSeq, position);
         } else if (att.media_type.startsWith('image/')) {
           this._openImages(objId, images.length >= 2 ? images : [att], stageEl, reqSeq);
         } else if (att.media_type === 'text/html') {
@@ -19816,7 +19846,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         }
       };
 
-      sortedAtts.forEach((att, idx) => {
+      sortedAtts.forEach((att) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'att-pill';
@@ -19825,7 +19855,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         btn.addEventListener('click', () => selectAtt(att, btn));
         buttons.push(btn);
         listEl.appendChild(btn);
-        if (idx === 0) selectAtt(att, btn);
+        if (att === initial) selectAtt(att, btn, reading);
       });
     }
 
@@ -19854,7 +19884,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
     }
 
-    async _openPdf(itemId, att, container, reqSeq) {
+    async _openPdf(itemId, att, container, reqSeq, reading) {
       const startMs = performance.now();
       const status = document.createElement('div');
       status.className = 'muted-text';
@@ -19886,8 +19916,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           return;
         }
         this._pdfDoc = pdfDoc;
-        this._pdfFitMode = 'width';
-        this._pdfScale = 1.0;
+        this._pdfFitMode = reading?.fit || 'width';
+        this._pdfScale = reading?.scale || 1;
 
         container.textContent = '';
 
@@ -20005,7 +20035,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           { root: viewportEl, rootMargin: '120px 0px' }
         );
         slots.forEach((s) => this._pdfObserver.observe(s));
-        await renderPageIntoSlot(slots[0]);
+        const landing = slots[(reading?.page || 1) - 1] || slots[0];
+        await renderPageIntoSlot(landing);
+        if (reqSeq !== this._attRequestSeq) return;
+        if (reading) viewportEl.scrollTop = landing.offsetTop - slots[0].offsetTop;
 
         btnFitW.addEventListener('click', () => { this._pdfFitMode = 'width'; this._pdfScale = 1.0; rerenderVisible(); });
         btnFitP.addEventListener('click', () => { this._pdfFitMode = 'page'; this._pdfScale = 1.0; rerenderVisible(); });
@@ -20558,7 +20591,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
-      refresh = false, instant = false, moveCamera = true } = {}) {
+      refresh = false, instant = false, moveCamera = true, reading = null, reconcile = true } = {}) {
       this.fsRequest?.abort();
       this.fsResume = null;
       const previousPage = this.fsPage;
@@ -20624,8 +20657,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
         if (target && ((!refresh && (!cursor || wasReading) && (file || id !== 'root')) || (refresh && wasReading))) {
+          const restoring = reading && target.objectId === reading.id;
+          const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
+          if (request.signal.aborted) return;
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
             quantileBin: block?.quantileBin, preserveTab: previousId === selectedId,
+            reading: unchanged ? reading : null, deferContent: restoring && !unchanged,
           });
         } else if (!refresh) this.evidence.hide();
       } catch (error) {
@@ -20635,6 +20672,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.fsResume = () => this._openFilesystem(id, { pushHistory, cursor, kind, refresh, instant, moveCamera });
           return;
         }
+        const position = this.evidence.captureReadingPosition?.();
         this.filesystemSearch?.invalidate();
         this.evidence.hide();
         this.scene3d?.clearSpotlight();
@@ -20646,9 +20684,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.data.applyFilesystemNodes([this._placeholderRoot()], null);
         this.currentNodeId = 'root';
         this._syncFromData();
-        if ((error.status === 409 || error.status === 404) && previousChain.length) {
+        if (reconcile && (error.status === 409 || error.status === 404) && previousChain.length) {
           try {
-            await this._restoreFilesystem(previousChain, request.signal, wasReading);
+            await this._restoreFilesystem(previousChain, request.signal, wasReading, position);
           } catch (_) {
             if (!request.signal.aborted) {
               this.fsRetry = true;
@@ -20664,7 +20702,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
     }
 
-    async _restoreFilesystem(chain, signal, wasReading) {
+    async _restoreFilesystem(chain, signal, wasReading, reading) {
       let index = 1;
       let directory = 'root';
       let generation;
@@ -20692,7 +20730,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
               this.fsPage = page;
               this.fsRetry = false;
               await this._openFilesystem(next?.id || directory, {
-                kind: next?.node_kind || 'directory', pushHistory: false, instant: true,
+                kind: next?.node_kind || 'directory', pushHistory: false, instant: true, reading, reconcile: false,
               });
               if (!wasReading) this.evidence.hide();
               return;
