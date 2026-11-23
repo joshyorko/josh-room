@@ -29,7 +29,8 @@ command. It observes the current on-disk workspace without Save, hydration, or
 a new Logical JAT. Unsaved editor buffers are not included. The browser opens
 the actual allocated `127.0.0.1` URL with a per-session token; do not share that
 URL. The existing capture-policy, bounded read, sanitizer and sensitivity gates
-apply. There is no webview or hosted service.
+apply. Workspaces overlapping the managed RCC runtime directory are refused;
+that directory is never exposed as Room content. There is no webview or hosted service.
 
 Use **Josh: Stop Room 3D Viewer** to stop the owned session. Starting another
 viewer asks to stop the existing one. Closing the VS Code window or changing

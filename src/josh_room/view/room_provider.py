@@ -412,13 +412,29 @@ class RoomWorkspaceProvider:
         except OSError as error:
             raise ViewValidationError("workspace-unavailable", "workspace root is unavailable or unsafe") from error
         try:
-            _ = load_capture_policy(self._root, directory_fd=fd if _HAS_DIR_FD else None)
+            _ = self._capture_policy(fd)
+        except ViewValidationError:
+            raise
         except (OSError, ValueError) as error:
             raise ViewValidationError("workspace-policy-invalid", "workspace capture policy could not be loaded") from error
         finally:
             os.close(fd)
 
         self._descriptor = self._build_descriptor()
+
+    def _capture_policy(self, directory_fd: int) -> CapturePolicy:
+        # Managed RCC always sets ROBOCORP_HOME. Descriptor-bound policy cannot
+        # resolve runtime paths; refuse overlap rather than weakening its guards.
+        runtime_value = os.environ.get("ROBOCORP_HOME")
+        if runtime_value:
+            try:
+                runtime = Path(runtime_value).resolve()
+                root = self._root.resolve()
+            except (OSError, RuntimeError) as error:
+                raise ViewValidationError("workspace-policy-invalid", "runtime boundary is unavailable") from error
+            if runtime == root or runtime in root.parents or root in runtime.parents:
+                raise ViewValidationError("workspace-runtime-overlap", "Room View cannot observe the managed runtime directory")
+        return load_capture_policy(self._root, directory_fd=directory_fd if _HAS_DIR_FD else None)
 
     def _build_descriptor(self) -> ViewDescriptor:
         ctx = context_status(self._root)
@@ -762,13 +778,7 @@ class RoomWorkspaceProvider:
             root_dev = root_stat.st_dev
             root_stamp = stamp(root_stat)
             root_mount = _safe_mount_id(root_fd)
-            runtime_value = os.environ.get("ROBOCORP_HOME")
-            runtime = Path(runtime_value) if runtime_value and Path(runtime_value).is_dir() else None
-            policy: CapturePolicy = load_capture_policy(
-                self._root,
-                active_runtime_root=runtime,
-                directory_fd=root_fd if _HAS_DIR_FD else None,
-            )
+            policy = self._capture_policy(root_fd)
             ctx = context_status(self._root)
 
             nodes_list: list[NodeState] = []
@@ -1064,11 +1074,7 @@ class RoomWorkspaceProvider:
             # Post-scan integrity check: verify policy and root directory identity did not drift.
             policy_drifted = False
             try:
-                after_policy = load_capture_policy(
-                    self._root,
-                    active_runtime_root=runtime,
-                    directory_fd=root_fd if _HAS_DIR_FD else None,
-                )
+                after_policy = self._capture_policy(root_fd)
                 after_stamp = stamp(os.fstat(root_fd))
                 if after_policy.sha256 != policy.sha256 or after_stamp != root_stamp:
                     policy_drifted = True
@@ -1268,12 +1274,7 @@ class RoomWorkspaceProvider:
             root_stat = os.fstat(root_fd)
             if (root_stat.st_dev, root_stat.st_ino) != record.root_identity:
                 return None
-            runtime_value = os.environ.get("ROBOCORP_HOME")
-            runtime = Path(runtime_value) if runtime_value and Path(runtime_value).is_dir() else None
-            policy = load_capture_policy(
-                self._root, active_runtime_root=runtime,
-                directory_fd=root_fd if _HAS_DIR_FD else None,
-            )
+            policy = self._capture_policy(root_fd)
             if policy.sha256 != record.policy_sha256 or policy.is_excluded("/".join(record.rel_parts)):
                 return None
             root_dev = root_stat.st_dev

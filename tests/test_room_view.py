@@ -1179,3 +1179,20 @@ def test_saved_capsule_manifest_provider_and_hauler_spike_harness(tmp_path):
     assert fixture_report["checks"]["jat_archive_projection"]["exposes_nested_live_paths"] is False
     assert fixture_report["checks"]["multi_file_projection"]["one_shot_projection_frozen_after_live_edit"] is True
     assert fixture_report["checks"]["security_gate"]["unauthenticated_host_exposure_permitted"] is False
+
+
+def test_room_provider_in_managed_rcc_keeps_descriptor_policy(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "example.txt").write_text("synthetic content\n")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setenv("ROBOCORP_HOME", str(runtime))
+    provider = RoomWorkspaceProvider(workspace)
+    assert "example.txt" in {item.label for item in provider.state().items}
+    from josh_room.view.server import ViewCollector
+    collector = ViewCollector(provider, workspace=workspace)
+    assert collector.current_payload()["state"]["items"]
+    monkeypatch.setenv("ROBOCORP_HOME", str(workspace / "runtime"))
+    with pytest.raises(ViewValidationError, match="managed runtime"):
+        RoomWorkspaceProvider(workspace)

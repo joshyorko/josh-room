@@ -188,10 +188,14 @@ test("startup timeout terminates the child", async () => {
   assert.equal(harness.child.lastSignal, "SIGKILL");
 });
 
-test("real Linux child starts, opens, and is reaped by session disposal", { skip: process.platform !== "linux" }, async () => {
-  const harness = createHarness();
+test("real Linux child starts, opens, and is reaped by session disposal", { skip: process.platform !== "linux" }, async t => {
+  const path = require("node:path");
+  const cwd = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "room-view-real-child-"));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const pidFile = path.join(cwd, "child.pid");
+  const { spawn, kill, ...harness } = createHarness();
   harness.runtime.command = execPath;
-  harness.runtime.args = () => ["-e", `process.stdout.write(${JSON.stringify(`${JSON.stringify({
+  harness.runtime.args = () => ["-e", `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.stdout.write(${JSON.stringify(`${JSON.stringify({
     ok: true,
     command: "view-serve",
     host: "127.0.0.1",
@@ -199,8 +203,12 @@ test("real Linux child starts, opens, and is reaped by session disposal", { skip
     url: "http://127.0.0.1:41873/?token=synthetic-token",
     read_only: true,
   })}\n`)}); setInterval(() => {}, 1000);`];
-  const session = await launchRoomView({ ...harness, cwd: "/workspace", platform: "linux" });
-  assert.equal(session.active, true);
+  const session = await launchRoomView({ ...harness, cwd, platform: "linux" });
+  t.after(() => session.dispose());
+  const pid = Number(fs.readFileSync(pidFile, "utf8"));
+  assert.equal(session.url, "http://127.0.0.1:41873/?token=synthetic-token");
+  process.kill(pid, 0);
   await session.dispose();
   assert.equal(session.active, false);
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 });

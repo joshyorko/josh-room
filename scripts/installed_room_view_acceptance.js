@@ -34,10 +34,19 @@ exports.run = async () => {
           });
           req.on('error', reject); req.end();
         });
-        if ((await request(new URL('/', url))).status !== 403) throw new Error('Unauthenticated read was not denied');
-        if ((await request(url, 'POST')).status !== 405) throw new Error('POST was not denied');
+        const unauthenticated = (await request(new URL('/', url))).status; record({stage:'unauthenticated',status:unauthenticated});
+        if (unauthenticated !== 403) throw new Error('Unauthenticated read was not denied');
+        const post = (await request(url, 'POST')).status; record({stage:'post',status:post});
+        if (post !== 405) throw new Error('POST was not denied');
         const stateUrl = new URL(url); stateUrl.pathname = '/state.json';
-        const state = await request(stateUrl);
+        let state;
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          state = await request(stateUrl);
+          if (state.status !== 200 || state.body.includes('example.txt')) break;
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        const payload = JSON.parse(state.body);
+        record({stage:'state',status:state.status,hasFixture:state.body.includes('example.txt'),items:payload.state?.items?.length,stale:payload.state?.stale?.reason});
         if (state.status !== 200 || !state.body.includes('example.txt')) throw new Error('Selected synthetic workspace state missing');
         record({stage:'provider-and-method-guards',state:200,unauthenticated:403,post:405});
         // Test observes the browser handoff, not visible rendering.
