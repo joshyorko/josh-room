@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;e10dca6ed01ffe003375f037f9b84ed802dbc40d93987c2ab191d6daf5956d1e&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;291a2ea196ef718c858a553318c8d5baa22cfe3699aabb4703ab92f0f562a06f&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -869,6 +869,7 @@ body {
 }
 
 .pdf-viewport {
+  overflow-anchor: none;
   height: 440px;
   overflow: auto;
   border: 1px solid var(--border);
@@ -18348,7 +18349,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     frameOverview({ instant = false } = {}) {
-      this._rememberCamera(this.layout?.nodeById.get(this.selectedNodeId));
+      if (this.pendingCameraTarget !== 'root') this._rememberCamera(this.layout?.nodeById.get(this.selectedNodeId));
       this.cameraMemory.delete('root');
       this.manualCamera = false;
       const fromId = this.focusedPedestalId;
@@ -19100,7 +19101,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const label = node.segmentLabel || node.label;
         return label.toLowerCase().includes(this.searchQuery);
       });
-      const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${coverage}`;
+      const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${this.scope.coverageLabel || coverage}`;
       this.summaryEl.textContent = summary;
       const activeId = this.contentEl.contains(document.activeElement)
         ? document.activeElement.getAttribute('data-item-id') : null;
@@ -19804,7 +19805,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.readButton = document.getElementById('btn-read-file');
       this.compareButton = document.getElementById('btn-compare-file');
       this.readerBack = document.getElementById('btn-reader-back');
-      this.readButton.addEventListener('click', () => this._openReader(this.readTab, this.readButton));
+      this.readButton.addEventListener('click', () => {
+        if (this.openCurrentVersion) this.openCurrentVersion();
+        else this._openReader(this.readTab, this.readButton);
+      });
       this.compareButton.addEventListener('click', () => this._openReader('compare', this.compareButton));
       this.readerBack.addEventListener('click', () => this.dismiss());
       this.lightboxEl = document.getElementById('lightbox-modal');
@@ -19986,6 +19990,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       observer.observe(viewport);
       for (const slot of slots.slice(0, position.page)) observer.observe(slot);
       const events = new AbortController();
+      // Focus restoration can enqueue a browser scroll after layout has settled.
+      viewport.addEventListener('scroll', align, { passive: true, signal: events.signal });
       this.releasePdfPosition = () => {
         observer.disconnect();
         events.abort();
@@ -20017,6 +20023,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(null);
       this.reader = false;
+      this.openCurrentVersion = null;
       this.readingBeforeCompare = null;
       this.summaryReading = null;
       this.prepareAttachment = null;
@@ -20066,18 +20073,17 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.drawerEl.querySelector('[data-tab="evidence"]').hidden = !(target.attachments || []).length;
       }
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
-      if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {
-        this.currentItem = target;
-        if (this.drawerEl.querySelector('.tab-btn[aria-selected="true"][hidden]')) this.switchTab(this.activeTab);
-        this._renderDetails(target, descriptor, layout, quantileBin);
-        return;
+      const wasDeferred = sameObject && this.openCurrentVersion;
+      const unchanged = preserveTab && sameObject && fingerprint === this.contentFingerprint;
+      const changed = preserveTab && sameObject && !unchanged;
+      if (!unchanged || deferContent) {
+        this._attRequestSeq++;
+        this._teardownPdf();
+        this.lightboxEl.hidden = true;
+        this.lightboxImg.removeAttribute('src');
+        this.prepareAttachment = null;
+        this.contentFingerprint = fingerprint;
       }
-      const changed = preserveTab && sameObject && this.contentFingerprint !== fingerprint;
-      this._attRequestSeq++;
-      this._teardownPdf();
-      this.lightboxEl.hidden = true;
-      this.lightboxImg.removeAttribute('src');
-      this.contentFingerprint = fingerprint;
       if (!sameObject) this.activePreviewSlot = null;
       if (!sameObject && !this.drawerEl.contains(document.activeElement)) this.returnFocus = document.activeElement;
       this.currentItem = target;
@@ -20107,7 +20113,6 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const summary = this.reader && (reading ? reading.summary : !sameObject || wasSummary);
       this.fileSummary.hidden = !summary;
       this.readerBack.hidden = !this.reader || summary;
-      this.prepareAttachment = null;
       if (this.reader) {
         const action = readerAction(target, descriptor, steps);
         this.runRelated.replaceChildren();
@@ -20128,18 +20133,29 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         }
       }
 
-      if (changed || deferContent) {
-        this.tabContentEl.textContent = '';
-        this.tabEvidenceEl.textContent = '';
-        const reopen = document.createElement('button');
-        reopen.type = 'button';
-        reopen.textContent = 'Content changed. Open current version';
-        reopen.addEventListener('click', () => this.showTarget(this.currentItem, descriptor, state, layout, { quantileBin }));
-        this.drawerEl.querySelector('[data-tab="content"]').hidden = false;
-        this.tabContentEl.append(reopen);
+      const deferred = changed || deferContent || wasDeferred;
+      this.openCurrentVersion = null;
+      if (deferred && this.reader) {
+        for (const panel of [this.tabContentEl, this.tabEvidenceEl, this.tabDetailsEl, this.tabTimelineEl]) panel.replaceChildren();
+        this.summaryReading = null;
+        this.readingPositions.delete(this.currentObjectId);
+        this.comparison.select(null);
+        this.fileSummary.hidden = false;
+        this.readerBack.hidden = true;
+        this.compareButton.hidden = true;
+        this.summaryInfo.textContent = 'The observed content changed.';
+        this.readButton.textContent = 'Open current version';
+        this.openCurrentVersion = () => {
+          this.openCurrentVersion = null;
+          this.showTarget(target, descriptor, state, layout, { quantileBin });
+          this._openReader(this.readTab, this.readButton);
+        };
+        return;
+      }
+      if (unchanged) {
+        if (this.drawerEl.querySelector('.tab-btn[aria-selected="true"][hidden]')) this.switchTab(this.activeTab);
         this._renderDetails(target, descriptor, layout, quantileBin);
         this._renderTimeline(target, state);
-        this.switchTab('content');
         return;
       }
       if (reading) this.activePreviewSlot = reading.slot;
@@ -20203,6 +20219,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         return { path: targetId, label: targetId };
       };
 
+      const compactLabels = compact ? outgoing.map(link => resolveLabelAndPath(link.target_id).label) : [];
       for (const lk of (compact ? outgoing.slice(0, 4) : outgoing)) {
         const info = resolveLabelAndPath(lk.target_id);
         const btn = document.createElement('button');
@@ -20216,7 +20233,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         rel.textContent = `${lk.relation} →`;
         const pathSpan = document.createElement('span');
         pathSpan.className = 'link-target-path';
-        pathSpan.textContent = compact ? info.label : info.path;
+        const uniqueLabel = compactLabels.indexOf(info.label) === compactLabels.lastIndexOf(info.label);
+        pathSpan.textContent = compact && uniqueLabel ? info.label : info.path;
         pathSpan.title = info.path;
         btn.append(rel, pathSpan);
         if (lk.label && !compact) {
@@ -20984,6 +21002,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.folders = 0;
       this.examined = 0;
       this.skipped = 0;
+      this.omitted = 0;
+      this.directoryOmitted = 0;
       this.matches = [];
     }
 
@@ -21016,6 +21036,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.startPath = '/' + path.join('/');
           this.startChain = ancestors.map(node => node.id);
         }
+        const omitted = result.omitted || 0;
+        this.omitted += omitted - this.directoryOmitted;
+        this.directoryOmitted = result.cursor ? omitted : 0;
         const matches = [];
         this.cursor = result.cursor;
         if (!this.cursor) {
@@ -21069,6 +21092,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.walk = null;
       this.displayed = [];
       this.active = null;
+      this.lastOrdinal = 0;
       this.offset = 0;
       this.more = false;
       this.busy = false;
@@ -21147,10 +21171,32 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.bar.appendChild(element);
     }
 
+    syncSelection(id) {
+      this.selectedId = id;
+      if (!this.walk || !this.updateActive()) return;
+      if (this.busy) this.publishMatches();
+      else this.render();
+    }
+
+    updateActive() {
+      const hit = this.displayed.find(hit => hit.node.id === this.selectedId)
+        || (this.active?.node.id === this.selectedId ? this.active : null);
+      if (hit === this.active) return false;
+      this.active = hit;
+      if (hit) this.lastOrdinal = hit.ordinal;
+      return true;
+    }
+
+    publishMatches() {
+      const hits = this.active && !this.displayed.includes(this.active)
+        ? [this.active, ...this.displayed] : this.displayed;
+      this.onMatches?.(hits.map(hit => hit.node.id), this.active?.node.id ?? null,
+        hits.map(hit => [hit.node.id, hit.ancestors.map(node => node.id)]));
+    }
+
     jump(index) {
       const hit = this.displayed[index];
       if (!hit || this.busy) return;
-      this.active = hit;
       this.expanded = false;
       this.render();
       return this.select(hit.node, hit.ancestors);
@@ -21159,13 +21205,13 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     render() {
       const walk = this.walk;
       const active = this.active;
-      const index = active ? this.displayed.indexOf(active) : -1;
+      const index = this.displayed.findIndex(hit => hit.ordinal === this.lastOrdinal);
       const focused = this.bar.contains(document.activeElement) ? document.activeElement.textContent : null;
       this.bar.replaceChildren();
       const total = this.offset + this.displayed.length;
-      const coverage = this.more ? 'Partial search' : (walk.skipped ? 'Incomplete coverage' : 'Search complete');
+      const coverage = this.more ? 'Partial search' : (walk.skipped ? 'Incomplete coverage' : 'Search complete for admitted entries');
       const scope = walk.startPath ? `${this.scopeTitle} ${walk.startPath}` : this.scopeTitle;
-      this.status(`${scope} · ${coverage} · ${total} matches · ${walk.examined} entries observed`);
+      this.status(`${scope} · ${coverage} · ${total} matches · ${walk.examined} admitted entries · ${walk.omitted} omitted`);
       if (walk.skipped) this.status(`${walk.skipped} folders unavailable or beyond the search limit.`);
       if (active) this.status(`Match ${active.ordinal}: ${active.fullPath}`);
       const controls = document.createElement('div');
@@ -21177,7 +21223,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         return button;
       };
       const prev = action('Previous match', () => this.jump(index - 1), index <= 0);
-      const nextLabel = active && index < 0 && this.displayed.length
+      const nextLabel = this.lastOrdinal && index < 0 && this.displayed.length
         ? `Jump to retained match ${this.displayed[0].ordinal}` : 'Next match';
       const next = action(nextLabel, () => {
         if (index + 1 < this.displayed.length) this.jump(index + 1);
@@ -21203,11 +21249,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           if (hit === active) button.setAttribute('aria-current', 'true');
         }
       }
-      const ids = this.displayed.map(hit => hit.node.id);
-      if (active && index < 0) ids.unshift(active.node.id);
-      const routes = [...this.displayed, ...(active && index < 0 ? [active] : [])]
-        .map(hit => [hit.node.id, hit.ancestors.map(node => node.id)]);
-      this.onMatches?.(ids, active?.node.id ?? null, routes);
+      this.publishMatches();
       if (focused) {
         const same = Array.from(controls.children).find(button => !button.disabled && button.textContent === focused);
         (same || (!next.disabled ? next : !prev.disabled ? prev : controls.lastChild)).focus();
@@ -21239,6 +21281,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const removed = Math.max(0, merged.length - 64);
         this.displayed = merged.slice(removed);
         this.offset += removed;
+        this.updateActive();
         this.busy = false;
         if (jumpToNext && hits.length) return this.jump(this.displayed.length - hits.length);
         this.render();
@@ -21367,10 +21410,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     _renderGrid() {
+      this.filesystemSearch?.syncSelection(this.layout.allTreeNodesById.get(this.currentNodeId)?.objectId);
+      const directoryId = this._directoryId();
+      const pageMatches = this.fsPage && this._treeId(this.fsPage.directory) === directoryId;
       this.gridView.render(this.data.descriptor, this.data.state, this.layout, {
-        directoryId: this._directoryId(),
+        directoryId,
         selectedId: this.currentNodeId,
-        coverage: this.fsCoverage,
+        coverage: pageMatches ? this.fsPage.coverage : undefined,
+        coverageLabel: pageMatches || !this.fsPage ? this.fsCoverage : undefined,
       });
     }
 
@@ -21502,6 +21549,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           return;
         }
         const position = this.evidence.captureReadingPosition?.();
+        if ([403, 409].includes(error.status)) {
+          this.history.length = 0;
+          this.forward.length = 0;
+        }
         this.filesystemSearch?.observationLost();
         this.evidence.hide();
         this.scene3d?.clearSpotlight();

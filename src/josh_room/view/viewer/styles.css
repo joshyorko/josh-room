@@ -860,6 +860,7 @@ body {
 }
 
 .pdf-viewport {
+  overflow-anchor: none;
   height: 440px;
   overflow: auto;
   border: 1px solid var(--border);

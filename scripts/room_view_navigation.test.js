@@ -75,9 +75,12 @@ test('a stale file handle rechecks ancestors and selects only the same admitted 
   await app._openFilesystem(dir.id, { kind: 'directory' });
   await app._openFilesystem(file.id, { kind: 'file' });
   stale = true;
+  app.forward.push('node/obsolete');
   await app._openFilesystem(file.id, { kind: 'file', refresh: true });
   assert.equal(app.currentNodeId, 'node/f12');
   assert.equal(app.data.fsGeneration, 'g2');
+  assert.deepEqual(app.history, []);
+  assert.deepEqual(app.forward, []);
   removed = true;
   app.data.fsGeneration = 'g';
   await app._openFilesystem(file.id, { kind: 'file', refresh: true });

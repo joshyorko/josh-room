@@ -105,10 +105,14 @@
     }
 
     _renderGrid() {
+      this.filesystemSearch?.syncSelection(this.layout.allTreeNodesById.get(this.currentNodeId)?.objectId);
+      const directoryId = this._directoryId();
+      const pageMatches = this.fsPage && this._treeId(this.fsPage.directory) === directoryId;
       this.gridView.render(this.data.descriptor, this.data.state, this.layout, {
-        directoryId: this._directoryId(),
+        directoryId,
         selectedId: this.currentNodeId,
-        coverage: this.fsCoverage,
+        coverage: pageMatches ? this.fsPage.coverage : undefined,
+        coverageLabel: pageMatches || !this.fsPage ? this.fsCoverage : undefined,
       });
     }
 
@@ -240,6 +244,10 @@
           return;
         }
         const position = this.evidence.captureReadingPosition?.();
+        if ([403, 409].includes(error.status)) {
+          this.history.length = 0;
+          this.forward.length = 0;
+        }
         this.filesystemSearch?.observationLost();
         this.evidence.hide();
         this.scene3d?.clearSpotlight();

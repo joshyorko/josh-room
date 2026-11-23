@@ -340,7 +340,10 @@
       this.readButton = document.getElementById('btn-read-file');
       this.compareButton = document.getElementById('btn-compare-file');
       this.readerBack = document.getElementById('btn-reader-back');
-      this.readButton.addEventListener('click', () => this._openReader(this.readTab, this.readButton));
+      this.readButton.addEventListener('click', () => {
+        if (this.openCurrentVersion) this.openCurrentVersion();
+        else this._openReader(this.readTab, this.readButton);
+      });
       this.compareButton.addEventListener('click', () => this._openReader('compare', this.compareButton));
       this.readerBack.addEventListener('click', () => this.dismiss());
       this.lightboxEl = document.getElementById('lightbox-modal');
@@ -522,6 +525,8 @@
       observer.observe(viewport);
       for (const slot of slots.slice(0, position.page)) observer.observe(slot);
       const events = new AbortController();
+      // Focus restoration can enqueue a browser scroll after layout has settled.
+      viewport.addEventListener('scroll', align, { passive: true, signal: events.signal });
       this.releasePdfPosition = () => {
         observer.disconnect();
         events.abort();
@@ -553,6 +558,7 @@
       if (this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(null);
       this.reader = false;
+      this.openCurrentVersion = null;
       this.readingBeforeCompare = null;
       this.summaryReading = null;
       this.prepareAttachment = null;
@@ -602,18 +608,17 @@
         this.drawerEl.querySelector('[data-tab="evidence"]').hidden = !(target.attachments || []).length;
       }
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
-      if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {
-        this.currentItem = target;
-        if (this.drawerEl.querySelector('.tab-btn[aria-selected="true"][hidden]')) this.switchTab(this.activeTab);
-        this._renderDetails(target, descriptor, layout, quantileBin);
-        return;
+      const wasDeferred = sameObject && this.openCurrentVersion;
+      const unchanged = preserveTab && sameObject && fingerprint === this.contentFingerprint;
+      const changed = preserveTab && sameObject && !unchanged;
+      if (!unchanged || deferContent) {
+        this._attRequestSeq++;
+        this._teardownPdf();
+        this.lightboxEl.hidden = true;
+        this.lightboxImg.removeAttribute('src');
+        this.prepareAttachment = null;
+        this.contentFingerprint = fingerprint;
       }
-      const changed = preserveTab && sameObject && this.contentFingerprint !== fingerprint;
-      this._attRequestSeq++;
-      this._teardownPdf();
-      this.lightboxEl.hidden = true;
-      this.lightboxImg.removeAttribute('src');
-      this.contentFingerprint = fingerprint;
       if (!sameObject) this.activePreviewSlot = null;
       if (!sameObject && !this.drawerEl.contains(document.activeElement)) this.returnFocus = document.activeElement;
       this.currentItem = target;
@@ -643,7 +648,6 @@
       const summary = this.reader && (reading ? reading.summary : !sameObject || wasSummary);
       this.fileSummary.hidden = !summary;
       this.readerBack.hidden = !this.reader || summary;
-      this.prepareAttachment = null;
       if (this.reader) {
         const action = readerAction(target, descriptor, steps);
         this.runRelated.replaceChildren();
@@ -664,18 +668,29 @@
         }
       }
 
-      if (changed || deferContent) {
-        this.tabContentEl.textContent = '';
-        this.tabEvidenceEl.textContent = '';
-        const reopen = document.createElement('button');
-        reopen.type = 'button';
-        reopen.textContent = 'Content changed. Open current version';
-        reopen.addEventListener('click', () => this.showTarget(this.currentItem, descriptor, state, layout, { quantileBin }));
-        this.drawerEl.querySelector('[data-tab="content"]').hidden = false;
-        this.tabContentEl.append(reopen);
+      const deferred = changed || deferContent || wasDeferred;
+      this.openCurrentVersion = null;
+      if (deferred && this.reader) {
+        for (const panel of [this.tabContentEl, this.tabEvidenceEl, this.tabDetailsEl, this.tabTimelineEl]) panel.replaceChildren();
+        this.summaryReading = null;
+        this.readingPositions.delete(this.currentObjectId);
+        this.comparison.select(null);
+        this.fileSummary.hidden = false;
+        this.readerBack.hidden = true;
+        this.compareButton.hidden = true;
+        this.summaryInfo.textContent = 'The observed content changed.';
+        this.readButton.textContent = 'Open current version';
+        this.openCurrentVersion = () => {
+          this.openCurrentVersion = null;
+          this.showTarget(target, descriptor, state, layout, { quantileBin });
+          this._openReader(this.readTab, this.readButton);
+        };
+        return;
+      }
+      if (unchanged) {
+        if (this.drawerEl.querySelector('.tab-btn[aria-selected="true"][hidden]')) this.switchTab(this.activeTab);
         this._renderDetails(target, descriptor, layout, quantileBin);
         this._renderTimeline(target, state);
-        this.switchTab('content');
         return;
       }
       if (reading) this.activePreviewSlot = reading.slot;
@@ -739,6 +754,7 @@
         return { path: targetId, label: targetId };
       };
 
+      const compactLabels = compact ? outgoing.map(link => resolveLabelAndPath(link.target_id).label) : [];
       for (const lk of (compact ? outgoing.slice(0, 4) : outgoing)) {
         const info = resolveLabelAndPath(lk.target_id);
         const btn = document.createElement('button');
@@ -752,7 +768,8 @@
         rel.textContent = `${lk.relation} →`;
         const pathSpan = document.createElement('span');
         pathSpan.className = 'link-target-path';
-        pathSpan.textContent = compact ? info.label : info.path;
+        const uniqueLabel = compactLabels.indexOf(info.label) === compactLabels.lastIndexOf(info.label);
+        pathSpan.textContent = compact && uniqueLabel ? info.label : info.path;
         pathSpan.title = info.path;
         btn.append(rel, pathSpan);
         if (lk.label && !compact) {

@@ -136,7 +136,11 @@ test('the search stays bound to its origin while stepping through identically na
     },
     inspect: async () => {},
     directory: () => currentFolder.id, root: () => root.id, generation: () => 'g1',
-    select: node => { selected.push(node.id); currentFolder = node.parent_id === src.id ? src : nested; },
+    select: node => {
+      selected.push(node.id);
+      currentFolder = node.parent_id === src.id ? src : nested;
+      search.syncSelection(node.id);
+    },
     onMatches: (ids, active) => highlighted.push([ids, active]),
   });
   search.scope.value = 'subtree';
@@ -162,6 +166,14 @@ test('the search stays bound to its origin while stepping through identically na
   press('Previous match');
   assert.deepEqual(selected, [matches[0].id, matches[1].id, matches[0].id]);
   assert.deepEqual(highlighted.at(-1), [matches.map(node => node.id), matches[0].id]);
+  search.syncSelection('outside-search');
+  assert.equal(search.active, null);
+  assert.deepEqual(highlighted.at(-1), [matches.map(node => node.id), null]);
+  press('Next match');
+  assert.equal(search.active.ordinal, 2);
+  search.syncSelection(matches[0].id);
+  assert.equal(search.active.ordinal, 1);
+  assert.deepEqual(highlighted.at(-1), [matches.map(node => node.id), matches[0].id]);
   assert.deepEqual(calls, [src.id, nested.id]);
   assert.equal(search.input.value, 'readme');
 });
@@ -182,4 +194,15 @@ test('a busy listing preserves earlier admitted matches and resumes the same cur
   assert.equal(last.more, false);
   assert.deepEqual(last.hits.map(hit => hit.node), [entries[1]]);
   assert.deepEqual(calls, [null, 'next', 'next']);
+});
+
+test('search sums cumulative omission counts once per directory, including partial pages', async () => {
+  const walk = new SearchWalk(async (id, generation, cursor) => {
+    if (id === 'root' && !cursor) return {...page(root, [], [src], 'second', 'partial'), omitted: 3};
+    if (id === 'root') return {...page(root, [], [file('visible-root')]), omitted: 5};
+    return {...page(src, [root], [file('visible-child')]), omitted: 2};
+  }, 'root', 'g1', true, 'visible');
+  assert.equal((await walk.advance(signal)).hits.length, 2);
+  assert.equal(walk.examined, 3);
+  assert.equal(walk.omitted, 7);
 });

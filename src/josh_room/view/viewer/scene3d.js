@@ -1969,7 +1969,7 @@
     }
 
     frameOverview({ instant = false } = {}) {
-      this._rememberCamera(this.layout?.nodeById.get(this.selectedNodeId));
+      if (this.pendingCameraTarget !== 'root') this._rememberCamera(this.layout?.nodeById.get(this.selectedNodeId));
       this.cameraMemory.delete('root');
       this.manualCamera = false;
       const fromId = this.focusedPedestalId;

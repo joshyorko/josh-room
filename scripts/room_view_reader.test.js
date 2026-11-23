@@ -192,10 +192,10 @@ test('resuming the mounted PDF restores its page offset through late layout and 
   const { drawer } = setup(true);
   drawer.readButton.click();
   let pageTop = 448;
-  const viewport = {
+  const viewport = Object.assign(new EventTarget(), {
     clientHeight: 340, scrollTop: 620, scrollLeft: 8,
     getBoundingClientRect: () => ({ top: 50 }),
-  };
+  });
   const page = { dataset: { pageNum: '2' }, getBoundingClientRect: () => ({
     top: 50 + pageTop - viewport.scrollTop, bottom: 550 + pageTop - viewport.scrollTop,
   }) };
@@ -215,6 +215,9 @@ test('resuming the mounted PDF restores its page offset through late layout and 
     viewport.scrollTop = 820;
     await drawer._openReader('evidence', drawer.readButton);
     assert.equal(viewport.scrollTop, 620);
+    viewport.scrollTop = 820;
+    viewport.dispatchEvent(new Event('scroll'));
+    assert.equal(viewport.scrollTop, 620, 'late browser scroll after focus retains the reading point');
     pageTop += 48;
     resize();
     assert.equal(viewport.scrollTop - pageTop, 172);
@@ -224,4 +227,34 @@ test('resuming the mounted PDF restores its page offset through late layout and 
   } finally {
     delete global.ResizeObserver;
   }
+});
+
+test('changed content remains withheld across polls until explicitly reopened from the summary', () => {
+  const { drawer, file, select } = setup(false);
+  file.previews = [{ slot: 'source', status: 'available', body: 'new text' }];
+  let rendered = '';
+  drawer._renderContent = item => { rendered = item.previews[0].body; };
+  select({ deferContent: true });
+  assert.equal(drawer.fileSummary.hidden, false);
+  assert.equal(drawer.readButton.textContent, 'Open current version');
+  assert.match(drawer.summaryInfo.textContent, /changed/);
+  select({ preserveTab: true });
+  assert.equal(drawer.readButton.textContent, 'Open current version');
+  assert.equal(rendered, '');
+  drawer.readButton.click();
+  assert.equal(rendered, 'new text');
+  assert.equal(drawer.fileSummary.hidden, true);
+  assert.equal(drawer.activeTab, 'content');
+});
+
+test('generic live timeline reconciles new provider steps while the preview is unchanged', () => {
+  const { drawer, file } = setup(true);
+  drawer.data.filesystem = false;
+  let steps;
+  drawer._renderTimeline = (target, state) => { steps = state.steps; };
+  drawer.showTarget(file, { legend: {} }, { steps: [] }, {});
+  const updated = [{ item_id: file.objectId, name: 'published' }];
+  drawer.showTarget(file, { legend: {} }, { steps: updated }, {}, { preserveTab: true });
+  assert.deepEqual(steps, updated);
+  assert.equal(drawer.drawerEl.querySelector('[data-tab="timeline"]').hidden, false);
 });

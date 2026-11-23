@@ -188,7 +188,7 @@
         const label = node.segmentLabel || node.label;
         return label.toLowerCase().includes(this.searchQuery);
       });
-      const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${coverage}`;
+      const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${this.scope.coverageLabel || coverage}`;
       this.summaryEl.textContent = summary;
       const activeId = this.contentEl.contains(document.activeElement)
         ? document.activeElement.getAttribute('data-item-id') : null;

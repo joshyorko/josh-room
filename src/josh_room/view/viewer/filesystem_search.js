@@ -15,6 +15,8 @@
       this.folders = 0;
       this.examined = 0;
       this.skipped = 0;
+      this.omitted = 0;
+      this.directoryOmitted = 0;
       this.matches = [];
     }
 
@@ -47,6 +49,9 @@
           this.startPath = '/' + path.join('/');
           this.startChain = ancestors.map(node => node.id);
         }
+        const omitted = result.omitted || 0;
+        this.omitted += omitted - this.directoryOmitted;
+        this.directoryOmitted = result.cursor ? omitted : 0;
         const matches = [];
         this.cursor = result.cursor;
         if (!this.cursor) {
@@ -100,6 +105,7 @@
       this.walk = null;
       this.displayed = [];
       this.active = null;
+      this.lastOrdinal = 0;
       this.offset = 0;
       this.more = false;
       this.busy = false;
@@ -178,10 +184,32 @@
       this.bar.appendChild(element);
     }
 
+    syncSelection(id) {
+      this.selectedId = id;
+      if (!this.walk || !this.updateActive()) return;
+      if (this.busy) this.publishMatches();
+      else this.render();
+    }
+
+    updateActive() {
+      const hit = this.displayed.find(hit => hit.node.id === this.selectedId)
+        || (this.active?.node.id === this.selectedId ? this.active : null);
+      if (hit === this.active) return false;
+      this.active = hit;
+      if (hit) this.lastOrdinal = hit.ordinal;
+      return true;
+    }
+
+    publishMatches() {
+      const hits = this.active && !this.displayed.includes(this.active)
+        ? [this.active, ...this.displayed] : this.displayed;
+      this.onMatches?.(hits.map(hit => hit.node.id), this.active?.node.id ?? null,
+        hits.map(hit => [hit.node.id, hit.ancestors.map(node => node.id)]));
+    }
+
     jump(index) {
       const hit = this.displayed[index];
       if (!hit || this.busy) return;
-      this.active = hit;
       this.expanded = false;
       this.render();
       return this.select(hit.node, hit.ancestors);
@@ -190,13 +218,13 @@
     render() {
       const walk = this.walk;
       const active = this.active;
-      const index = active ? this.displayed.indexOf(active) : -1;
+      const index = this.displayed.findIndex(hit => hit.ordinal === this.lastOrdinal);
       const focused = this.bar.contains(document.activeElement) ? document.activeElement.textContent : null;
       this.bar.replaceChildren();
       const total = this.offset + this.displayed.length;
-      const coverage = this.more ? 'Partial search' : (walk.skipped ? 'Incomplete coverage' : 'Search complete');
+      const coverage = this.more ? 'Partial search' : (walk.skipped ? 'Incomplete coverage' : 'Search complete for admitted entries');
       const scope = walk.startPath ? `${this.scopeTitle} ${walk.startPath}` : this.scopeTitle;
-      this.status(`${scope} · ${coverage} · ${total} matches · ${walk.examined} entries observed`);
+      this.status(`${scope} · ${coverage} · ${total} matches · ${walk.examined} admitted entries · ${walk.omitted} omitted`);
       if (walk.skipped) this.status(`${walk.skipped} folders unavailable or beyond the search limit.`);
       if (active) this.status(`Match ${active.ordinal}: ${active.fullPath}`);
       const controls = document.createElement('div');
@@ -208,7 +236,7 @@
         return button;
       };
       const prev = action('Previous match', () => this.jump(index - 1), index <= 0);
-      const nextLabel = active && index < 0 && this.displayed.length
+      const nextLabel = this.lastOrdinal && index < 0 && this.displayed.length
         ? `Jump to retained match ${this.displayed[0].ordinal}` : 'Next match';
       const next = action(nextLabel, () => {
         if (index + 1 < this.displayed.length) this.jump(index + 1);
@@ -234,11 +262,7 @@
           if (hit === active) button.setAttribute('aria-current', 'true');
         }
       }
-      const ids = this.displayed.map(hit => hit.node.id);
-      if (active && index < 0) ids.unshift(active.node.id);
-      const routes = [...this.displayed, ...(active && index < 0 ? [active] : [])]
-        .map(hit => [hit.node.id, hit.ancestors.map(node => node.id)]);
-      this.onMatches?.(ids, active?.node.id ?? null, routes);
+      this.publishMatches();
       if (focused) {
         const same = Array.from(controls.children).find(button => !button.disabled && button.textContent === focused);
         (same || (!next.disabled ? next : !prev.disabled ? prev : controls.lastChild)).focus();
@@ -270,6 +294,7 @@
         const removed = Math.max(0, merged.length - 64);
         this.displayed = merged.slice(removed);
         this.offset += removed;
+        this.updateActive();
         this.busy = false;
         if (jumpToNext && hits.length) return this.jump(this.displayed.length - hits.length);
         this.render();
