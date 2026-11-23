@@ -1138,7 +1138,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
       authFree: ["status", "agents"].includes(args[0])
-        || (args[0] === "composition" && ["plan", "inventory", "reconcile", "capture-plan"].includes(args[1]))
+        || (args[0] === "composition" && ["plan", "inventory", "reconcile"].includes(args[1]))
         || (options.localConfigurationOnly && args[0] === "dimensions" && !args.includes("--with-hierarchy")),
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);

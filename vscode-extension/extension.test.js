@@ -8281,3 +8281,36 @@ for (const [command, provider, readiness, expected] of [
   if (readiness === "legacy") assert.match(fixture.errorCalls[0][0], /Migrate Encryption/);
   if (readiness === "domain-mismatch") assert.match(fixture.errorCalls[0][0], /configured encryption domain/i);
 });
+
+test("Catalog preview and Save hand off SecretStorage provider credentials while local discovery stays offline", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-credentials-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  const handoffs = [];
+  let reads = 0;
+  const stored = { profiles: { fixture: { "access-key-id": "synthetic-id", "secret-access-key": "synthetic-secret" } } };
+  const harness = createSpawnHarness(({ args, options }) => {
+    const filename = options.env.JOSH_ROOM_PROVIDER_CREDENTIALS;
+    if (["capture-plan", "save"].includes(args[1])) {
+      assert.ok(filename, "selected provider credentials missing at controller spawn");
+      assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
+      assert.deepEqual(JSON.parse(fs.readFileSync(filename, "utf8")), stored);
+      assert.equal(args.includes("synthetic-secret"), false);
+      handoffs.push(filename);
+    } else assert.equal(filename, undefined);
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async key => {
+    assert.equal(key, "josh-room.credentials.v1"); reads++; return JSON.stringify(stored);
+  } } });
+  for (const action of ["inventory", "plan", "reconcile"]) {
+    await extension.__test__.runJoshRoom(["composition", action], root);
+  }
+  assert.equal(reads, 0);
+  for (const action of ["capture-plan", "save"]) {
+    await extension.__test__.runJoshRoom(["composition", action, "--dimension", "fixture"], root);
+    assert.equal(fs.existsSync(handoffs.at(-1)), false);
+  }
+  assert.equal(reads, 2);
+});
