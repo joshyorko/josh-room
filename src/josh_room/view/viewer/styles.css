@@ -490,10 +490,13 @@ body {
 .filesystem-reader:has(#file-summary:not([hidden])) .drawer-body { display: none; }
 #file-summary { padding: 6px 12px 12px; }
 #file-summary-info { margin: 4px 0 10px; color: var(--text-muted); }
+#run-related { margin: 0 0 10px; }
+#run-related .links-section { margin: 0; }
 .file-summary-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .filesystem-reader:has(#btn-reader-back:not([hidden])) {
-  width: min(740px, calc(100vw - 24px));
-  max-height: 100%;
+  width: min(800px, calc(100vw - 24px));
+  height: min(82vh, 780px);
+  max-height: calc(100% - 16px);
 }
 .filesystem-reader .drawer-title-group { display: grid; gap: 4px; }
 .filesystem-reader .kind-badge { width: max-content; }
@@ -1193,3 +1196,13 @@ kbd {
 }
 
 body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-bottom { display: none; }
+
+.search-results-bar [role="status"] {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+.search-controls { display: flex; flex-wrap: wrap; gap: 2px; }
+.search-controls .search-hit { width: auto; }
+.search-hit[aria-current="true"] { font-weight: bold; }

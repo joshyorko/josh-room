@@ -390,6 +390,9 @@
       this.overviewTarget = new THREE.Vector3(0, 1.3, -11.5);
       this.flight = null;
       this.manualCamera = false;
+      this.cameraMemory = new Map();
+      this.searchMatches = new Set();
+      this.activeSearchId = null;
       this.lastInputTime = performance.now();
 
       this.spotState = {
@@ -906,6 +909,7 @@
 
       if (this.layout) {
         this._applyThemeToWorldMaterials();
+        this._drawSearchMatches();
       }
       this._applyLightingAndDimming();
       this.requestRender();
@@ -950,13 +954,19 @@
       this.requestRender();
     }
 
-    setLayout(layout, { descriptor = null, preserveCamera = false } = {}) {
-      const previous = this.layout?.nodeById.get(this.selectedNodeId);
-      const selected = layout.nodeById.get(this.selectedNodeId);
+    setLayout(layout, { descriptor = null, preserveCamera = false, navigationTargetId = null } = {}) {
+      const oldId = this.selectedNodeId || 'root';
+      const navigating = Boolean(navigationTargetId && navigationTargetId !== oldId);
+      const previous = this.layout?.nodeById.get(oldId);
+      if (navigating) {
+        this._rememberCamera(previous);
+        this.pendingCameraTarget = navigationTargetId;
+      }
+      const selected = layout.nodeById.get(oldId);
       this.layout = layout;
       if (selected?.nodeType === 'item' && this.spotState.targetActive) {
         this._bindSpotlight(selected);
-      } else if (!selected && this.selectedNodeId) {
+      } else if (!navigating && !selected && this.selectedNodeId) {
         this.flight = null;
         this.selectedNodeId = null;
         this.focusedPedestalId = 'root';
@@ -966,7 +976,7 @@
       for (const id of this._blockLodState.keys()) {
         if (!layout.nodeById.has(id)) this._blockLodState.delete(id);
       }
-      if (preserveCamera && previous && selected) {
+      if (!navigating && preserveCamera && previous && selected) {
         const delta = new this.THREE.Vector3(
           selected.x - previous.x, selected.y - previous.y, selected.z - previous.z
         );
@@ -994,9 +1004,10 @@
       if (descriptor) this.descriptor = descriptor;
       this._clearWorldGroup();
       this._buildWorldGeometry(layout);
+      this._drawSearchMatches();
       this._computeOverviewCamera(layout);
       this._updateBlockMatrices();
-      if ((!preserveCamera || !this.manualCamera) && selected?.nodeType !== 'item') this._refitSelection();
+      if (!navigating && (!preserveCamera || !this.manualCamera)) this._refitSelection();
 
       this._shadowDirty = true;
       this.requestRender();
@@ -1010,7 +1021,12 @@
     }
 
     _directoryPose(node) {
-      const decks = this.layout.pedestals.filter(p => p.id === node.id || p.parentId === node.id || p.id === node.parentId);
+      const decks = this.layout.pedestals.filter(p => p.id === node.id || p.parentId === node.id);
+      const parent = this.layout.nodeById.get(node.parentId);
+      // A wide sibling subtree can place the parent far beyond this directory's local landscape.
+      const reach = Math.max(96, ...decks.map(p => 2 * Math.hypot(p.x - node.x, p.z - node.z)));
+      const localParent = parent && Math.hypot(parent.x - node.x, parent.z - node.z) <= reach;
+      if (localParent) decks.push(parent);
       const points = [];
       const addBox = (x, y, z, w, h, d) => {
         for (const px of [x - w / 2, x + w / 2]) {
@@ -1025,17 +1041,37 @@
         if (ids.has(p.parentId)) addBox(p.x, p.y, p.z, p.width, p.height, p.depth);
       }
       for (const wire of this.layout.wires) {
-        if (wire.childId === node.id || wire.parentId === node.id) points.push(...wire.points);
+        if (wire.parentId === node.id || (wire.childId === node.id && localParent)) points.push(...wire.points);
+        else if (wire.childId === node.id) {
+          // Walk the real incoming wire from the deck to the first bend or 8 world units.
+          const last = wire.points.at(-1);
+          const previous = wire.points.at(-2);
+          const direction = new this.THREE.Vector3(...previous).sub(new this.THREE.Vector3(...last));
+          direction.clampLength(0, 8);
+          points.push(last, [last[0] + direction.x, last[1] + direction.y, last[2] + direction.z]);
+        }
       }
       return this._fitPoints(points);
     }
 
     _filePose(node) {
-      const radius = 2.6;
-      return this._fitPoints([
-        [node.x - radius, node.y, node.z + radius], [node.x + radius, node.y, node.z + radius],
-        [node.x, node.y + node.height + 1.8, node.z], [node.x, node.y, node.z - radius],
-      ]);
+      const parent = this.layout.nodeById.get(node.parentId);
+      const points = [[node.x, node.y + node.height + 1.2, node.z]];
+      // Frame actual adjacent files and the near section of their shared deck.
+      const neighbors = this.layout.blocks.filter(b => b.parentId === node.parentId && b.id !== node.id)
+        .sort((a, b) => Math.hypot(a.x - node.x, a.z - node.z) - Math.hypot(b.x - node.x, b.z - node.z));
+      for (const b of [node, ...neighbors.slice(0, 2)]) {
+        if (Math.hypot(b.x - node.x, b.z - node.z) > 8) continue;
+        points.push([b.x - b.width / 2, b.y, b.z + b.depth / 2],
+          [b.x + b.width / 2, b.y + b.height, b.z - b.depth / 2]);
+      }
+      if (parent) {
+        points.push([Math.max(parent.x - parent.width / 2, node.x - 4), 0,
+          Math.min(parent.z + parent.depth / 2, node.z + 4)],
+        [Math.min(parent.x + parent.width / 2, node.x + 4), parent.height,
+          Math.max(parent.z - parent.depth / 2, node.z - 4)]);
+      }
+      return this._fitPoints(points);
     }
 
     _fitPoints(points) {
@@ -1078,6 +1114,7 @@
         const child = this.worldGroup.children.pop();
         child.traverse(disposeObj);
       }
+      this.searchLines = null;
       this.pickables = [];
       this.pedestalVisuals.clear();
       this.wireVisuals = [];
@@ -1504,6 +1541,50 @@
       return set;
     }
 
+    setSearchMatches(ids, activeId = null) {
+      this.searchMatches = new Set(ids);
+      this.activeSearchId = this.searchMatches.has(activeId) ? activeId : null;
+      this._drawSearchMatches();
+      this.requestRender();
+    }
+
+    _drawSearchMatches() {
+      if (!this.worldGroup) return;
+      if (this.searchLines?.parent === this.worldGroup) {
+        this.worldGroup.remove(this.searchLines);
+        this.searchLines.geometry.dispose();
+        this.searchLines.material.dispose();
+      }
+      this.searchLines = null;
+      if (!this.layout || !this.searchMatches.size) return;
+      const vertices = [];
+      const colors = [];
+      const warm = new this.THREE.Color(0xffc774);
+      const secondary = new this.THREE.Color(this.themeKey === 'grass' ? 0x286268 : 0x81b7c1);
+      for (const node of [...this.layout.pedestals, ...this.layout.blocks]) {
+        if (!this.searchMatches.has(node.objectId)) continue;
+        const active = node.objectId === this.activeSearchId;
+        const color = active ? warm : secondary;
+        const y = node.y + node.height + 0.035;
+        const x = node.width / 2 + 0.045;
+        const z = node.depth / 2 + 0.045;
+        const corners = [[-x, -z], [x, -z], [x, z], [-x, z]];
+        for (let i = 0; i < 4; i++) {
+          const [ax, az] = corners[i];
+          const [bx, bz] = corners[(i + 1) % 4];
+          vertices.push(node.x + ax, y, node.z + az, node.x + bx, y, node.z + bz);
+          colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+        }
+      }
+      if (!vertices.length) return;
+      const geometry = new this.THREE.BufferGeometry();
+      geometry.setAttribute('position', new this.THREE.Float32BufferAttribute(vertices, 3));
+      geometry.setAttribute('color', new this.THREE.Float32BufferAttribute(colors, 3));
+      this.searchLines = new this.THREE.LineSegments(geometry,
+        new this.THREE.LineBasicMaterial({ vertexColors: true, toneMapped: false }));
+      this.worldGroup.add(this.searchLines);
+    }
+
     _updateColorsAndSelection() {
       if (!this.layout || !this.instancedRefs) return;
       const THREE = this.THREE;
@@ -1853,7 +1934,19 @@
       this.requestRender();
     }
 
+    _rememberCamera(node) {
+      if (!node || !this.manualCamera) return;
+      const anchor = new this.THREE.Vector3(node.x, node.y || 0, node.z);
+      const target = this.flight?.toTarget || this.camTarget;
+      const eye = this.flight?.toPos || this.camPos;
+      this.cameraMemory.delete(node.id);
+      this.cameraMemory.set(node.id, { target: target.clone().sub(anchor), eye: eye.clone().sub(anchor) });
+      if (this.cameraMemory.size > 48) this.cameraMemory.delete(this.cameraMemory.keys().next().value);
+    }
+
     frameOverview({ instant = false } = {}) {
+      this._rememberCamera(this.layout?.nodeById.get(this.selectedNodeId));
+      this.cameraMemory.delete('root');
       this.manualCamera = false;
       const fromId = this.focusedPedestalId;
       this.selectedNodeId = null;
@@ -1864,44 +1957,35 @@
     }
 
     focusNode(nodeId, { moveCamera = true, instant = false } = {}) {
-      if (!this.layout) return null;
-      const node = this.layout.nodeById.get(nodeId);
+      const node = this.layout?.nodeById.get(nodeId);
       if (!node) return null;
-      const THREE = this.THREE;
       const fromId = this.focusedPedestalId;
-      if (moveCamera) this.manualCamera = false;
+      // setLayout captures this before an atomic scope switch moves the old deck.
+      const previousId = this.selectedNodeId || 'root';
+      if (this.pendingCameraTarget !== nodeId) this._rememberCamera(this.layout.nodeById.get(previousId));
+      this.pendingCameraTarget = null;
+      this.selectedNodeId = node.id;
+      this.focusedPedestalId = node.nodeKind === 'directory' ? node.id : node.parentId;
+      if (node.nodeType === 'item') this._startSpotlightOnBlock(node);
+      else this.clearSpotlight();
+      this._updateColorsAndSelection();
+      if (!moveCamera) return node;
 
-      if (node.nodeType === 'item') {
-        this.selectedNodeId = node.id;
-        this.focusedPedestalId = node.parentId;
-        this._startSpotlightOnBlock(node);
-        this._updateColorsAndSelection();
-        if (moveCamera) {
-          const { pos, target } = this._filePose(node);
-          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
-        }
-      } else if (node.nodeType === 'root') {
-        this.frameOverview({ instant });
-      } else if (node.nodeType === 'directory' || node.nodeType === 'group' || node.nodeType === 'stage') {
-        this.selectedNodeId = node.id;
-        this.focusedPedestalId = node.id;
-        this.clearSpotlight();
-        this._updateColorsAndSelection();
-        if (moveCamera) {
-          const { pos, target } = this._directoryPose(node);
-          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
-        }
-      } else if (node.nodeType === 'more' || node.nodeType === 'stage-summary') {
-        this.selectedNodeId = node.id;
-        this.focusedPedestalId = node.parentId;
-        this.clearSpotlight();
-        this._updateColorsAndSelection();
-        if (moveCamera) {
-          const target = new THREE.Vector3(node.x, node.y + 1.0, node.z);
-          const pos = new THREE.Vector3(node.x + 1.8, node.y + 4.4, node.z + 7.2);
-          this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
+      const memory = this.cameraMemory.get(nodeId);
+      let pose;
+      if (memory) {
+        const anchor = new this.THREE.Vector3(node.x, node.y || 0, node.z);
+        pose = { pos: anchor.clone().add(memory.eye), target: anchor.add(memory.target) };
+      } else {
+        pose = node.nodeKind === 'directory' ? this._directoryPose(node) : this._filePose(node);
+        if (this.manualCamera) {
+          const direction = this.camPos.clone().sub(this.camTarget).normalize();
+          const distance = pose.pos.distanceTo(pose.target);
+          pose.pos.copy(pose.target).addScaledVector(direction, distance);
         }
       }
+      this.manualCamera = Boolean(memory) || this.manualCamera;
+      this._flyTo(pose.pos, pose.target, { instant, fromId, toId: this.focusedPedestalId });
       return node;
     }
 

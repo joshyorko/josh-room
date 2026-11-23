@@ -11,7 +11,7 @@ import socket
 import stat
 import struct
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..recovery_text import MAX_TEXT_BYTES, text_preview
@@ -165,6 +165,7 @@ class SavedComparison:
             text_limit = provider._max_preview_bytes if provider._include_previews else None
             saved, before = _historical_file(path, result["file"], self.policy, text_limit)
             live, after = _local_file(provider, entry, directory, self.policy, text_limit)
+            observed_at = datetime.now(UTC).isoformat(timespec="milliseconds")
             if saved is None:
                 change = "added"
             elif saved["size"] != live["size"]:
@@ -178,5 +179,25 @@ class SavedComparison:
                 lines = difflib.unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True),
                                              fromfile="saved", tofile="live")
                 diff = "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in lines)
+            if change == "unchanged":
+                diff_status = "equal"
+            elif diff is not None:
+                diff_status = "available"
+            elif text_limit is None:
+                diff_status = "preview-disabled"
+            elif max(live["size"], saved["size"] if saved else 0) > min(MAX_TEXT_BYTES, text_limit):
+                diff_status = "size-limit"
+            else:
+                diff_status = "text-withheld"
+            # The broker needs the exact path. Browser disclosure observes the
+            # same label and text policy as the directory navigator.
+            display_path = None
+            if all(part.node().label == part.parts[-1] for part in [*entry.ancestors(), entry] if part.parts):
+                try:
+                    display_path = _check_safe_text(path, "comparison.path", max_length=4096,
+                                                    max_digit_run=self.policy.max_digit_run)
+                except ViewValidationError:
+                    pass
             return {**source, "tree_id": result["tree_id"], "workspace_snapshot_id": result["workspace_snapshot_id"],
+                    "path": display_path, "live_observed_at": observed_at, "diff_status": diff_status,
                     "saved": saved, "live": live, "change": change, "unified_diff": diff}

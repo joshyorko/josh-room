@@ -48,7 +48,7 @@ test('a selected block moving between slots carries its spotlight on layout refr
   })) });
   const scene = Object.create(window.RoomViewScene3D.FsnScene3D.prototype);
   Object.assign(scene, {
-    spotState: { dimL: 1, spotL: 1 }, stats: {}, selectedNodeId: 'node/f01',
+    spotState: { dimL: 1, spotL: 1 }, stats: {}, manualCamera: true, selectedNodeId: 'node/f01',
     _blockLodState: new Map(), THREE: { Vector3: class {
       constructor(x, y, z) { Object.assign(this, { x, y, z }); }
     } }, camPos: { add(delta) { this.dx = delta.x; } }, camTarget: { add() {} },

@@ -245,6 +245,32 @@ use `/fs/attachment` with the admitted name and digest. The server rejects
 arbitrary paths. These routes operate only on the live native workspace.
 File sizes are reported in bytes. Block heights use a bounded visual scale.
 
+### Investigate a file or a recorded outcome
+
+Start with the directory that looks relevant. Its connected platforms show
+containment. Select a candidate to see its path, type, size and available
+reader. Search can stay scoped to the directory where you started even after
+you open a match elsewhere. Previous and Next move through observed matches.
+Continue a partial search to examine more entries. An unexamined branch has
+unknown contents. Grid and the keyboard tree open the same admitted objects.
+
+In a natively launched Room, open **Compare saved version**, choose a dated
+recovery point and compare it with the selected live file. The observation
+time comes from the local comparison. A file absent at the saved point appears
+as added. Equal digests establish identical bytes; a size difference alone can
+establish a change. If equal-sized files exceed the digest limit, the result is
+unknown. The reader explains a withheld or size-limited diff. The result
+applies to that path and point. Reopening the comparison verifies the selected
+point and live observation before restoring its result. To inspect that point
+in native Time Machine, choose the Room and dated point again in VS Code, then
+use **Josh Room: Browse Recovery Point…**. Room View cannot launch that command.
+
+For a recorded tool run, the primary action opens the provider's evidence.
+Read its reported outcome, timestamped steps, and any declared links to inputs
+or outputs. A linked output opens as its own object. An attachment with
+omitted bytes offers metadata inspection. Ordinary filesystem entries report
+their file facts independently of run outcomes.
+
 ## Embedded `room-view-v1` SQLite schema
 
 ```sql

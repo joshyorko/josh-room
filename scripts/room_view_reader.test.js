@@ -17,6 +17,7 @@ class Element extends EventTarget {
   setAttribute() {}
   getAttribute() { return null; }
   append() {}
+  appendChild() {}
   querySelector() { return new Element(); }
   querySelectorAll() { return []; }
   replaceChildren() {}
@@ -60,7 +61,7 @@ function setup(available) {
   };
   const select = options => drawer.showTarget(file, { legend: {} }, {}, {}, options);
   select();
-  return { drawer, select, queries, attachments: () => attachments };
+  return { drawer, file, select, queries, attachments: () => attachments };
 }
 
 test('selection opens a summary; reading, refresh, comparison and Back keep the same file', () => {
@@ -120,4 +121,69 @@ test('closing from the scene or a detached opener focuses the selected workspace
     assert.equal(document.activeElement, selected);
     assert.match(document.getElementById('aria-live-region').textContent, /closed.*sample.pdf/);
   }
+});
+
+test('generic investigation presents only reported failure, source, and timeline capabilities', () => {
+  const { drawer } = setup(false);
+  drawer.data.filesystem = drawer.data.comparison = false;
+  const run = { objectId: 'run1', nodeKind: 'run', label: 'Build', kind: 'fail',
+    previews: [{ slot: 'execution', status: 'available', media_type: 'application/x-josh-run+json',
+      body: JSON.stringify({ status: 'failed', exit_code: 1, steps: [{ name: 'compile', status: 'fail' }] }) }],
+    links: [{ relation: 'output', target_id: 'log', label: 'Build log' }],
+  };
+  drawer.showTarget(run, { legend: {} }, { steps: [{ item_id: 'run1', name: 'compile' }] }, {});
+  assert.equal(drawer.readButton.textContent, 'Investigate run');
+  assert.match(drawer.summaryInfo.textContent, /failed.*compile.*exit 1/);
+  assert.equal(drawer.runRelated.hidden, false);
+  assert.equal(drawer.compareButton.hidden, true);
+  drawer.readButton.click();
+  assert.equal(drawer.activeTab, 'content');
+  assert.equal(drawer.activePreviewSlot, 'execution');
+  assert.equal(drawer.drawerEl.querySelector('[data-tab="timeline"]').hidden, false);
+  drawer.showTarget({ ...run, objectId: 'log', nodeKind: 'file', links: [],
+    previews: [{ slot: 'log', language: 'log', status: 'available', body: 'synthetic log' }] },
+    { legend: {} }, { steps: [] }, {});
+  assert.equal(drawer.readButton.textContent, 'Read log');
+  assert.equal(drawer.runRelated.hidden, true);
+  assert.equal(drawer.drawerEl.querySelector('[data-tab="timeline"]').hidden, true);
+});
+
+test('closing and reopening restores the same PDF position only with matching admitted content', async () => {
+  const { drawer, select } = setup(true);
+  drawer._contentDigest = async target => JSON.stringify(target.attachments);
+  let restored;
+  drawer._renderEvidence = (_target, reading) => { restored = reading; };
+  drawer.readButton.click();
+  const page = { dataset: { pageNum: '4' }, getBoundingClientRect: () => ({ top: -32, bottom: 257 }) };
+  const viewport = { scrollLeft: 17, querySelectorAll: () => [page], getBoundingClientRect: () => ({ top: 10 }) };
+  drawer.tabEvidenceEl.querySelector = selector => selector === '.pdf-viewport' ? viewport
+    : { getAttribute: () => 'sample.pdf' };
+  drawer._pdfScale = 1.8;
+  drawer.dismiss();
+  drawer.hide();
+  select();
+  await drawer._openReader('evidence');
+  assert.equal(restored.page, 4);
+  assert.equal(restored.pageOffset, 42);
+  assert.equal(restored.pdfLeft, 17);
+  assert.equal(restored.scale, 1.8);
+  drawer.dismiss();
+  drawer.hide();
+  select();
+  drawer._contentDigest = async () => 'changed';
+  await drawer._openReader('evidence');
+  assert.equal(restored, null);
+});
+
+test('a frozen observation containing only PDF metadata offers details', () => {
+  const { drawer, file } = setup(true);
+  drawer.data.filesystem = drawer.data.comparison = false;
+  drawer.data.mode = 'offline';
+  drawer.showTarget({ ...file, objectId: 'frozen', attachments: [
+    { name: 'guide.pdf', media_type: 'application/pdf', size: 42, embedded: false },
+  ] }, { legend: {} }, {}, {});
+  assert.equal(drawer.readButton.textContent, 'File details');
+  assert.match(drawer.summaryInfo.textContent, /omitted/);
+  drawer.readButton.click();
+  assert.equal(drawer.activeTab, 'details');
 });

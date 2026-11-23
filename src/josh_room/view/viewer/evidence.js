@@ -223,6 +223,7 @@
     } catch (_) {
       return renderCodeViewer(bodyText, { language: 'log' });
     }
+    if (!run || typeof run !== 'object') return renderCodeViewer(bodyText, { language: 'json' });
     const card = document.createElement('div');
     card.className = 'run-card';
 
@@ -258,14 +259,15 @@
       heading.textContent = 'Execution Steps';
       card.appendChild(heading);
       for (const st of run.steps) {
+        if (!st || typeof st !== 'object') continue;
         const isFail = st.status === 'fail' || st.status === 'failed' || st.status === 'error';
         const row = document.createElement('div');
-        row.className = `run-step-row ${isFail ? 'run-step-fail' : 'run-step-pass'}`;
+        row.className = 'run-step-row' + (isFail ? ' run-step-fail' : st.status === 'pass' ? ' run-step-pass' : '');
         const name = document.createElement('span');
         name.textContent = `${isFail ? '×' : '●'} ${st.name}`;
         const meta = document.createElement('span');
         meta.className = 'muted-text';
-        meta.textContent = `${st.status}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
+        meta.textContent = `${st.status || 'Status unavailable'}${st.duration_ms != null ? ` · ${st.duration_ms} ms` : ''}`;
         row.append(name, meta);
         card.appendChild(row);
       }
@@ -279,6 +281,37 @@
       card.appendChild(renderCodeViewer(run.logs.join('\n'), { language: 'log' }));
     }
     return card;
+  }
+
+  function readerAction(target, descriptor, steps) {
+    const native = global.RoomViewLayout.isWorkspace(descriptor);
+    const previews = target.previews || [];
+    const text = previews.find(p => p.status === 'available' && p.body != null);
+    const execution = !native && previews.find(p => p.status === 'available' && p.media_type === 'application/x-josh-run+json');
+    const attachments = (target.attachments || []).filter(a => a.embedded !== false);
+    const pdf = attachments.find(a => a.media_type === 'application/pdf');
+    const image = attachments.find(a => a.media_type?.startsWith('image/'));
+    const reportedRun = !native && (execution || target.nodeKind === 'run');
+    if (reportedRun && (execution || steps.length)) {
+      let detail = target.summary;
+      if (execution) {
+        try {
+          const run = JSON.parse(execution.body);
+          const failed = Array.isArray(run?.steps) && run.steps.find(step => ['failed', 'fail', 'error'].includes(step?.status));
+          detail = [run?.status, failed?.name, run?.exit_code != null && 'exit ' + run.exit_code].filter(Boolean).join(' · ') || detail;
+        } catch { /* The content view displays the admitted text. */ }
+      }
+      return { label: 'Investigate run', tab: execution ? 'content' : 'timeline', slot: execution?.slot, detail };
+    }
+    if (text) {
+      const label = text.media_type === 'text/x-diff' ? 'Read diff' : text.media_type === 'application/json'
+        ? 'Inspect JSON' : text.slot === 'log' || text.language === 'log' ? 'Read log' : 'Read file';
+      return { label, tab: 'content', slot: text.slot };
+    }
+    if (pdf || image) return { label: pdf ? 'Read PDF' : 'View image', tab: 'evidence' };
+    if (attachments.length) return { label: 'Inspect evidence', tab: 'evidence' };
+    if (!native && steps.length) return { label: 'View timeline', tab: 'timeline' };
+    return { label: 'File details', tab: 'details', detail: target.attachments?.length ? 'Attachment bytes omitted from this observation' : previews.find(p => p.reason)?.reason || 'No preview available' };
   }
 
   class EvidenceDrawer {
@@ -300,6 +333,7 @@
         document.getElementById('btn-compare-tab'));
       this.fileSummary = document.getElementById('file-summary');
       this.summaryInfo = document.getElementById('file-summary-info');
+      this.runRelated = document.getElementById('run-related');
       this.readButton = document.getElementById('btn-read-file');
       this.compareButton = document.getElementById('btn-compare-file');
       this.readerBack = document.getElementById('btn-reader-back');
@@ -310,6 +344,7 @@
       this.lightboxImg = document.getElementById('lightbox-img');
       this.lightboxCaption = document.getElementById('lightbox-caption');
 
+      this.readingPositions = new Map();
       this.currentItem = null;
       this.contentFingerprint = null;
       this.currentObjectId = null;
@@ -370,19 +405,41 @@
       this.tabTimelineEl.hidden = tabName !== 'timeline';
     }
 
-    _openReader(tab, opener) {
+    async _openReader(tab, opener) {
       if (!this.reader) return;
+      const item = this.currentItem;
+      const saved = this.readingPositions.get(this.currentObjectId);
+      let position = this.summaryReading;
+      if (tab === 'compare') this.readingBeforeCompare = position;
+      if (!position && saved && tab !== 'compare') {
+        const unchanged = await this.readingUnchanged(item, saved);
+        if (this.currentItem !== item || this.fileSummary.hidden || !this.isOpen()) return;
+        if (unchanged) {
+          position = saved;
+          tab = saved.tab === 'compare' ? tab : saved.tab;
+          this.activePreviewSlot = saved.slot;
+          this._renderContent(item, this.descriptor, this.layout);
+          this.prepareAttachment = () => this._renderEvidence(item, saved);
+        } else this.readingPositions.delete(this.currentObjectId);
+      }
       this.summaryReading = null;
       this.fileSummary.hidden = true;
       this.readerBack.hidden = false;
       this.readerOpener = opener;
       this.switchTab(tab);
+      if (position && tab !== 'compare') this._restoreTextScroll(position);
       if (opener) this.readerBack.focus();
     }
 
     dismiss() {
       if (this.reader && this.fileSummary.hidden) {
-        this.summaryReading = { ...this.captureReadingPosition(), summary: true, tab: this.readTab };
+        const current = this.captureReadingPosition();
+        this.summaryReading = { ...(this.activeTab === 'compare' && this.readingBeforeCompare || current),
+          comparison: current.comparison, summary: true, tab: this.readTab };
+        this.readingBeforeCompare = null;
+        this.readingPositions.delete(this.currentObjectId);
+        this.readingPositions.set(this.currentObjectId, this.summaryReading);
+        if (this.readingPositions.size > 16) this.readingPositions.delete(this.readingPositions.keys().next().value);
         this.comparison.close();
         this.fileSummary.hidden = false;
         this.readerBack.hidden = true;
@@ -418,14 +475,29 @@
       const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
       const page = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot')).find(
         slot => slot.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top);
+      const scroll = this.tabContentEl.querySelector('.code-viewer, .json-tree');
       return {
+        textTop: scroll?.scrollTop || 0, textLeft: scroll?.scrollLeft || 0,
+        pageOffset: page ? Math.max(0, viewport.getBoundingClientRect().top - page.getBoundingClientRect().top) : 0,
+        pdfLeft: viewport?.scrollLeft || 0,
         id: this.currentObjectId, tab: this.activeTab, slot: this.activePreviewSlot,
         summary: this.reader && !this.fileSummary.hidden,
+        comparison: this.comparison.capture(),
         digest: this._contentDigest(this.currentItem),
         attachment: this.tabEvidenceEl.querySelector('.att-pill.active')?.getAttribute('data-attachment-name'),
         page: Number(page?.dataset.pageNum) || 1, fit: this._pdfFitMode, scale: this._pdfScale,
         top: this.tabContentEl.scrollTop, detailsTop: this.tabDetailsEl.scrollTop,
       };
+    }
+
+    _restoreTextScroll(position) {
+      this.tabContentEl.scrollTop = position.top || 0;
+      this.tabDetailsEl.scrollTop = position.detailsTop || 0;
+      const scroll = this.tabContentEl.querySelector('.code-viewer, .json-tree');
+      if (scroll) {
+        scroll.scrollTop = position.textTop || 0;
+        scroll.scrollLeft = position.textLeft || 0;
+      }
     }
 
     async _contentDigest(target) {
@@ -435,17 +507,21 @@
     }
 
     async readingUnchanged(target, position) {
-      return target.objectId === position.id && await position.digest === await this._contentDigest(target);
+      return (target.objectId || target.id) === position.id && await position.digest === await this._contentDigest(target);
     }
 
     hide() {
       this.comparison.select(null);
       this.reader = false;
+      this.readingBeforeCompare = null;
       this.summaryReading = null;
       this.prepareAttachment = null;
       this.returnFocus = null;
       this.readerOpener = null;
       this.summaryInfo.textContent = '';
+      this.runRelated.replaceChildren();
+      this.layout = null;
+      this.descriptor = null;
       this.fileSummary.hidden = true;
       this.readerBack.hidden = true;
       this._attRequestSeq++;
@@ -468,16 +544,20 @@
     }
 
     showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
-      this.comparison.select(target);
+      this.comparison.select(target, reading?.comparison);
       if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
       const sameObject = this.currentObjectId === (target.objectId || target.id);
-      if (!sameObject) this.summaryReading = null;
+      if (!sameObject) { this.summaryReading = null; this.readingBeforeCompare = null; }
       const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
-      this.reader = this.data.filesystem && ['file', 'artifact'].includes(target.nodeKind);
-      this.drawerEl.classList.toggle('filesystem-reader', !!this.data.filesystem);
-      if (this.data.filesystem) {
+      this.reader = ['file', 'artifact', 'run'].includes(target.nodeKind);
+      this.descriptor = descriptor;
+      this.layout = layout;
+      const native = this.data.filesystem || global.RoomViewLayout.isWorkspace(descriptor);
+      const steps = (state.steps || []).filter(s => s.item_id === (target.objectId || target.id));
+      this.drawerEl.classList.toggle('filesystem-reader', this.reader || native);
+      if (this.reader || native) {
         this.drawerEl.querySelector('[data-tab="content"]').hidden = !(target.previews || []).length;
-        this.drawerEl.querySelector('[data-tab="timeline"]').hidden = true;
+        this.drawerEl.querySelector('[data-tab="timeline"]').hidden = native || !steps.length;
         this.drawerEl.querySelector('[data-tab="evidence"]').hidden = !(target.attachments || []).length;
       }
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
@@ -518,20 +598,29 @@
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
+      this.readerBack.textContent = target.nodeKind === 'run' ? 'Back to run' : 'Back to file';
       const summary = this.reader && (reading ? reading.summary : !sameObject || wasSummary);
       this.fileSummary.hidden = !summary;
       this.readerBack.hidden = !this.reader || summary;
       this.prepareAttachment = null;
       if (this.reader) {
-        const text = previews.some(p => p.status === 'available' && p.body != null);
-        const reason = !text && !atts.length ? previews.find(p => p.reason)?.reason || 'No preview available' : '';
-        this.readButton.textContent = reason ? 'File details' : 'Read file';
+        const action = readerAction(target, descriptor, steps);
+        this.runRelated.replaceChildren();
+        this.runRelated.hidden = true;
+        if (action.label === 'Investigate run' && (target.links || []).length) {
+          this.runRelated.appendChild(this._buildLinksSection(target, layout, true));
+          this.runRelated.hidden = false;
+        }
+        this.readButton.textContent = action.label;
         this.summaryInfo.textContent = [
           Number.isSafeInteger(target.fields?.file_bytes) ? target.fields.file_bytes + ' bytes' : null,
-          reason,
+          action.detail || (!native && target.summary),
         ].filter(Boolean).join(' · ');
         this.compareButton.hidden = this.comparison.tab.hidden;
-        if (!sameObject || !preserveTab) this.readTab = text ? 'content' : atts.length ? 'evidence' : 'details';
+        if (!sameObject || !preserveTab) {
+          this.readTab = action.tab;
+          this.activePreviewSlot = action.slot || null;
+        }
       }
 
       if (changed || deferContent) {
@@ -567,8 +656,7 @@
 
       if (reading) {
         this.switchTab(reading.tab);
-        this.tabContentEl.scrollTop = reading.top;
-        this.tabDetailsEl.scrollTop = reading.detailsTop;
+        this._restoreTextScroll(reading);
       } else if (preserveTab) {
         this.switchTab(this.activeTab);
       } else if (previews.length > 0) {
@@ -585,7 +673,7 @@
       this.showTarget(item, descriptor, state, layout || null, { quantileBin, preserveTab: false });
     }
 
-    _buildLinksSection(target, layout) {
+    _buildLinksSection(target, layout, compact = false) {
       const objId = target.objectId || target.id;
       const outgoing = target.links || [];
       const incoming = (layout && layout.incomingLinksByObjectId && layout.incomingLinksByObjectId.get(objId)) || [];
@@ -596,7 +684,7 @@
 
       const heading = document.createElement('div');
       heading.className = 'links-heading';
-      heading.textContent = 'Object Relationships (Click to Fly)';
+      heading.textContent = compact ? 'Related evidence' : 'Related objects';
       section.appendChild(heading);
 
       const list = document.createElement('div');
@@ -610,7 +698,7 @@
         return { path: targetId, label: targetId };
       };
 
-      for (const lk of outgoing) {
+      for (const lk of (compact ? outgoing.slice(0, 4) : outgoing)) {
         const info = resolveLabelAndPath(lk.target_id);
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -623,9 +711,10 @@
         rel.textContent = `${lk.relation} →`;
         const pathSpan = document.createElement('span');
         pathSpan.className = 'link-target-path';
-        pathSpan.textContent = info.path;
+        pathSpan.textContent = compact ? info.label : info.path;
+        pathSpan.title = info.path;
         btn.append(rel, pathSpan);
-        if (lk.label) {
+        if (lk.label && !compact) {
           const desc = document.createElement('span');
           desc.className = 'link-desc';
           desc.textContent = lk.label;
@@ -637,7 +726,7 @@
         list.appendChild(btn);
       }
 
-      for (const back of incoming) {
+      for (const back of (compact ? [] : incoming)) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'link-chip';
@@ -792,7 +881,7 @@
         [metricName, target.metric != null ? `${target.metric}${unit}${quantileBin ? ` (Bin ${quantileBin}/5)` : ''}` : '—'],
         ['Updated', target.updated_at || '—'],
       ];
-      if (!global.RoomViewLayout.isWorkspace(descriptor)) rows.unshift(['ID', target.objectId || target.id]);
+
       if (target.group) rows.push([descriptor.group_label || 'Group', target.group]);
       if (target.stage) rows.push(['Stage', target.stage]);
       for (const [k, v] of Object.entries(target.fields || {})) {
@@ -818,7 +907,14 @@
         sumEl.textContent = target.summary;
         this.tabDetailsEl.appendChild(sumEl);
       }
-      this.tabDetailsEl.appendChild(grid);
+      const provenance = document.createElement('details');
+      const provenanceHeading = document.createElement('summary');
+      provenanceHeading.textContent = 'Object provenance';
+      const source = document.createElement('p');
+      source.textContent = [descriptor.title, this.data.mode === 'offline' ? 'Frozen observation' : 'Live observation',
+        target.objectId || target.id].filter(Boolean).join(' · ');
+      provenance.append(provenanceHeading, source);
+      this.tabDetailsEl.append(grid, provenance);
 
       const linksSection = this._buildLinksSection(target, layout);
       if (linksSection) this.tabDetailsEl.appendChild(linksSection);
@@ -1099,7 +1195,10 @@
         const landing = slots[(reading?.page || 1) - 1] || slots[0];
         await renderPageIntoSlot(landing);
         if (reqSeq !== this._attRequestSeq) return;
-        if (reading) viewportEl.scrollTop = landing.offsetTop - slots[0].offsetTop;
+        if (reading) {
+          viewportEl.scrollTop = landing.offsetTop - slots[0].offsetTop + (reading.pageOffset || 0);
+          viewportEl.scrollLeft = reading.pdfLeft || 0;
+        }
 
         btnFitW.addEventListener('click', () => { this._pdfFitMode = 'width'; this._pdfScale = 1.0; rerenderVisible(); });
         btnFitP.addEventListener('click', () => { this._pdfFitMode = 'page'; this._pdfScale = 1.0; rerenderVisible(); });

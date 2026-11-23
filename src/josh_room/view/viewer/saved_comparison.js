@@ -17,17 +17,31 @@
       this.active = false;
     }
 
-    select(target) {
+    capture() {
+      if (!this.intent) return null;
+      return {
+        ...this.intent,
+        top: this.provenance ? this.panel.scrollTop : this.intent.top,
+        expanded: this.provenance ? this.provenance.open : this.intent.expanded,
+        diffLeft: this.diff ? this.diff.scrollLeft : this.intent.diffLeft,
+      };
+    }
+
+    select(target, reading = null) {
       const id = this.data.comparison && target && ['file', 'artifact'].includes(target.nodeKind)
         ? target.objectId : null;
       const generation = this.data.fsGeneration;
       this.tab.hidden = !id || !generation;
       if (!this.tab.hidden && this.target?.id === id && this.target.generation === generation) return;
       this.close();
+      this.intent = id && reading?.id === id ? reading : null;
       this.target = this.tab.hidden ? null : { id, generation };
     }
 
     close() {
+      this.intent = this.capture();
+      this.provenance = null;
+      this.diff = null;
       this.pending?.abort();
       this.pending = null;
       this.active = false;
@@ -76,6 +90,10 @@
     }
 
     async loadPoints() {
+      const previous = this.capture();
+      this.intent = previous;
+      this.diff = null;
+      this.provenance = null;
       const status = element('p', 'Reading available recovery points…');
       status.setAttribute('role', 'status');
       const reload = element('button', 'Reload recovery points');
@@ -86,6 +104,7 @@
       const result = await this.request('points', {}, status);
       if (!result) return;
       if (!result.points.length) {
+        this.intent = null;
         status.textContent = result.portable ? 'Only portable snapshots are available. They do not support selective comparison.'
           : 'No saved recovery points are available for this Room.';
         return;
@@ -108,16 +127,24 @@
       compare.disabled = true;
       const output = element('div');
       output.className = 'saved-comparison-result';
+      const remember = point => point && {
+        id: this.target.id, point: { id: point.id, snapshot: point.snapshot, date: point.date },
+        compared: false, top: 0, diffLeft: 0, expanded: false,
+      };
       select.addEventListener('change', () => {
         this.pending?.abort();
+        this.intent = remember(result.points.find(entry => entry.id === select.value));
+        this.provenance = this.diff = null;
         output.replaceChildren();
         status.textContent = '';
         compare.disabled = !select.value;
       });
-      compare.addEventListener('click', async () => {
+      const comparePoint = async (restore = null) => {
         const point = result.points.find(entry => entry.id === select.value);
         if (!point) return;
-        status.textContent = 'Comparing the selected file…';
+        this.intent = remember(point);
+        this.provenance = this.diff = null;
+        status.textContent = restore ? 'Checking the saved and live versions…' : 'Comparing the selected file…';
         output.replaceChildren();
         const receipt = await this.request('compare', { point: point.id }, status);
         if (!receipt) return;
@@ -125,7 +152,21 @@
           status.textContent = 'The selected recovery point changed. Reload the choices.';
           return;
         }
-        status.textContent = 'File comparison · ' + receipt.change;
+        const verified = receipt.live.sha256 && (!receipt.saved || receipt.saved.sha256);
+        const identity = verified ? JSON.stringify([receipt.workspace_snapshot_id, receipt.tree_id,
+          receipt.saved?.sha256 || null, receipt.live.sha256, receipt.change, receipt.path, receipt.diff_status]) : null;
+        if (restore && (!identity || identity !== restore.identity)) {
+          status.textContent = 'The previous comparison could not be verified unchanged. Compare again to read the current result.';
+          return;
+        }
+        this.intent = { ...this.intent, compared: true, identity };
+        const descriptions = {
+          modified: 'Modified · saved and live files differ.',
+          unchanged: 'Unchanged · saved and live SHA-256 digests match.',
+          added: 'Added in the live Room · this path was absent at the selected point.',
+          unknown: 'Contents unknown · the files have equal sizes and a digest is unavailable.',
+        };
+        status.textContent = descriptions[receipt.change] || 'Comparison status unavailable.';
         const sides = element('div');
         sides.className = 'comparison-sides';
         const side = (label, date, info) => {
@@ -135,12 +176,14 @@
           sides.append(column);
         };
         side('Saved', receipt.date, receipt.saved);
-        side('Live', 'Result received ' + new Date().toISOString(), receipt.live);
+        side('Live', 'Observed ' + receipt.live_observed_at, receipt.live);
         output.append(sides);
         const provenance = element('details');
+        this.provenance = provenance;
         provenance.append(element('summary', 'Recovery point and file digests'));
         const facts = element('dl');
         const field = (name, value) => facts.append(element('dt', name), element('dd', value));
+        field('Compared path', receipt.path || 'Withheld by the Room display policy');
         field('Saved recovery point', receipt.date + ' · ' + receipt.snapshot);
         field('Workspace snapshot', receipt.workspace_snapshot_id);
         field('Saved tree', receipt.tree_id);
@@ -156,14 +199,44 @@
         if (receipt.unified_diff) {
           const diff = element('pre', receipt.unified_diff);
           diff.setAttribute('aria-label', 'Saved to live text diff');
+          this.diff = diff;
           output.append(diff);
-        } else if (receipt.change === 'modified') {
-          output.append(element('p', 'The file changed. A text diff is unavailable for this comparison.'));
+        } else {
+          const textStatus = {
+            'size-limit': 'The file exceeds the text comparison size limit.',
+            'text-withheld': 'Text comparison is unavailable under the preview and sanitization policy.',
+            'preview-disabled': 'Text previews are disabled for this Room view.',
+          };
+          if (textStatus[receipt.diff_status]) output.append(element('p', textStatus[receipt.diff_status]));
         }
         output.append(provenance);
-      });
+        const continuation = element('details');
+        continuation.append(element('summary', 'Continue in Time Machine'),
+          element('p', 'In the VS Code Josh Room sidebar, select this Room and its saved recovery point ' +
+            point.snapshot + ' (' + point.date + '). Choose Josh Room: Browse Recovery Point…' +
+            (receipt.path ? ' and navigate to ' + receipt.path + '.' : '. The path is withheld in this view.')));
+        output.append(continuation);
+        if (restore) {
+          provenance.open = restore.expanded;
+          if (this.diff) this.diff.scrollLeft = restore.diffLeft;
+          this.panel.scrollTop = restore.top;
+        }
+      };
+      compare.addEventListener('click', () => comparePoint());
       status.textContent = result.portable ? 'Portable snapshots cannot be compared here.' : '';
       this.panel.replaceChildren(label, compare, status, output, reload);
+      if (previous) {
+        const pin = result.points.find(entry => entry.id === previous.point.id &&
+          entry.snapshot === previous.point.snapshot && entry.date === previous.point.date);
+        if (!pin) {
+          this.intent = null;
+          status.textContent = 'The selected recovery point is no longer available. Choose a point to compare.';
+        } else {
+          select.value = pin.id;
+          compare.disabled = false;
+          if (previous.compared) await comparePoint(previous);
+        }
+      }
     }
   }
 
