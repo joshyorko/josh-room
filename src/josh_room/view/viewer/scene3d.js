@@ -1651,7 +1651,7 @@
         const labelTitle = layout.isUnixTree ? ped.path : ped.label;
         const w = ped.treeDepth === 0 ? 4.4 : (ped.treeDepth === 1 ? 3.8 : 3.1);
         const prio = ped.treeDepth === 0 ? 110 : (ped.treeDepth === 1 ? 92 : 76 - Math.min(20, ped.treeDepth * 5));
-        addLabelEntry(ped, labelTitle, sub, prio, w, Math.max(0.42, ped.height * 0.72), ped.depth / 2 + 0.78, -52);
+        addLabelEntry(ped, labelTitle, ped.collapsed ? 'Collapsed · expand' : sub, prio, w, Math.max(0.42, ped.height * 0.72), ped.depth / 2 + 0.78, -52);
       }
 
       for (const sNode of layout.summaryBlocks) {

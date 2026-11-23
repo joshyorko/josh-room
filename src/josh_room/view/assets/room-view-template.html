@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;9982cbbadd3c779843f6498f8a660a133d922403b949b2e3e19f548f7909e073&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;ea571925c7e3bd8e29c6bb04c8d96925d12646df943aaed0c7aa74d7d4e48001&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -15839,6 +15839,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     // Pass 1: Measure every directory's pedestal dimensions & recursive subtree width
     const measureDir = (dir) => {
       const isRoot = dir.depth === 0;
+      const explicitlyCollapsed = opts.collapsedDirs?.has(dir.id)
+        && (!selectedAncestors.has(dir.id) || selected?.id === dir.id);
       const autoCollapsed = (
         !isRoot &&
         dir.dirChildren.length > 0 &&
@@ -15853,7 +15855,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const visibleLeafCount = aggregatedLeaves ? AGGREGATE_TOP_K + 1 : dir.leafChildren.length;
 
       let dims;
-      if (autoCollapsed) {
+      if (explicitlyCollapsed) {
+        dims = pedestalDimensionsForCount(0, { minWidth: isRoot ? 6.4 : 4.4, minDepth: 2.9 });
+      } else if (autoCollapsed) {
         const w = Math.max(5.8, dir.dirChildren.length * 1.18 + 1.6);
         dims = { cols: dir.dirChildren.length, rows: 1, width: w, depth: 3.3, height: 0.54 };
       } else if (isRoot) {
@@ -15866,7 +15870,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         dims = pedestalDimensionsForCount(visibleLeafCount, { minWidth: minW, minDepth: minD });
       }
 
-      const childPlans = autoCollapsed ? [] : dir.dirChildren.map((child) => measureDir(child));
+      const childPlans = explicitlyCollapsed || autoCollapsed ? [] : dir.dirChildren.map((child) => measureDir(child));
 
       // Split into 2 staggered tiers ONLY for wide legacy groups (>=5 direct subdirs & no grandchildren)
       const useTwoTierRows = (
@@ -15899,6 +15903,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       return {
         dir,
         autoCollapsed,
+        explicitlyCollapsed,
         aggregatedLeaves,
         visibleLeafCount,
         dims,
@@ -16026,7 +16031,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         coverage: d.fields?.coverage,
         height: plan.dims.height,
         counts: d.counts,
-        collapsed: plan.autoCollapsed,
+        collapsed: Boolean(plan.explicitlyCollapsed || plan.autoCollapsed),
         aggregated: plan.aggregatedLeaves,
         hiddenCount: plan.aggregatedLeaves ? d.leafChildren.length - AGGREGATE_TOP_K : 0,
         childDirCount: d.dirChildren.length,
@@ -16039,6 +16044,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         parentPed.childrenIds.push(pedNode.id);
       }
 
+      if (plan.explicitlyCollapsed) return pedNode;
       if (plan.autoCollapsed) {
         // SpaceTree collapsed child-directory summary towers directly on this pedestal
         const kids = d.dirChildren;
@@ -17873,7 +17879,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const labelTitle = layout.isUnixTree ? ped.path : ped.label;
         const w = ped.treeDepth === 0 ? 4.4 : (ped.treeDepth === 1 ? 3.8 : 3.1);
         const prio = ped.treeDepth === 0 ? 110 : (ped.treeDepth === 1 ? 92 : 76 - Math.min(20, ped.treeDepth * 5));
-        addLabelEntry(ped, labelTitle, sub, prio, w, Math.max(0.42, ped.height * 0.72), ped.depth / 2 + 0.78, -52);
+        addLabelEntry(ped, labelTitle, ped.collapsed ? 'Collapsed · expand' : sub, prio, w, Math.max(0.42, ped.height * 0.72), ped.depth / 2 + 0.78, -52);
       }
 
       for (const sNode of layout.summaryBlocks) {
@@ -18490,13 +18496,16 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const isRoot = dirNode.id === 'root';
         const label = isRoot
           ? `/ (${descriptor.title || 'Room View'})`
-          : `${dirNode.label} (${dirNode.counts ? dirNode.counts.total : 0})`;
+          : global.RoomViewLayout.isWorkspace(descriptor)
+            ? `${dirNode.label} (${dirNode.fields?.coverage || 'observed entries only'})`
+            : `${dirNode.label} (${dirNode.counts ? dirNode.counts.total : 0})`;
         const model = {
           id: dirNode.id,
           label,
           path: dirNode.path,
           parentId,
           children: [],
+          lazy: dirNode.fields?.coverage === 'not-examined' && !dirNode.dirChildren.length && !dirNode.leafChildren.length,
           nodeType: dirNode.nodeType,
         };
         this.modelById.set(model.id, model);
@@ -18569,8 +18578,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const rootModel = buildModel(layout.treeRoot, null);
 
       const renderNode = (model, container, setsize, posinset) => {
-        const hasKids = model.children && model.children.length > 0;
-        const isExpanded = this.expanded.has(model.id);
+        const hasKids = model.lazy || model.children.length > 0;
+        const isExpanded = !model.lazy && this.expanded.has(model.id);
 
         const itemWrap = document.createElement('div');
         itemWrap.setAttribute('role', 'treeitem');
@@ -18646,6 +18655,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     toggleExpand(nodeId) {
+      if (this.modelById.get(nodeId)?.lazy) {
+        this.callbacks.onSelectNode?.(nodeId);
+        return;
+      }
       if (this.callbacks.onToggle && this.modelById.get(nodeId)?.nodeType !== 'more') {
         this.callbacks.onToggle(nodeId, !this.expanded.has(nodeId));
         return;
@@ -18704,6 +18717,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       } else if (direction === 'end') {
         this.selectAndFocus(this.flatOrder[this.flatOrder.length - 1], { emit: true });
       } else if (direction === 'right' && curModel) {
+        if (curModel.lazy) return this.toggleExpand(curModel.id);
         if (curModel.children && curModel.children.length) {
           if (!this.expanded.has(curModel.id)) {
             this.toggleExpand(curModel.id);
@@ -20549,6 +20563,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.fsResume = null;
       const previousPage = this.fsPage;
       const previousNode = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      const wasReading = this.evidence.isOpen();
       const previousChain = previousPage
         ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
           ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
@@ -20562,7 +20577,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }, request.signal);
       if (!refresh) {
         this.filesystemSearch?.invalidate();
-        this.fsCoverage = 'Loading directory…';
+        this.fsCoverage = kind === 'directory' || id === 'root' ? 'Loading directory…' : 'Loading selection…';
         this._updateNavigationButtons();
       }
       try {
@@ -20581,6 +20596,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           }
         } else {
           page = await query('list', { id, ...(cursor ? { cursor } : {}) });
+          if (cursor && previousNode?.nodeType === 'item' && previousPage?.directory.id === id) {
+            file = (await query('preview', { id: previousNode.objectId })).node;
+          }
         }
         if (request.signal.aborted) return;
         const selected = file || page.directory;
@@ -20605,13 +20623,18 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.scene3d?.focusNode(selectedId, { instant, moveCamera });
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
-        if (target && (file || (id !== 'root' && !refresh))) {
+        if (target && ((!refresh && (!cursor || wasReading) && (file || id !== 'root')) || (refresh && wasReading))) {
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
             quantileBin: block?.quantileBin, preserveTab: previousId === selectedId,
           });
         } else if (!refresh) this.evidence.hide();
       } catch (error) {
         if (request.signal.aborted) return;
+        if (error.status === 429) {
+          this.fsCoverage = 'Directory request busy. Retry to continue.';
+          this.fsResume = () => this._openFilesystem(id, { pushHistory, cursor, kind, refresh, instant, moveCamera });
+          return;
+        }
         this.filesystemSearch?.invalidate();
         this.evidence.hide();
         this.scene3d?.clearSpotlight();
@@ -20625,7 +20648,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this._syncFromData();
         if ((error.status === 409 || error.status === 404) && previousChain.length) {
           try {
-            await this._restoreFilesystem(previousChain, request.signal);
+            await this._restoreFilesystem(previousChain, request.signal, wasReading);
           } catch (_) {
             if (!request.signal.aborted) {
               this.fsRetry = true;
@@ -20641,7 +20664,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
     }
 
-    async _restoreFilesystem(chain, signal) {
+    async _restoreFilesystem(chain, signal, wasReading) {
       let index = 1;
       let directory = 'root';
       let generation;
@@ -20671,6 +20694,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
               await this._openFilesystem(next?.id || directory, {
                 kind: next?.node_kind || 'directory', pushHistory: false, instant: true,
               });
+              if (!wasReading) this.evidence.hide();
               return;
             }
           }

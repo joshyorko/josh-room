@@ -40,13 +40,16 @@
         const isRoot = dirNode.id === 'root';
         const label = isRoot
           ? `/ (${descriptor.title || 'Room View'})`
-          : `${dirNode.label} (${dirNode.counts ? dirNode.counts.total : 0})`;
+          : global.RoomViewLayout.isWorkspace(descriptor)
+            ? `${dirNode.label} (${dirNode.fields?.coverage || 'observed entries only'})`
+            : `${dirNode.label} (${dirNode.counts ? dirNode.counts.total : 0})`;
         const model = {
           id: dirNode.id,
           label,
           path: dirNode.path,
           parentId,
           children: [],
+          lazy: dirNode.fields?.coverage === 'not-examined' && !dirNode.dirChildren.length && !dirNode.leafChildren.length,
           nodeType: dirNode.nodeType,
         };
         this.modelById.set(model.id, model);
@@ -119,8 +122,8 @@
       const rootModel = buildModel(layout.treeRoot, null);
 
       const renderNode = (model, container, setsize, posinset) => {
-        const hasKids = model.children && model.children.length > 0;
-        const isExpanded = this.expanded.has(model.id);
+        const hasKids = model.lazy || model.children.length > 0;
+        const isExpanded = !model.lazy && this.expanded.has(model.id);
 
         const itemWrap = document.createElement('div');
         itemWrap.setAttribute('role', 'treeitem');
@@ -196,6 +199,10 @@
     }
 
     toggleExpand(nodeId) {
+      if (this.modelById.get(nodeId)?.lazy) {
+        this.callbacks.onSelectNode?.(nodeId);
+        return;
+      }
       if (this.callbacks.onToggle && this.modelById.get(nodeId)?.nodeType !== 'more') {
         this.callbacks.onToggle(nodeId, !this.expanded.has(nodeId));
         return;
@@ -254,6 +261,7 @@
       } else if (direction === 'end') {
         this.selectAndFocus(this.flatOrder[this.flatOrder.length - 1], { emit: true });
       } else if (direction === 'right' && curModel) {
+        if (curModel.lazy) return this.toggleExpand(curModel.id);
         if (curModel.children && curModel.children.length) {
           if (!this.expanded.has(curModel.id)) {
             this.toggleExpand(curModel.id);

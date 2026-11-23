@@ -136,6 +136,7 @@
       this.fsResume = null;
       const previousPage = this.fsPage;
       const previousNode = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      const wasReading = this.evidence.isOpen();
       const previousChain = previousPage
         ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
           ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
@@ -149,7 +150,7 @@
       }, request.signal);
       if (!refresh) {
         this.filesystemSearch?.invalidate();
-        this.fsCoverage = 'Loading directory…';
+        this.fsCoverage = kind === 'directory' || id === 'root' ? 'Loading directory…' : 'Loading selection…';
         this._updateNavigationButtons();
       }
       try {
@@ -168,6 +169,9 @@
           }
         } else {
           page = await query('list', { id, ...(cursor ? { cursor } : {}) });
+          if (cursor && previousNode?.nodeType === 'item' && previousPage?.directory.id === id) {
+            file = (await query('preview', { id: previousNode.objectId })).node;
+          }
         }
         if (request.signal.aborted) return;
         const selected = file || page.directory;
@@ -192,13 +196,18 @@
           this.scene3d?.focusNode(selectedId, { instant, moveCamera });
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
-        if (target && (file || (id !== 'root' && !refresh))) {
+        if (target && ((!refresh && (!cursor || wasReading) && (file || id !== 'root')) || (refresh && wasReading))) {
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
             quantileBin: block?.quantileBin, preserveTab: previousId === selectedId,
           });
         } else if (!refresh) this.evidence.hide();
       } catch (error) {
         if (request.signal.aborted) return;
+        if (error.status === 429) {
+          this.fsCoverage = 'Directory request busy. Retry to continue.';
+          this.fsResume = () => this._openFilesystem(id, { pushHistory, cursor, kind, refresh, instant, moveCamera });
+          return;
+        }
         this.filesystemSearch?.invalidate();
         this.evidence.hide();
         this.scene3d?.clearSpotlight();
@@ -212,7 +221,7 @@
         this._syncFromData();
         if ((error.status === 409 || error.status === 404) && previousChain.length) {
           try {
-            await this._restoreFilesystem(previousChain, request.signal);
+            await this._restoreFilesystem(previousChain, request.signal, wasReading);
           } catch (_) {
             if (!request.signal.aborted) {
               this.fsRetry = true;
@@ -228,7 +237,7 @@
       }
     }
 
-    async _restoreFilesystem(chain, signal) {
+    async _restoreFilesystem(chain, signal, wasReading) {
       let index = 1;
       let directory = 'root';
       let generation;
@@ -258,6 +267,7 @@
               await this._openFilesystem(next?.id || directory, {
                 kind: next?.node_kind || 'directory', pushHistory: false, instant: true,
               });
+              if (!wasReading) this.evidence.hide();
               return;
             }
           }
