@@ -315,6 +315,7 @@ def capture_hauler_component(
     manifests: Sequence[Path] = (),
     files: Sequence[tuple[Path, str]] = (),
     cancellation: Any = None,
+    normalize_archive=None,
 ) -> dict[str, Any] | None:
     """Acquire selected content through Hauler and persist one small component tree."""
     del workspace  # Source selection is explicit and independent of workspace contents.
@@ -421,6 +422,11 @@ def capture_hauler_component(
                 raise RoomStoreHaulerError("Hauler produced an invalid component archive")
             if metadata.st_size > MAX_ARCHIVE_BYTES:
                 raise RoomStoreHaulerError("Hauler archive exceeds the portable export limit")
+            if normalize_archive is not None:
+                normalize_archive(archive, references)
+                metadata = archive.lstat()
+                if metadata.st_size > MAX_ARCHIVE_BYTES:
+                    raise RoomStoreHaulerError("normalized archive exceeds the portable export limit")
             protect_private_file(archive)
             archive_digest = hashlib.sha256()
             with archive.open("rb") as source:

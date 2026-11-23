@@ -2194,13 +2194,30 @@ async function newRoom() {
   return choice.id === "catalog" ? saveCatalogRoom() : saveRoom({ forceCreate: true });
 }
 
+async function chooseCatalogComponents(root, label, updating) {
+  const choice = await vscode.window.showQuickPick([
+    { id: "default", label: updating ? "Keep saved components" : "Workspace only" },
+    { id: "custom", label: "Choose RCC, Homebrew or Hauler components" },
+  ], { title: `Components for ${label}` });
+  if (!choice) return undefined;
+  if (choice.id === "default") return null;
+  const defaults = updating ? undefined : { request: { components: {
+    rcc_environment: "omit", homebrew_recovery: "omit", hauler_content: "omit",
+  } } };
+  const selected = await require("./component-picker").pickComponents(vscode, root, defaults,
+    () => runJoshRoom(["snapshot", "homebrew-capabilities"], root));
+  return selected?.componentOptions;
+}
+
 async function saveCatalogRoom() {
   assertWorkspaceTrusted("save a Catalog Room");
   const argsFor = (selection, command) => ["composition", command, "--workspace", selection.root,
     "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
     "--parent-room", selection.parentRoom, "--expected-domain", selection.dimension.encryption_domain_id, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
-      ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : [])])];
+      ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : []),
+      ...(row.component_options ? ["--child-components", row.path, JSON.stringify(row.component_options)] : [])])];
   return require("./catalog-actions").saveCatalog(vscode, {
+    chooseComponents: chooseCatalogComponents,
     dimensions: async (root) => dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true })),
     plan: (selection) => runJoshRoom(argsFor(selection, "capture-plan"), selection.root),
     save: (selection, approval) => runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"], selection.root,
@@ -2247,10 +2264,12 @@ async function updateCompositionRoom(kind) {
     const args = ["composition", command, "--dimension", marker.dimension_id, "--namespace", ticket.namespace, "--operation-id", ticket.operationId,
       ...(kind === "child" ? ["--room", ticket.room, "--child-snapshot", ticket.baseline, "--workspace", root]
         : ["--parent-room", ticket.room, "--parent-snapshot", ticket.baseline, "--set-child", `${ticket.child}=${ticket.pin}`]),
+      ...(ticket.component_options ? ["--component-options", JSON.stringify(ticket.component_options)] : []),
       ...(apply ? ["--approve", ticket.approval] : [])];
     return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
   };
-  return require("./catalog-actions").updateRoom(vscode, { marker, kind, pending: extensionContext.workspaceState.get(key),
+  return require("./catalog-actions").updateRoom(vscode, { marker, kind,
+    chooseComponents: () => chooseCatalogComponents(root, marker.project_id, true), pending: extensionContext.workspaceState.get(key),
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
 }
 

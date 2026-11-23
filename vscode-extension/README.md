@@ -29,7 +29,7 @@ ID. Settings, recovery and maintenance are available from the relevant
 Dimension's context menu. Show Details opens the sanitized Save receipt.
 
 `Josh: Save Catalog Room` saves selected independent children to exact recovery
-points. Review each child's Git capture mode before approving. Use **Enter Child
+points. Review each child’s Git capture mode and optional RCC, Homebrew or Hauler selections before approving. Use **Enter Child
 Room** to restore one child, **Save Child Room** to save subsequent changes, and
 **Refresh Catalog Child Pins** to publish a parent that references an updated
 child. **Split Workspace into Rooms (Preview Only)** is a separate discovery

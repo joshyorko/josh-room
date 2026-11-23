@@ -494,6 +494,8 @@ def build_parser() -> argparse.ArgumentParser:
         if action in ('capture-plan', 'save'):
             operation.add_argument('--expected-domain', help='encryption domain from the existing enrollment receipt; required if not cached in config')
             operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--child-components', action='append', nargs=2, default=[],
+                                   metavar=('CHILD', 'OPTIONS_JSON'), help='component selection and explicit inputs for one child')
             operation.add_argument('--child-source-only', action='append', default=[], metavar='CHILD',
                                    help='exclude Git history for this selected child; otherwise use its capture policy')
             operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice, no implicit default')
@@ -516,6 +518,7 @@ def build_parser() -> argparse.ArgumentParser:
         if action in ('plan-child-save', 'save-child'):
             operation.add_argument('--workspace', type=Path, required=True)
             operation.add_argument('--room', required=True)
+            operation.add_argument('--component-options', metavar='OPTIONS_JSON', help='explicit component selection and inputs for this child')
             operation.add_argument('--child-snapshot', required=True, help='specific saved baseline, never latest')
         else:
             operation.add_argument('--parent-room', required=True)
@@ -1806,6 +1809,16 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         return controller.reconcile(limit=args.limit, max_seconds=args.max_seconds)
 
 
+def _composition_component_options(encoded):
+    try:
+        options = json.loads(encoded)
+    except (TypeError, ValueError):
+        raise ValueError("component options require a JSON object") from None
+    if not isinstance(options, dict):
+        raise ValueError("component options require a JSON object")  # noqa: TRY004 - invalid CLI input
+    return options
+
+
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
         if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
@@ -1814,11 +1827,14 @@ def dispatch(args, instance: Path) -> dict:
             dimension = _effective_dimension(args)
             if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
                 raise ValueError('composition requires an explicit provider Dimension')
+            encoded = getattr(args, 'component_options', None)
+            options = _composition_component_options(encoded) if encoded is not None else None
             try:
                 with provider_runtime(instance, dimension, getattr(args, '_selected_encryption_material', None), args.namespace) as (authority, factory, private):
                     if args.composition_command in ('plan-child-save', 'save-child'):
                         return save_child(args.workspace, dimension, args.namespace, args.room, args.child_snapshot,
-                            args.operation_id, authority, factory, private, approval=getattr(args, 'approve', None))
+                            args.operation_id, authority, factory, private, approval=getattr(args, 'approve', None),
+                            component_options=options)
                     pins = {}
                     for value in args.set_child:
                         path, separator, snapshot = value.rpartition('=')
@@ -1853,7 +1869,14 @@ def dispatch(args, instance: Path) -> dict:
                 children = {row['path'] for row in assignments if row['outcome'] == 'child'}
                 if len(overrides) != len(args.child_source_only) or not overrides <= children:
                     raise ValueError('--child-source-only requires distinct selected child paths')
+                child_components = {}
+                for path, encoded in args.child_components:
+                    if path not in children or path in child_components:
+                        raise ValueError('--child-components requires distinct selected child paths')
+                    child_components[path] = _composition_component_options(encoded)
                 for row in assignments:
+                    if row['path'] in child_components:
+                        row['component_options'] = child_components[row['path']]
                     if row['path'] in overrides:
                         row['capture_mode'] = 'source-only'
                 preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
