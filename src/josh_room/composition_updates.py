@@ -352,8 +352,55 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
                 'snapshot_id': output, 'capture_mode': mode, 'components': descriptor.to_dict()['components'], 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
 
 
+def _verify_parent_workspace(workspace, authority, room, snapshot, operation):
+    marker = context_status(workspace)
+    if (not marker.get('path_matches') or marker.get('composition_namespace') != authority.namespace
+            or marker.get('dimension_id') != authority.binding['dimension_id']
+            or marker.get('encryption_domain_id') != authority.binding['encryption_domain_id']
+            or marker.get('project_id') != room or marker.get('snapshot_id') != snapshot):
+        raise ValueError('open the restored parent at its exact saved location')
+    fd = _directory(workspace)
+    try:
+        raw = _read_regular(fd, MANIFEST)
+    finally:
+        os.close(fd)
+    if hashlib.sha256(raw).hexdigest() != operation['manifest_sha256']:
+        raise ValueError('local parent manifest differs from its saved recovery point')
+
+
+def parent_children(workspace, authority, namespace, room, snapshot):
+    """Read immutable choices for the exact entered parent from its namespace ledger."""
+    _, _, state = _open(authority, namespace)
+    body = state.to_dict()
+    committed = [op for op in body['operations'].values() if op['phase'] == 'committed']
+    parent = next((op for op in committed if (op['parent_pin']['room_id'],
+                   op['parent_pin']['logical_jat_id']) == (room, snapshot)), None)
+    if parent is None:
+        raise ValueError('parent recovery point is unavailable')
+    _verify_parent_workspace(workspace, authority, room, snapshot, parent)
+    history = {}
+    for op in committed:
+        for pin in op['child_pins'].values():
+            history.setdefault(pin['room_id'], set()).add(pin['logical_jat_id'])
+    for update in body.get('child_updates', {}).values():
+        if update['phase'] == 'committed':
+            pin = update['pin']
+            history.setdefault(pin['room_id'], set()).add(pin['logical_jat_id'])
+    projects = body['dimension_catalog']['projects']
+    children = []
+    for path, pin in sorted(parent['child_pins'].items()):
+        child = pin['room_id']
+        records = projects[child]['snapshots']
+        points = [{'snapshot_id': point, 'created_at': records[point]['created_at']}
+                  for point in sorted(history[child], key=lambda point: (records[point]['created_at'], point), reverse=True)]
+        children.append({'path': path, 'room_id': child, 'snapshot_id': pin['logical_jat_id'],
+                         'recovery_points': points})
+    return {'ok': True, 'namespace': namespace, 'parent_room_id': room, 'parent_snapshot_id': snapshot,
+            'current_parent': projects[room]['latest'] == snapshot, 'children': children}
+
+
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
-                   authority, store_factory, private, *, approval=None):
+                   authority, store_factory, private, *, approval=None, workspace=None):
     """Publish a new immutable parent from saved bytes and explicitly selected pins."""
     _identifier(operation_id)
     envelope, etag, state = _open(authority, namespace)
@@ -362,6 +409,8 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
         and op['parent_pin']['room_id'] == room and op['parent_pin']['logical_jat_id'] == baseline), None)
     if previous_op is None:
         raise ValueError('parent baseline is not committed')
+    if workspace is not None:
+        _verify_parent_workspace(workspace, authority, room, baseline, previous_op)
     old = body['operations'].get(operation_id)
     output = 'jat-' + _slot(namespace, 'parent-refresh:' + operation_id)
     if old and (old['plan']['expected_parent_logical_jat_id'], old['plan']['parent_logical_jat_id']) != (baseline, output):

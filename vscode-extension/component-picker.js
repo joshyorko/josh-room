@@ -40,7 +40,7 @@ function validAgentProfile(profile) {
 }
 
 // This selection is a request, never storage or source authorization.
-async function pickComponents(vscode, source, previous, discoverInstalled, discoverAgents, discoverSessions) {
+async function pickComponents(vscode, source, previous, discoverInstalled, discoverAgents, discoverSessions, catalogSources) {
   let agentProfiles = [];
   let agentReason = 'Recovery admission could not be checked. No history capture is authorized.';
   let agentDenials;
@@ -77,7 +77,8 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
       if (candidate?.available === true && candidate.format === "josh-room-homebrew-installed-v1" && candidate.prefix === "/home/linuxbrew/.linuxbrew") installed = candidate;
     } catch (_error) { /* Unavailable discovery never authorizes capture. */ }
   }
-  const robot = fs.existsSync(require('node:path').join(source, 'robot.yaml'));
+  const hasRobot = folder => fs.existsSync(require('node:path').join(folder, 'robot.yaml'));
+  const robot = catalogSources ? catalogSources.every(hasRobot) : hasRobot(source);
   const defaults = previous?.request?.components || {
     rcc_environment: robot ? 'refresh' : 'keep', homebrew_recovery: 'keep', hauler_content: 'keep',
   };
@@ -93,7 +94,7 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
   ];
   const rows = [
     { label: 'Workspace source + Git state — always included', mandatory: true, kind: vscode.QuickPickItemKind?.Separator ?? -1, detail: 'Uses the reviewed workspace capture policy; source-only omits Git history.' },
-    { id: 'rcc_environment', label: 'RCC exact environment', picked: defaults.rcc_environment !== 'omit', detail: robot ? 'Refresh/reuse robot.yaml artifact; platform bound.' : 'Keep previous artifact if present; no root robot.yaml to capture.' },
+    { id: 'rcc_environment', label: 'RCC exact environment', picked: defaults.rcc_environment !== 'omit', unavailable: Boolean(catalogSources && !robot), detail: catalogSources && !robot ? 'Unavailable: every selected folder needs a root robot.yaml. Choose a smaller group to capture individual environments.' : robot ? 'Refresh/reuse robot.yaml artifact; platform bound.' : 'Keep previous artifact if present; no root robot.yaml to capture.' },
     ...(installed.available ? [{ id: 'homebrew_installed', label: 'Installed Homebrew package/runtime (Debian 12 x64, exact prefix)', detail: 'Conditional source admission: qualified Hello build or jq/oniguruma + installed Homebrew glibc. Includes exact loader/libc bytes and a recipe fallback; replaces this point’s Homebrew recovery component.', picked: false }] : []),
     { id: 'homebrew_recovery', label: 'Homebrew recovery export', picked: defaults.homebrew_recovery !== 'omit', detail: 'Keep previous or select a prepared recovery archive. A Brewfile is a reinstall recipe, not installed binaries.' },
     { id: 'hauler_content', label: 'OCI images / additional Hauler content', picked: defaults.hauler_content !== 'omit', detail: 'Keep previous or explicitly refresh selected content.' },

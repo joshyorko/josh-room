@@ -93,12 +93,21 @@ activation/terminal hydration, or selected-file restore is added.
 
 Native commands are `Josh: Save Catalog Room`, `Josh: Enter Child Room`,
 `Josh: Save Child Room`, and `Josh: Refresh Catalog Child Pins`.
-New Room offers Save one Room first, or explicit Catalog configuration. Catalog
-configuration selects a source, child folders and optional parent-owned
-files/folders with native dialogs, then shows each child’s effective capture mode and identifies local-only content.
-Cancel before confirmation never invokes provider Save. Entry asks for the
-namespace receipt and exact relative child path; it opens the folder only after
-verified entry. Installed VSIX qualification remains separate from Node fixtures.
+Choose **Configure Catalog Room** from New Room, then select a source folder.
+**Select All on This Page** adds the eligible displayed folders. **Clear All**
+clears selections across pages. The picker shows the current count. Choose up
+to 32 independent folders. Overlapping selections must be corrected.
+
+Continue with each folder's existing Git policy and workspace files, or apply
+Git and component settings to all selected folders or a subset. Add parent-owned
+files separately. Review the storage destination, child contents, parent contents
+and local-only remainder before confirming. The original files stay on disk.
+
+In a restored Catalog parent, **Enter Child Room** lets you choose a saved child.
+**Refresh Catalog Child Pins** lets you choose a child and a particular saved
+version. The controller verifies the parent's membership and exact recovery points.
+Cold parent restore uses the CLI above. Native discovery and restore from a fresh
+machine are tracked in [issue #231](https://github.com/joshyorko/josh-room/issues/231).
 
 ## Selecting child components
 

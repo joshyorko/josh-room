@@ -131,3 +131,36 @@ def test_full_repository_child_update_stages_git_only_changes(tmp_path, monkeypa
     assert first['capture_mode'] == second['capture_mode'] == 'full-repository'
     assert first['content_sha256'] != second['content_sha256']
     assert (original / '.git/HEAD').read_bytes() != (current / '.git/HEAD').read_bytes()
+
+
+def test_parent_children_reads_only_exact_parent_and_committed_points(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from josh_room import composition_updates as updates
+    from josh_room.composition import MANIFEST
+    from josh_room.composition_transaction import canonical, manifest_for
+
+    state = stages()[-1]
+    body = state.to_dict()
+    namespace = '1' * 32
+    authority = SimpleNamespace(namespace=namespace, binding=body['scope'], read=lambda: ({'state': body}, 'etag'))
+    marker = {'path_matches': True, 'composition_namespace': namespace, 'project_id': 'parent',
+              'snapshot_id': 'jat-parent', 'dimension_id': body['scope']['dimension_id'],
+              'encryption_domain_id': body['scope']['encryption_domain_id']}
+    monkeypatch.setattr(updates, 'context_status', lambda _: marker)
+    parent = body['operations']['operation']
+    manifest = tmp_path / MANIFEST
+    manifest.write_bytes(canonical(manifest_for(state, 'operation', parent['plan_sha256'])))
+    result = updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')
+    assert result['current_parent'] and result['parent_snapshot_id'] == 'jat-parent'
+    assert result['children'] == [{'path': 'projects/-child folder', 'room_id': 'child', 'snapshot_id': 'jat-child',
+                                   'recovery_points': [{'snapshot_id': 'jat-child', 'created_at': '2026-11-18T12:00:00Z'}]}]
+    with pytest.raises(ValueError, match='unavailable'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'latest')
+    marker['path_matches'] = False
+    with pytest.raises(ValueError, match='exact saved location'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')
+    marker['path_matches'] = True
+    manifest.write_text('{}')
+    with pytest.raises(ValueError, match='manifest differs'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')

@@ -372,11 +372,11 @@ def provider_runtime(instance, dimension, material, namespace, *, authority_sess
         password = private / "password"
         cache = private / "cache"
         cache.mkdir(mode=0o700)
-        executable = _verified_restic_executable(
-            runtime_root=Path(instance).parent / "josh-room-runtime", install=True
-        )
 
         def store_factory(secret):
+            executable = _verified_restic_executable(
+                runtime_root=Path(instance).parent / "josh-room-runtime", install=True
+            )
             password.write_text(secret + "\n")
             password.chmod(0o600)
             return _restic_store_factory(

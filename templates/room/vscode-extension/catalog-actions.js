@@ -11,8 +11,8 @@ function relativeSource(root, value) {
 }
 
 function describeMode(mode) {
-  if (mode === "full-repository") return "full-repository (preserves supported Git storage)";
-  if (mode === "source-only") return "source-only (excludes Git history)";
+  if (mode === "full-repository") return "Files and Git history";
+  if (mode === "source-only") return "Files only (Git history excluded)";
   throw new Error("The controller did not provide a supported child capture mode.");
 }
 
@@ -22,9 +22,10 @@ function describeComponents(evidence, requested) {
   if (!reviewed || Object.entries(requested?.component_selection.components || {}).some(([key, value]) => reviewed[key] !== value)) {
     throw new Error("The controller could not corroborate the selected components.");
   }
-  const modes = Object.entries(reviewed).map(([name, mode]) => `${name}: ${mode}`).join(", ");
-  const digest = evidence.component_plan.artifacts_sha256;
-  return digest ? `${modes} · reviewed artifacts ${digest}` : modes;
+  const names = { rcc_environment: "RCC environment", homebrew_recovery: "Homebrew recovery", hauler_content: "OCI / Hauler content" };
+  const choices = Object.entries(reviewed).filter(([, mode]) => mode !== "omit")
+    .map(([name, mode]) => `${names[name]} (${mode === "refresh" ? "capture" : "keep if saved"})`);
+  return choices.length ? choices.join(", ") : "Workspace only";
 }
 
 function reviewedDestination(dimension, binding) {
@@ -54,35 +55,59 @@ function reviewedDestination(dimension, binding) {
   return `${dimension.display_name || id} (${binding.dimension_id}) · ${binding.provider} · ${binding.connection_id} · ${physical}`;
 }
 
-async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save }) {
+async function catalogSettings(vscode, root, children, chooseComponents) {
+  const rows = children.map(child => ({ path: child, outcome: "child" }));
+  let parent = [];
+  for (;;) {
+    const action = await vscode.window.showQuickPick([
+      { id: "continue", label: "Continue to destination" },
+      { id: "git", label: "Change Git settings" },
+      { id: "components", label: "Customize optional components" },
+      { id: "parent", label: "Choose files for the catalog itself", description: parent.map(row => row.path).join(", ") },
+    ], { title: `Save ${rows.length} selected folders as Rooms`, placeHolder: "Each folder uses its Git capture policy. Optional components are off by default." });
+    if (!action) return undefined;
+    if (action.id === "continue") return [{ path: ".", outcome: "local-only" }, ...rows, ...parent];
+    if (action.id === "parent") {
+      const owned = await vscode.window.showOpenDialog({ title: "Include in parent", defaultUri: vscode.Uri.file(root),
+        canSelectFolders: true, canSelectFiles: true, canSelectMany: true });
+      if (owned) parent = owned.map(item => ({ path: relativeSource(root, item.fsPath), outcome: "parent" }));
+      continue;
+    }
+    const scope = rows.length === 1 ? [{ row: rows[0] }] : await vscode.window.showQuickPick(
+      rows.map(row => ({ label: row.path, row, picked: true })),
+      { canPickMany: true, title: "Apply settings to folders", placeHolder: "All selected by default. Uncheck folders to override a subset." });
+    if (!scope?.length) continue;
+    if (action.id === "git") {
+      const mode = await vscode.window.showQuickPick([
+        { id: "policy", label: "Use each folder's capture policy", description: "Preserve Git history unless its policy excludes it" },
+        { id: "source-only", label: "Files only", description: "Exclude Git history" },
+      ], { title: `Git capture for ${scope.length} folders` });
+      if (!mode) continue;
+      for (const { row } of scope) {
+        if (mode.id === "policy") delete row.capture_mode;
+        else row.capture_mode = "source-only";
+      }
+    } else if (action.id === "components") {
+      const options = await chooseComponents(scope.map(({ row }) => path.join(root, row.path)));
+      if (options === undefined) continue;
+      for (const { row } of scope) {
+        if (options) row.component_options = options;
+        else delete row.component_options;
+      }
+    }
+  }
+}
+
+async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponents, plan, save }) {
   const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!source?.length) return "cancelled";
   const root = source[0].fsPath;
-  const children = await vscode.window.showOpenDialog({ title: "Capture as independent child Rooms", defaultUri: source[0], canSelectFolders: true, canSelectFiles: false, canSelectMany: true });
+  const children = await selectChildren(root);
   if (!children?.length) return "cancelled";
-  const assignments = [{ path: ".", outcome: "local-only" }, ...children.map((item) => ({ path: relativeSource(root, item.fsPath), outcome: "child" }))];
-  for (const child of assignments.filter(row => row.outcome === "child")) {
-    const mode = await vscode.window.showQuickPick([
-      { id: "policy", label: "Use workspace policy", description: "Defaults to full repository" },
-      { id: "source-only", label: "Source only", description: "Exclude this child's Git history" },
-    ], { title: `Capture mode for ${child.path}` });
-    if (!mode) return "cancelled";
-    if (mode.id === "source-only") child.capture_mode = mode.id;
-    if (chooseComponents) {
-      const options = await chooseComponents(path.join(root, child.path), child.path, false);
-      if (options === undefined) return "cancelled";
-      if (options) child.component_options = options;
-    }
-  }
-  const parentMode = await vscode.window.showQuickPick([{ label: "Metadata only parent", id: "metadata" }, { label: "Include selected parent-owned content", id: "content" }], { title: "Parent content — everything else stays local only" });
-  if (!parentMode) return "cancelled";
-  if (parentMode.id === "content") {
-    const owned = await vscode.window.showOpenDialog({ title: "Include in parent", defaultUri: source[0], canSelectFolders: true, canSelectFiles: true, canSelectMany: true });
-    if (!owned) return "cancelled";
-    assignments.push(...owned.map((item) => ({ path: relativeSource(root, item.fsPath), outcome: "parent" })));
-  }
+  const assignments = await catalogSettings(vscode, root, children, chooseComponents);
+  if (!assignments) return "cancelled";
   const configured = await dimensions(root);
-  const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Explicit Catalog Room destination" });
+  const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Where should this catalog be saved?" });
   if (!choice) return "cancelled";
   const namespace = crypto.randomUUID().replaceAll("-", "");
   const parentRoom = `catalog-${namespace}`;
@@ -95,27 +120,45 @@ async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save })
     return `${row.path} — ${describeMode(evidence?.capture_mode)}. ${describeComponents(evidence, row.component_options)}`;
   });
   const parentSummary = assignments.filter(row => row.outcome === "parent").map(row => `Parent content: ${row.path}`);
-  const approved = await vscode.window.showWarningMessage("Save this Catalog Room and its children?", {
+  const approved = await vscode.window.showWarningMessage("Save this catalog?", {
     modal: true,
-    detail: `Destination: ${destination}\n${children.length} independent child Rooms. ${assignments.filter((row) => row.outcome === "parent").length} parent-owned selections. All other content stays local and unprotected. Existing source files remain in place.\n\n${[...childSummary, ...parentSummary].join("\n")}\n\nNamespace: ${namespace}`,
-  }, "Save and acknowledge local-only content");
-  if (approved !== "Save and acknowledge local-only content") return "cancelled";
+    detail: `Destination: ${destination}\n${children.length} folders will be saved as independent Rooms. Other files stay on this device and are unprotected.\n\n${[...childSummary, ...parentSummary].join("\n")}`,
+  }, "Save catalog");
+  if (approved !== "Save catalog") return "cancelled";
   const result = await save(selection, preview.approval_sha256);
-  const savedChildren = result.children?.map(row => `${row.path} — ${row.snapshot_id} · ${row.capture_mode} · ${savedComponents(row.components)}`);
-  await vscode.window.showInformationMessage(`Catalog saved. Namespace ${result.namespace}; parent recovery point ${result.parent_snapshot_id}. Source files remain in place.\n${(savedChildren || childSummary).join("\n")}`);
+  await vscode.window.showInformationMessage(`Catalog saved with ${children.length} child Room${children.length === 1 ? "" : "s"}.`);
   return result;
 }
 
-async function enterChild(vscode, { root, marker, enter, open }) {
-  if (!marker?.snapshot_id || !marker?.dimension_id) throw new Error("Open a restored catalog parent first.");
-  const namespace = await vscode.window.showInputBox({ title: "Composition namespace from the saved receipt", validateInput: (value) => /^[a-f0-9]{32}$/.test(value) ? undefined : "Use the exact 32-character namespace." });
-  if (!namespace) return "cancelled";
-  const child = await vscode.window.showInputBox({ title: "Enter whole child Room — exact relative path", prompt: "The destination must be absent. Existing contents are never replaced or unloaded." });
-  if (!child) return "cancelled";
-  const target = path.resolve(root, child);
+async function chooseChild(vscode, marker, listChildren, refresh) {
+  if (!marker?.composition_namespace || !marker?.project_id || !marker?.snapshot_id || !marker?.dimension_id) {
+    throw new Error("Open a restored Catalog parent first.");
+  }
+  const response = await listChildren(marker);
+  if (!response?.ok || response.namespace !== marker.composition_namespace
+      || response.parent_room_id !== marker.project_id || response.parent_snapshot_id !== marker.snapshot_id
+      || !Array.isArray(response.children)) throw new Error("The verified parent changed. Reopen its recovery point.");
+  if (refresh && !response.current_parent) throw new Error("Enter the current parent recovery point before refreshing its pins.");
+  const choices = response.children.filter(row => !refresh || row.recovery_points.some(p => p.snapshot_id !== row.snapshot_id))
+    .map(row => ({ label: row.path, description: `Pinned to ${row.snapshot_id}`, row }));
+  if (!choices.length) {
+    await vscode.window.showInformationMessage(refresh ? "All child Rooms are pinned to their only saved recovery point." : "This parent has no child Rooms.");
+    return undefined;
+  }
+  const selected = await vscode.window.showQuickPick(choices, { title: refresh ? "Refresh child pin" : "Enter child Room" });
+  return selected?.row;
+}
+
+async function enterChild(vscode, { root, marker, listChildren, enter, open }) {
+  const row = await chooseChild(vscode, marker, listChildren, false);
+  if (!row) return "cancelled";
+  const target = path.resolve(root, row.path);
   relativeSource(root, target);
-  const result = await enter({ namespace, child, marker });
-  if (!result?.ok || !result.marker_verified) throw new Error("Child entry was not verified. Preserve the destination.");
+  const result = await enter({ namespace: marker.composition_namespace, child: row.path, marker });
+  if (!result?.ok || !result.marker_verified || result.namespace !== marker.composition_namespace
+      || result.room_id !== row.room_id || result.snapshot_id !== row.snapshot_id) {
+    throw new Error("Child entry did not verify the selected recovery point. Preserve the destination.");
+  }
   await vscode.window.showInformationMessage(`Child Room verified at exact recovery point ${result.snapshot_id}.`);
   await open(target);
   return result;
@@ -127,7 +170,7 @@ function savedComponents(components) {
   return names.length ? names.join(", ") : "Workspace only";
 }
 
-async function updateRoom(vscode, { marker, kind, pending, remember, chooseComponents, plan, save }) {
+async function updateRoom(vscode, { marker, kind, pending, remember, chooseComponents, listChildren, plan, save }) {
   if (!marker?.composition_namespace || !marker?.snapshot_id) throw new Error("Open a verified namespace Room first.");
   let ticket = pending;
   if (ticket && (ticket.namespace !== marker.composition_namespace || ticket.room !== marker.project_id
@@ -138,11 +181,14 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
     ticket = { namespace: marker.composition_namespace, room: marker.project_id, baseline: marker.snapshot_id,
       operationId: crypto.randomUUID().replaceAll("-", "") };
     if (kind === "parent") {
-      const child = await vscode.window.showInputBox({ title: "Refresh parent — exact child relative path" });
+      const child = await chooseChild(vscode, marker, listChildren, true);
       if (!child) return "cancelled";
-      const pin = await vscode.window.showInputBox({ title: "Exact saved child recovery point", prompt: "Use the immutable logical snapshot ID, never latest." });
-      if (!pin) return "cancelled";
-      ticket = { ...ticket, child, pin };
+      const choices = child.recovery_points.filter(point => point.snapshot_id !== child.snapshot_id)
+        .map(point => ({ label: point.created_at, description: point.snapshot_id, point }));
+      const selected = await vscode.window.showQuickPick(choices, {
+        title: `Choose a saved recovery point for ${child.path}`, matchOnDescription: true });
+      if (!selected) return "cancelled";
+      ticket = { ...ticket, child: child.path, pin: selected.point.snapshot_id };
     }
   }
   // Re-select explicit external inputs on retry. Only the approval and operation
