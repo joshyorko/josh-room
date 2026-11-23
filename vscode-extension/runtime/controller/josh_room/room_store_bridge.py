@@ -1230,10 +1230,13 @@ def _prepare_restored_components(
     restic: ResticStore,
     private_dir: Path,
     jat_root: Path,
+    *, verify_hauler=None,
 ) -> None:
     """Materialize verified components and acquire saved RCC into staged workspace."""
     try:
         with materialize_components(descriptor, restic, private_dir) as components:
+            if verify_hauler is not None and components.hauler_archive is not None:
+                verify_hauler(components.hauler_archive, descriptor.to_dict()["components"]["hauler_content"]["references"])
             if components.rcc_archive is None:
                 return
             if components.rcc_metadata is None:
@@ -1368,6 +1371,155 @@ def _verify_native_room_store_cache(dimension, domain_id, generation, secret):
         )
 
 
+def _component_inputs(workspace, modes, *, homebrew_archive, homebrew_directory,
+                      homebrew_installed, hauler_selection):
+    installed_capture = None
+    if homebrew_installed is not None:
+        if not modes or modes["homebrew_recovery"] != "refresh":
+            raise ValueError("installed Homebrew capture requires explicit refresh selection")
+        if homebrew_archive is not None or homebrew_directory is not None:
+            raise ValueError("select one Homebrew recovery input")
+        from .homebrew_prefix import capture
+        installed_prefix = Path(homebrew_installed["prefix"]).resolve()
+        if installed_prefix.is_relative_to(workspace.resolve()) or workspace.resolve().is_relative_to(installed_prefix):
+            raise ValueError("installed Homebrew closure must be separate from the workspace baseline")
+        installed_capture = capture(homebrew_installed["prefix"], homebrew_installed["formula"])
+    if homebrew_directory is not None:
+        if homebrew_archive is not None:
+            raise ValueError("select one Homebrew recovery input")
+        from .room_store_homebrew import recipe_bytes
+        recipe_bytes(homebrew_directory)
+
+    if modes:
+        if (homebrew_archive is not None or homebrew_directory is not None or homebrew_installed is not None) and modes["homebrew_recovery"] != "refresh":
+            raise ValueError("Homebrew input requires refresh selection")
+        if hauler_selection is not None and modes["hauler_content"] != "refresh":
+            raise ValueError("Hauler input requires refresh selection")
+        if modes["homebrew_recovery"] == "refresh" and homebrew_archive is None and homebrew_directory is None and homebrew_installed is None:
+            raise ValueError("Homebrew refresh requires a prepared archive")
+        if modes["hauler_content"] == "refresh" and hauler_selection is None:
+            raise ValueError("Hauler refresh requires explicit content")
+    return installed_capture
+
+
+def _component_hooks(workspace, runtime_dir, modes, *, component_value, required_components,
+                     check_component_plan, installed_capture, homebrew_archive, homebrew_directory,
+                     hauler_selection, rcc_runtime, jat_root, cancellation):
+    """Prepare local artifacts and resolve them against the caller's open repository."""
+    prepared_rcc: RccComponentPreparation | None = None
+
+    def prepare_components(latest_descriptor):
+        nonlocal prepared_rcc, homebrew_archive
+        check_component_plan(latest_descriptor)
+        if installed_capture is not None:
+            from .homebrew_prefix import prepare_archive
+            homebrew_archive = prepare_archive(installed_capture, runtime_dir / "homebrew-recovery.tar.zst")
+        if homebrew_directory is not None:
+            from .room_store_homebrew import prepare_recipe_archive
+            homebrew_archive = prepare_recipe_archive(homebrew_directory, runtime_dir / "homebrew-recovery.tar.zst")
+        if modes and modes["rcc_environment"] != "refresh":
+            return
+        prior_rcc = (
+            latest_descriptor.to_dict()["components"]["rcc_environment"]
+            if latest_descriptor is not None else None
+        )
+        try:
+            prepared_rcc = prepare_rcc_component(
+                workspace=workspace,
+                prior_component=prior_rcc,
+                directory=runtime_dir / "rcc-component",
+                cancellation=cancellation,
+                rcc_runtime=rcc_runtime,
+            )
+        except RoomStoreComponentError as error:
+            raise RoomStoreBridgeError(
+                str(error), code="rcc-capture-failed", result=error.result
+            ) from None
+
+    def resolve_components(opened_store, latest_descriptor):
+        prior_components = (
+            latest_descriptor.to_dict()["components"]
+            if latest_descriptor is not None
+            else {name: None for name in _COMPONENTS}
+        )
+        prior_rcc = prior_components["rcc_environment"]
+        if modes and modes["rcc_environment"] != "refresh":
+            rcc_component = prior_rcc if modes["rcc_environment"] == "keep" else None
+        elif (workspace / "robot.yaml").exists() or prior_rcc is not None:
+            try:
+                rcc_component = capture_rcc_component(
+                    workspace=workspace,
+                    prior_component=prior_rcc,
+                    repository_id=opened_store.repository_info.repository_id,
+                    repository_format=opened_store.repository_info.repository_format,
+                    restic=opened_store,
+                    cancellation=cancellation,
+                    rcc_runtime=rcc_runtime,
+                    prepared=prepared_rcc,
+                )
+            except RoomStoreComponentError as error:
+                raise RoomStoreBridgeError(
+                    str(error), code="rcc-capture-failed", result=error.result
+                ) from None
+        else:
+            rcc_component = component_value["rcc_environment"]
+        resolved = {**component_value, "rcc_environment": rcc_component}
+        if modes:
+            for name in ("homebrew_recovery", "hauler_content"):
+                resolved[name] = prior_components[name] if modes[name] == "keep" else None
+        managed_adapter = None
+
+        def adapter():
+            nonlocal managed_adapter
+            if jat_root is None:
+                raise RoomStoreOperationsError("selected native components require the managed JAT runtime")
+            if managed_adapter is None:
+                managed_adapter = create_managed_hauler_adapter(Path(jat_root), cancellation=cancellation)
+            return managed_adapter
+
+        try:
+            if homebrew_archive is not None:
+                installed_options = {}
+                if installed_capture is not None:
+                    from .homebrew_prefix import manifest_digest
+                    installed_options["installed_manifest_sha256"] = manifest_digest(installed_capture[0])
+                resolved["homebrew_recovery"] = capture_homebrew_component(
+                    archive=homebrew_archive, prior_component=prior_components["homebrew_recovery"],
+                    repository_id=opened_store.repository_info.repository_id,
+                    repository_format=opened_store.repository_info.repository_format,
+                    restic=opened_store, validator=adapter, cancellation=cancellation,
+                    **installed_options,
+                )
+            if hauler_selection is not None:
+                selected_adapter = adapter()
+                local_images = selected_adapter.local_images(
+                    hauler_selection["images"], all_images=hauler_selection["all_images"],
+                ) if hauler_selection["images"] or hauler_selection["all_images"] else []
+                resolved["hauler_content"] = capture_hauler_component(
+                    workspace=workspace, prior_component=prior_components["hauler_content"],
+                    repository_id=opened_store.repository_info.repository_id,
+                    repository_format=opened_store.repository_info.repository_format,
+                    restic=opened_store, hauler=selected_adapter, hauler_version=selected_adapter.hauler_version,
+                    local_images=local_images, manifests=hauler_selection["manifests"],
+                    files=hauler_selection["files"], cancellation=cancellation,
+                )
+                if local_images != (selected_adapter.local_images(
+                    hauler_selection["images"], all_images=hauler_selection["all_images"],
+                ) if hauler_selection["images"] or hauler_selection["all_images"] else []):
+                    raise RoomStoreOperationsError("local image selection changed during capture")
+        except (ManagedHaulerError, RoomStoreHaulerError, RoomStoreHomebrewError) as error:
+            raise RoomStoreOperationsError(str(error)) from None
+        missing = [name for name in required_components if resolved[name] is None]
+        if missing:
+            raise RoomStoreOperationsError(
+                "selected native component capture is unavailable"
+            )
+        check_component_plan(latest_descriptor)
+        return resolved
+
+    return prepare_components, resolve_components
+
+
 def _build_operations(
     *,
     instance: Path,
@@ -1398,32 +1550,10 @@ def _build_operations(
     from .component_selection import selection_request
     component_selection = selection_request(component_selection)
     modes = component_selection["components"] if component_selection else None
-    installed_capture = None
-    if homebrew_installed is not None:
-        if not modes or modes["homebrew_recovery"] != "refresh":
-            raise ValueError("installed Homebrew capture requires explicit refresh selection")
-        if homebrew_archive is not None or homebrew_directory is not None:
-            raise ValueError("select one Homebrew recovery input")
-        from .homebrew_prefix import capture
-        installed_prefix = Path(homebrew_installed["prefix"]).resolve()
-        if installed_prefix.is_relative_to(workspace.resolve()) or workspace.resolve().is_relative_to(installed_prefix):
-            raise ValueError("installed Homebrew closure must be separate from the workspace baseline")
-        installed_capture = capture(homebrew_installed["prefix"], homebrew_installed["formula"])
-    if homebrew_directory is not None:
-        if homebrew_archive is not None:
-            raise ValueError("select one Homebrew recovery input")
-        from .room_store_homebrew import recipe_bytes
-        recipe_bytes(homebrew_directory)
-
-    if modes:
-        if (homebrew_archive is not None or homebrew_directory is not None or homebrew_installed is not None) and modes["homebrew_recovery"] != "refresh":
-            raise ValueError("Homebrew input requires refresh selection")
-        if hauler_selection is not None and modes["hauler_content"] != "refresh":
-            raise ValueError("Hauler input requires refresh selection")
-        if modes["homebrew_recovery"] == "refresh" and homebrew_archive is None and homebrew_directory is None and homebrew_installed is None:
-            raise ValueError("Homebrew refresh requires a prepared archive")
-        if modes["hauler_content"] == "refresh" and hauler_selection is None:
-            raise ValueError("Hauler refresh requires explicit content")
+    installed_capture = _component_inputs(
+        workspace, modes, homebrew_archive=homebrew_archive, homebrew_directory=homebrew_directory,
+        homebrew_installed=homebrew_installed, hauler_selection=hauler_selection,
+    )
     original_archive = homebrew_archive
 
     def check_component_plan(latest):
@@ -1576,116 +1706,13 @@ def _build_operations(
             ) from None
         state.update(catalog=candidate, etag=etag, object_ref=object_ref)
 
-    prepared_rcc: RccComponentPreparation | None = None
-
-    def prepare_components(latest_descriptor):
-        nonlocal prepared_rcc, homebrew_archive
-        check_component_plan(latest_descriptor)
-        if installed_capture is not None:
-            from .homebrew_prefix import prepare_archive
-            homebrew_archive = prepare_archive(installed_capture, runtime_dir / "homebrew-recovery.tar.zst")
-        if homebrew_directory is not None:
-            from .room_store_homebrew import prepare_recipe_archive
-            homebrew_archive = prepare_recipe_archive(homebrew_directory, runtime_dir / "homebrew-recovery.tar.zst")
-        if modes and modes["rcc_environment"] != "refresh":
-            return
-        prior_rcc = (
-            latest_descriptor.to_dict()["components"]["rcc_environment"]
-            if latest_descriptor is not None else None
-        )
-        try:
-            prepared_rcc = prepare_rcc_component(
-                workspace=workspace,
-                prior_component=prior_rcc,
-                directory=runtime_dir / "rcc-component",
-                cancellation=cancellation,
-                rcc_runtime=rcc_runtime,
-            )
-        except RoomStoreComponentError as error:
-            raise RoomStoreBridgeError(
-                str(error), code="rcc-capture-failed", result=error.result
-            ) from None
-
-    def resolve_components(opened_store, latest_descriptor):
-        prior_components = (
-            latest_descriptor.to_dict()["components"]
-            if latest_descriptor is not None
-            else {name: None for name in _COMPONENTS}
-        )
-        prior_rcc = prior_components["rcc_environment"]
-        if modes and modes["rcc_environment"] != "refresh":
-            rcc_component = prior_rcc if modes["rcc_environment"] == "keep" else None
-        elif (workspace / "robot.yaml").exists() or prior_rcc is not None:
-            try:
-                rcc_component = capture_rcc_component(
-                    workspace=workspace,
-                    prior_component=prior_rcc,
-                    repository_id=opened_store.repository_info.repository_id,
-                    repository_format=opened_store.repository_info.repository_format,
-                    restic=opened_store,
-                    cancellation=cancellation,
-                    rcc_runtime=rcc_runtime,
-                    prepared=prepared_rcc,
-                )
-            except RoomStoreComponentError as error:
-                raise RoomStoreBridgeError(
-                    str(error), code="rcc-capture-failed", result=error.result
-                ) from None
-        else:
-            rcc_component = component_value["rcc_environment"]
-        resolved = {**component_value, "rcc_environment": rcc_component}
-        if modes:
-            for name in ("homebrew_recovery", "hauler_content"):
-                resolved[name] = prior_components[name] if modes[name] == "keep" else None
-        managed_adapter = None
-
-        def adapter():
-            nonlocal managed_adapter
-            if jat_root is None:
-                raise RoomStoreOperationsError("selected native components require the managed JAT runtime")
-            if managed_adapter is None:
-                managed_adapter = create_managed_hauler_adapter(Path(jat_root), cancellation=cancellation)
-            return managed_adapter
-
-        try:
-            if homebrew_archive is not None:
-                installed_options = {}
-                if installed_capture is not None:
-                    from .homebrew_prefix import manifest_digest
-                    installed_options["installed_manifest_sha256"] = manifest_digest(installed_capture[0])
-                resolved["homebrew_recovery"] = capture_homebrew_component(
-                    archive=homebrew_archive, prior_component=prior_components["homebrew_recovery"],
-                    repository_id=opened_store.repository_info.repository_id,
-                    repository_format=opened_store.repository_info.repository_format,
-                    restic=opened_store, validator=adapter, cancellation=cancellation,
-                    **installed_options,
-                )
-            if hauler_selection is not None:
-                selected_adapter = adapter()
-                local_images = selected_adapter.local_images(
-                    hauler_selection["images"], all_images=hauler_selection["all_images"],
-                ) if hauler_selection["images"] or hauler_selection["all_images"] else []
-                resolved["hauler_content"] = capture_hauler_component(
-                    workspace=workspace, prior_component=prior_components["hauler_content"],
-                    repository_id=opened_store.repository_info.repository_id,
-                    repository_format=opened_store.repository_info.repository_format,
-                    restic=opened_store, hauler=selected_adapter, hauler_version=selected_adapter.hauler_version,
-                    local_images=local_images, manifests=hauler_selection["manifests"],
-                    files=hauler_selection["files"], cancellation=cancellation,
-                )
-                if local_images != (selected_adapter.local_images(
-                    hauler_selection["images"], all_images=hauler_selection["all_images"],
-                ) if hauler_selection["images"] or hauler_selection["all_images"] else []):
-                    raise RoomStoreOperationsError("local image selection changed during capture")
-        except (ManagedHaulerError, RoomStoreHaulerError, RoomStoreHomebrewError) as error:
-            raise RoomStoreOperationsError(str(error)) from None
-        missing = [name for name in required_components if resolved[name] is None]
-        if missing:
-            raise RoomStoreOperationsError(
-                "selected native component capture is unavailable"
-            )
-        check_component_plan(latest_descriptor)
-        return resolved
+    prepare_components, resolve_components = _component_hooks(
+        workspace, runtime_dir, modes, component_value=component_value,
+        required_components=required_components, check_component_plan=check_component_plan,
+        installed_capture=installed_capture, homebrew_archive=homebrew_archive,
+        homebrew_directory=homebrew_directory, hauler_selection=hauler_selection,
+        rcc_runtime=rcc_runtime, jat_root=jat_root, cancellation=cancellation,
+    )
 
     def write_marker(
         descriptor,

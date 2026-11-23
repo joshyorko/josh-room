@@ -293,6 +293,35 @@ def test_local_only_repository_cannot_lend_one_parent_file(tmp_path):
         capture_plan(source, dimension, "1" * 32, "parent", assignments)
 
 
+def test_initial_component_approval_keeps_local_options_out_of_request(tmp_path, monkeypatch):
+    import json
+
+    from josh_room import composition_components
+
+    source, dimension, assignments, _ = fixture(tmp_path)
+    selection = {"format_version": 1, "components": {
+        "rcc_environment": "omit", "homebrew_recovery": "refresh", "hauler_content": "omit"
+    }}
+    options = {"homebrew_directory": "/synthetic/private-recovery-input", "component_selection": selection}
+    approved = {"selection": selection, "inputs_sha256": "1" * 64, "artifacts_sha256": "2" * 64}
+
+    def preview(workspace, selected_dimension, room, policy_sha256, component_options):
+        assert (workspace, selected_dimension, component_options) == (source / "child", dimension, options)
+        return approved
+
+    monkeypatch.setattr(composition_components, "component_plan", preview)
+    assignments[1]["component_options"] = options
+    request = capture_plan(source, dimension, "1" * 32, "parent", assignments)["request"]
+    assert request["plan_version"] == 4
+    assert request["child_evidence"]["child"]["component_plan"] == approved
+    assert options["homebrew_directory"] not in json.dumps(request)
+    assert "component_options" not in request["assignments"][1]
+    _child_view(source, "child", tmp_path / "view", request)
+    assignments[0]["component_options"] = options
+    with pytest.raises(ValueError, match="invalid capture assignment"):
+        capture_plan(source, dimension, "1" * 32, "parent", assignments)
+
+
 @pytest.mark.parametrize("kind", ["tracked-policy", "deleted-working-copy", "gitlink-without-gitmodules"])
 def test_child_index_conflicts_are_refused_before_approval(tmp_path, kind):
     import subprocess

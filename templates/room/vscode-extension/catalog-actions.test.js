@@ -84,3 +84,72 @@ test("parent refresh confirms exact path and pin without rewriting the working f
     plan: async (ticket) => { assert.equal(ticket.pin, "jat-child-new"); return { changed: true, approval_sha256: "digest", snapshot_id: "jat-parent-new" }; },
     save: async (ticket) => { assert.equal(ticket.child, "projects/a"); return { ok: true, snapshot_id: "jat-parent-new" }; } });
 });
+
+test("child-specific mode and component inputs reach both plan and approved capture", async () => {
+  const source = "/synthetic/work";
+  const children = ["projects/a", "projects/b"];
+  const components = { rcc_environment: "omit", homebrew_recovery: "refresh", hauler_content: "omit" };
+  const options = { component_selection: { format_version: 1, components }, homebrew_directory: "/synthetic/recipe" };
+  const dialogs = [[{ fsPath: source }], children.map(name => ({ fsPath: source + "/" + name }))];
+  const picks = [{ id: "policy" }, { id: "source-only" }, { id: "metadata" },
+    { dimension: { id: "test", encryption_domain_id: "00000000-0000-4000-8000-000000000001" } }];
+  const vscode = { window: {
+    showOpenDialog: async () => dialogs.shift(), showQuickPick: async () => picks.shift(),
+    showWarningMessage: async (_title, settings, action) => {
+      assert.match(settings.detail, /projects\/a.*full-repository.*homebrew_recovery: refresh/);
+      assert.match(settings.detail, /projects\/b.*source-only.*Workspace only/);
+      return action;
+    },
+    showInformationMessage: async () => {},
+  } };
+  let approved;
+  await saveCatalog(vscode, {
+    dimensions: async () => [], chooseComponents: async (root, child) => {
+      assert.equal(root, source + "/" + child);
+      return child === children[0] ? options : null;
+    },
+    plan: async selection => {
+      approved = selection;
+      assert.deepEqual(selection.assignments.slice(1), [
+        { path: children[0], outcome: "child", component_options: options },
+        { path: children[1], outcome: "child", capture_mode: "source-only" },
+      ]);
+      return { approval_sha256: "test", request: { child_evidence: {
+        [children[0]]: { capture_mode: "full-repository", component_plan: { selection: options.component_selection } },
+        [children[1]]: { capture_mode: "source-only" },
+      } } };
+    },
+    save: async (selection, approval) => {
+      assert.deepEqual(selection, approved); assert.equal(approval, "test");
+      return { ok: true, namespace: selection.namespace, parent_snapshot_id: "parent" };
+    },
+  });
+});
+
+test("retry retains approval without persisting explicit external component paths", async () => {
+  const marker = { composition_namespace: "1".repeat(32), project_id: "child", snapshot_id: "jat-old" };
+  const options = { component_selection: { format_version: 1, components: {
+    rcc_environment: "omit", homebrew_recovery: "refresh", hauler_content: "omit",
+  } }, homebrew_directory: "/synthetic/recipe" };
+  const vscode = { window: { showWarningMessage: async (_, settings, action) => {
+    assert.match(settings.detail, /homebrew_recovery: refresh/); return action;
+  }, showInformationMessage: async () => {} } };
+  let pending;
+  const callbacks = {
+    kind: "child", marker, remember: async value => { pending = value; }, chooseComponents: async () => options,
+    plan: async ticket => {
+      assert.deepEqual(ticket.component_options, options);
+      return { approval_sha256: "receipt", changed: true, snapshot_id: "new", request: { plan: {
+        capture_mode: "full-repository", component_plan: { selection: options.component_selection },
+      } } };
+    },
+  };
+  await assert.rejects(updateRoom(vscode, { ...callbacks, save: async () => { throw Error("interrupted"); } }), /interrupted/);
+  assert.equal(pending.customComponents, true);
+  assert.ok(!JSON.stringify(pending).includes(options.homebrew_directory));
+  await updateRoom(vscode, { ...callbacks, pending, save: async ticket => {
+    assert.deepEqual(ticket.component_options, options);
+    return { ok: true, marker_verified: true, snapshot_id: "new", components: { homebrew_recovery: {} } };
+  } });
+  assert.equal(pending, undefined);
+});

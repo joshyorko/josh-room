@@ -112,7 +112,7 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
   }
   const components = Object.fromEntries(['rcc_environment', 'homebrew_recovery', 'hauler_content'].map(id => [id, chosen.some(row => row.id === id) ? 'keep' : 'omit']));
   if (components.rcc_environment !== 'omit' && robot) components.rcc_environment = 'refresh';
-  const args = [];
+  const inputs = {};
   const installedSelected = chosen.some(row => row.id === 'homebrew_installed');
   if (installedSelected) {
     if (!installed.available) throw new Error('Installed Homebrew capture is unavailable.');
@@ -121,7 +121,7 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
     const formula = await vscode.window.showInputBox({ title: 'Installed Homebrew formula', prompt: 'Supported: hello (qualified build) or jq (declared oniguruma + installed Homebrew glibc); validated before Save', ignoreFocusOut: true, validateInput: value => ['hello', 'jq'].includes(value.trim()) ? undefined : 'Enter hello or jq; other packages remain unqualified.' });
     if (!formula?.trim()) return undefined;
     components.homebrew_recovery = 'refresh';
-    args.push('--brew-installed-prefix', installed.prefix, '--brew-formula', formula.trim());
+    inputs.homebrew_installed = { prefix: installed.prefix, formula: formula.trim() };
   }
   for (const [id, title, actions] of [
     ['homebrew_recovery', 'Homebrew recovery export', ['Keep previous', ...(process.platform === 'linux' ? ['Select Brewfile-only recipe directory'] : []), 'Select prepared archive']],
@@ -132,21 +132,23 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
     if (!action) return undefined;
     if (action === 'Keep previous') continue;
     components[id] = 'refresh';
-    if (action === 'All tagged local OCI images') args.push('--all-images');
+    if (id === 'hauler_content') inputs.hauler_selection = { images: [], all_images: false, manifests: [], files: [] };
+    if (action === 'All tagged local OCI images') inputs.hauler_selection.all_images = true;
     else if (action === 'Select OCI image references') {
       const text = await vscode.window.showInputBox({ title: action, prompt: 'Local image references separated by whitespace; no implicit pull', ignoreFocusOut: true });
       if (!text?.trim()) return undefined;
-      for (const reference of text.trim().split(/\s+/)) args.push('--image', reference);
+      inputs.hauler_selection.images = text.trim().split(/\s+/);
     } else {
       const files = await vscode.window.showOpenDialog({ title: action, canSelectFiles: action !== 'Select Brewfile-only recipe directory', canSelectFolders: action === 'Select Brewfile-only recipe directory', canSelectMany: false });
       if (!files?.length) return undefined;
       if (action === 'Select additional Hauler file') {
         const name = await vscode.window.showInputBox({ title: 'Hauler file name', prompt: 'Name this explicitly selected content', ignoreFocusOut: true });
         if (!name?.trim()) return undefined;
-        args.push('--hauler-file', files[0].fsPath, name.trim());
+        inputs.hauler_selection.files.push([files[0].fsPath, name.trim()]);
         continue;
       }
-      args.push(id === 'homebrew_recovery' ? (action === 'Select Brewfile-only recipe directory' ? '--brew-directory' : '--brew-archive') : '--hauler-manifest', files[0].fsPath);
+      if (id === 'hauler_content') inputs.hauler_selection.manifests.push(files[0].fsPath);
+      else inputs[action === 'Select Brewfile-only recipe directory' ? 'homebrew_directory' : 'homebrew_archive'] = files[0].fsPath;
     }
   }
   const agentEntries = [];
@@ -156,9 +158,18 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
     if (!selected) return undefined;
     agentEntries.push({ tool: row.tool, profile_ref: selected.profile.profile_ref });
   }
+  const args = [];
+  if (inputs.homebrew_installed) args.push('--brew-installed-prefix', inputs.homebrew_installed.prefix, '--brew-formula', inputs.homebrew_installed.formula);
+  if (inputs.homebrew_archive) args.push('--brew-archive', inputs.homebrew_archive);
+  if (inputs.homebrew_directory) args.push('--brew-directory', inputs.homebrew_directory);
+  const hauler = inputs.hauler_selection;
+  if (hauler?.all_images) args.push('--all-images');
+  for (const reference of hauler?.images || []) args.push('--image', reference);
+  for (const manifest of hauler?.manifests || []) args.push('--hauler-manifest', manifest);
+  for (const file of hauler?.files || []) args.push('--hauler-file', ...file);
   if (agentEntries.length) args.push('--agent-selection', JSON.stringify({ format: 'josh-room.save-agent-selection.v1', entries: agentEntries }));
   const request = { format_version: 1, components };
-  return { request, args: ['--component-selection', JSON.stringify(request), ...args], allImages: args.includes('--all-images') };
+  return { request, componentOptions: { component_selection: request, ...inputs }, args: ['--component-selection', JSON.stringify(request), ...args], allImages: args.includes('--all-images') };
 }
 
 function planText(preview) {

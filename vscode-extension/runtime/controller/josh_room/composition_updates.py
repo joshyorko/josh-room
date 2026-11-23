@@ -22,6 +22,7 @@ from .composition import (
     validate_manifest,
     validate_payload_path,
 )
+from .composition_component_contract import verify_component_snapshots
 from .composition_git_integrity import verify_staged_git
 from .composition_lifecycle import (
     CONTENT_DIGEST_ALGORITHM,
@@ -68,8 +69,6 @@ def _descriptor(authority, state, room, snapshot):
     if value['workspace']['repository_id'] != state.to_dict()['scope']['repository_id']:
         raise ValueError('descriptor repository differs from namespace')
     _verify_descriptor_contract(state, descriptor)
-    if any(value['components'].values()):
-        raise ValueError('component-bearing namespace snapshots require component verification')
     return record, descriptor
 
 
@@ -88,6 +87,7 @@ def _proof(store, descriptor, private):
         raise ValueError('saved inventory differs from effective policy')
     validate_child_git(target, scan.paths, policy.capture_mode)
     verify_staged_git(target, scan.paths, policy.capture_mode, private)
+    verify_component_snapshots(store, descriptor, private)
     return target
 
 
@@ -233,7 +233,7 @@ def _binding_failure(namespace, room, snapshot, operation_id, new_snapshot):
 
 
 def save_child(workspace, dimension, namespace, room, baseline, operation_id,
-               authority, store_factory, private, *, approval=None):
+               authority, store_factory, private, *, approval=None, component_options=None):
     """Plan or apply an independent child Save; never refresh a parent implicitly."""
     _identifier(operation_id)
     envelope, etag, state = _open(authority, namespace)
@@ -259,6 +259,11 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
     view, plan = _child_view(workspace, private, namespace, room, baseline, accepted, expected_policy, mode)
     if old is None or 'plan_version' in old['plan']:
         plan['plan_version'] = 3
+    from .composition_component_contract import artifacts_digest
+    from .composition_components import component_plan
+    selected = component_plan(workspace, dimension, room, expected_policy, component_options, previous, source=view)
+    if selected is not None:
+        plan.update(component_plan=selected, plan_version=4)
     _baseline_policy(view, expected_policy)
     marker = context_status(workspace)
     if marker.get('dimension_id') != dimension.dimension_id or marker.get('encryption_domain_id') != authority.binding['encryption_domain_id']:
@@ -272,7 +277,9 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
     with store_factory(envelope['secret']) as store:
         _repository(store, envelope)
         proof = _proof(store, previous, private)
-        changed = _content_digest(proof) != plan['content_sha256']
+        prior_components = previous.to_dict()['components']
+        component_change = selected is not None and selected['artifacts_sha256'] != artifacts_digest(prior_components)
+        changed = component_change or _content_digest(proof) != plan['content_sha256']
         if approval is None:
             return {'ok': True, 'status': 'approval-required', 'approval_sha256': digest,
                     'request': request, 'changed': changed, 'snapshot_id': output if changed else baseline}
@@ -285,24 +292,30 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             except (OSError, ValueError):
                 return _binding_failure(namespace, room, baseline, operation_id, False)
             return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline,
-                    'namespace': namespace, 'capture_mode': mode, 'catalog_writes': False, 'parent_refreshed': False,
+                    'namespace': namespace, 'capture_mode': mode, 'components': prior_components, 'catalog_writes': False, 'parent_refreshed': False,
                     'marker_verified': context_status(workspace).get('snapshot_id') == baseline}
         if old is None:
             body = state.to_dict()
-            body['contract'] = 'composition-safety-v3'
+            if selected is not None or body['contract'] == 'composition-safety-v4':
+                body['contract'] = 'composition-safety-v4'
+            else:
+                body['contract'] = 'composition-safety-v3'
             body.setdefault('child_updates', {})
             body['child_updates'][operation_id] = {'plan': plan, 'plan_sha256': plan_digest(plan), 'phase': 'reserved', 'pin': None}
             body['revision'] += 1
             state = CompositionSafetyState.from_dict(body)
             envelope, etag = _commit(authority, envelope, etag, state)
         if state.to_dict()['child_updates'][operation_id]['phase'] != 'committed':
-            def claim():
+            def claim(name=None):
                 nonlocal envelope, etag
-                envelope, etag = _claim(authority, envelope, etag, plan)
+                slot = plan if name is None else {'logical_jat_id': _slot(namespace, output + ':' + name)}
+                envelope, etag = _claim(authority, envelope, etag, slot)
             _baseline_policy(workspace, expected_policy)
             _baseline_policy(view, expected_policy)
             descriptor, scan = _capture(view, store, private, plan, dimension,
-                authority.binding['encryption_domain_id'], claim=claim, parent=previous, inherited_policy=INHERITED_POLICY)
+                authority.binding['encryption_domain_id'], claim=claim, parent=previous, inherited_policy=INHERITED_POLICY,
+                **({'component_options': component_options, 'component_workspace': workspace, 'component_claim': claim}
+                   if selected is not None else {}))
             value = descriptor.to_dict()
             if (value['capture_mode'] != mode or value['capture_policy_sha256'] != expected_policy
                     or value['source'].get('composition_policy') != INHERITED_POLICY):
@@ -321,18 +334,22 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             body['revision'] += 1
             state = CompositionSafetyState.from_dict(body)
             with _admitted_source(Path(workspace), plan) as fd:
+                if selected is not None and component_plan(
+                    workspace, dimension, room, expected_policy, component_options, previous, source=view
+                ) != selected:
+                    raise ValueError("child component source changed before publication")
                 _recheck_source(workspace, fd, plan)
                 envelope, etag = _commit(authority, envelope, etag, state)
         else:
-            _, committed = _descriptor(authority, state, room, output)
-            if committed.to_dict().get('parent_logical_jat_id') != baseline or _content_digest(_proof(store, committed, private)) != plan['content_sha256']:
+            _, descriptor = _descriptor(authority, state, room, output)
+            if descriptor.to_dict().get('parent_logical_jat_id') != baseline or _content_digest(_proof(store, descriptor, private)) != plan['content_sha256']:
                 raise ValueError('committed child output differs; preserve history')
         try:
             _bind_child(workspace, dimension, namespace, room, output, plan, authority)
         except (OSError, ValueError):
             return _binding_failure(namespace, room, output, operation_id, True)
         return {'ok': True, 'status': 'saved', 'namespace': namespace, 'room_id': room,
-                'snapshot_id': output, 'capture_mode': mode, 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
+                'snapshot_id': output, 'capture_mode': mode, 'components': descriptor.to_dict()['components'], 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
 
 
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,

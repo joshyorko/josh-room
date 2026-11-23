@@ -53,7 +53,7 @@ Choose a collection of independent directories. Save a cohesive root repository
 as one Room. Linked worktrees, borrowed object stores and unsupported Git
 layouts require another capture layout. The sealed manifest accepts one to 32
 child pins. Capture stages private copies outside the source and needs scratch
-space for the selected data. Optional child components are covered separately.
+space for the selected data. Optional child components use the selection below.
 
 Children are independently saved Logical JATs. The parent captures only its
 canonical pinned manifest, generated source-only policy, empty ancestor
@@ -97,6 +97,38 @@ files/folders with native dialogs, then shows each child’s effective capture m
 Cancel before confirmation never invokes provider Save. Entry asks for the
 namespace receipt and exact relative child path; it opens the folder only after
 verified entry. Installed VSIX qualification remains separate from Node fixtures.
+
+## Selecting child components
+
+The initial default is workspace only. For a selected child, Catalog Save can
+request the ordinary RCC environment, Homebrew recovery or Hauler content
+producer. The parent and sibling children have independent selections. Review
+the effective Git mode, component actions and artifact digest before approving.
+Selection inputs are local to the invoking machine. RCC and Homebrew approval
+digests cover the prepared archive. Hauler approval covers the selected OCI
+manifest digests and the referenced content. Hauler generates new export
+bookkeeping on each run, so the committed descriptor separately pins the exact
+saved archive bytes. RCC and Homebrew approval
+binds the exact archive digest. Hauler writes a new store ID and timestamped
+audit data on every export. Its approval binds the OCI manifest digests and
+verified transitive blob inventory. The committed descriptor additionally binds
+the SHA-256 and size of the exported archive. Entry verifies both the saved
+archive and its OCI contents before promotion.
+
+For example, append the following arguments to both `capture-plan` and `save`
+to select a synthetic Homebrew recovery recipe for one child:
+
+```sh
+--child-components projects/service-a '{"component_selection":{"format_version":1,"components":{"rcc_environment":"omit","homebrew_recovery":"refresh","hauler_content":"omit"}},"homebrew_directory":"/synthetic/recipe"}'
+```
+
+Use the same JSON with `--component-options` on `plan-child-save` and
+`save-child`. A child update without explicit choices retains its exact saved
+components. A refresh whose approved artifact changes can advance the pin even
+when workspace bytes match. Entry uses the ordinary component preparation
+path. Homebrew recipe recovery and Hauler content verification do not install
+packages or import images into a registry. Agent session recovery is a separate
+feature. Platform and producer qualification are reported independently.
 
 ## Retention, namespace isolation and interruption limits
 

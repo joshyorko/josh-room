@@ -136,6 +136,8 @@
       "properties": {
         "digest": { "$ref": "#/$defs/content_digest" },
         "kind": { "enum": ["image", "chart", "file"] },
+        "reference_sha256": { "$ref": "#/$defs/sha256" },
+        "platform_sha256": { "$ref": "#/$defs/sha256" },
         "media_type": { "type": "string", "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$" }
       },
       "anyOf": [

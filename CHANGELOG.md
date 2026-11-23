@@ -16,6 +16,7 @@
 ## [Unreleased]
 
 - Preserve self-contained Git history in Catalog children across initial capture, child Save and exact-pin entry. Show the effective Git capture mode before approval.
+- Select RCC, Homebrew recovery or Hauler content per Catalog child and retain exact saved component references across parent refresh.
 
 - Keep child folders with reserved composition metadata out of split selection, stop discovery at those boundaries, and reject ambiguous source paths and Win32 sibling aliases.
 - Refuse contradictory offline composition evidence about encrypted objects, parent lineage, optional origins, and timezone offsets.

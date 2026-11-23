@@ -102,6 +102,8 @@ def test_v1_schema_accepts_small_complete_snapshot_and_components():
     descriptor["components"]["homebrew_recovery"] = _component("homebrew-recovery")
     descriptor["components"]["hauler_content"] = _component("hauler-content")
 
+    reference = descriptor["components"]["hauler_content"]["references"][0]
+    reference.update(reference_sha256="6" * 64, platform_sha256="7" * 64)
     _validator().validate(descriptor)
     encoded = LogicalJat.from_dict(descriptor).to_json()
     assert len(encoded.encode("utf-8")) <= 64 * 1024

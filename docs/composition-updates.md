@@ -72,8 +72,9 @@ publishes one explicitly selected path/pin per action. Pending operation ID,
 baseline, output and approval are retained in VS Code workspace state before
 publication and cleared only after a verified result. A changed pending approval
 refuses a blind retry. Normal unbound/full-Room Save and its component picker
-retain their existing routing. Namespace capture does not consume Homebrew,
-RCC or Hauler defaults. Native action tests are not installed-VSIX acceptance.
+retain their existing routing. Catalog children use explicit component options. A component-bearing
+approval uses the v4 namespace contract. Providers and restore stages verify
+its references against the isolated repository. Native action tests are not installed-VSIX acceptance.
 
 The bounded ledger retains at most 128 child updates and 32 parent operations per
 namespace, including initial capture. Reaching a bound refuses further writes;

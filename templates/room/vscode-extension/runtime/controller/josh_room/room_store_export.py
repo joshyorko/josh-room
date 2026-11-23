@@ -167,6 +167,8 @@ def _rcc_metadata(
         "archive_size": component["archive_size"],
         "robot_relative_path": component["robot_relative_path"],
     }
+    if "source_input_sha256" in component:
+        required["source_input_sha256"] = component["source_input_sha256"]
     if not isinstance(value, dict) or any(
         value.get(key) != expected for key, expected in required.items()
     ):

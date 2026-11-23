@@ -133,10 +133,12 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
     if not isinstance(assignments, list) or not assignments or len(assignments) > 64:
         raise ValueError("invalid capture assignments")
     rows = []
+    component_options = {}
     for row in assignments:
         if (
             not isinstance(row, dict)
-            or not {"path", "outcome"} <= set(row) <= {"path", "outcome", "capture_mode"}
+            or not {"path", "outcome"} <= set(row) <= {"path", "outcome", "capture_mode", "component_options"}
+            or ("component_options" in row and (row["outcome"] != "child" or not isinstance(row["component_options"], dict)))
             or ("capture_mode" in row and (row["outcome"] != "child"
                 or row["capture_mode"] not in ("full-repository", "source-only")))
             or row["outcome"] not in ("child", "parent", "local-only")
@@ -155,7 +157,9 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
                 raise ValueError("capture assignment unavailable")
         elif row["outcome"] == "child":
             raise ValueError("the source root cannot be its own child")
-        rows.append(dict(row))
+        if "component_options" in row:
+            component_options[path] = row["component_options"]
+        rows.append({key: value for key, value in row.items() if key != "component_options"})
     if len({row["path"] for row in rows}) != len(rows):
         raise ValueError("duplicate capture assignment")
     validate_paths(row["path"] for row in rows if row["path"] != ".")
@@ -209,9 +213,17 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
     for row in rows:
         if row["outcome"] == "child":
             _, evidence, _ = _child_inventory(workspace, row["path"], policy, row.get("capture_mode"))
-            child_evidence[row["path"]] = evidence
+            child = row["path"]
+            if child in component_options:
+                from .composition_components import component_plan
+
+                evidence["component_plan"] = component_plan(
+                    workspace / child, dimension, "child-" + _slot(namespace, child),
+                    evidence["effective_policy_sha256"], component_options[child],
+                )
+            child_evidence[child] = evidence
     request = {
-        "plan_version": 3,
+        "plan_version": 4 if component_options else 3,
         "namespace": namespace,
         "source_identity": source_identity,
         "source_records_sha256": plan_digest(_records(workspace, scan.paths)),
@@ -392,7 +404,8 @@ def _content_digest(root):
     return digest.hexdigest()
 
 
-def _capture(root, store, private, slot, dimension, domain, *, claim, parent=None, inherited_policy=None):
+def _capture(root, store, private, slot, dimension, domain, *, claim, parent=None, inherited_policy=None,
+             component_options=None, component_workspace=None, component_claim=None):
     from .room_store_bridge import _room_version, _source_platform
     producer_version, producer_platform = _room_version(), _source_platform()
     policy = load_capture_policy(root)
@@ -476,7 +489,18 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
         if inherited_policy != INHERITED_POLICY:
             raise ValueError("unsupported inherited policy provenance")
         value["source"]["composition_policy"] = inherited_policy
-    return LogicalJat.from_dict(value), before
+    if "component_plan" in slot or component_options is not None:
+        from .composition_components import capture_components
+        value["components"] = capture_components(component_workspace, root, dimension, slot, policy.sha256,
+                                                 component_options, parent, store, component_claim, private)
+    descriptor = LogicalJat.from_dict(value)
+    from .composition_component_contract import (
+        validate_component_contract,
+        verify_component_snapshots,
+    )
+    validate_component_contract(slot, descriptor, parent)
+    verify_component_snapshots(store, descriptor, private)
+    return descriptor, before
 
 
 def _copy_paths(source, target, paths, *, source_fd=None, records=None):
@@ -618,7 +642,7 @@ def _build_child_view(source, child, target, request, source_fd):
     child_scan, evidence, generated = _child_inventory(source, child, root_policy, row.get("capture_mode"))
     allowed = child_scan.paths
     if (
-        evidence != request["child_evidence"][child]
+        evidence != {key: value for key, value in request["child_evidence"][child].items() if key != "component_plan"}
         or root_scan.signature != request["source_signature"]
         or root_policy.sha256 != request["capture_policy_sha256"]
     ):
@@ -772,6 +796,8 @@ def save_composition(
                     "capture_policy_sha256": child_evidence[row["path"]]["effective_policy_sha256"],
                     "approved_paths_sha256": child_evidence[row["path"]]["approved_paths_sha256"],
                     "source_records_sha256": child_evidence[row["path"]]["records_sha256"],
+                    **({"component_plan": child_evidence[row["path"]]["component_plan"]}
+                       if "component_plan" in child_evidence[row["path"]] else {}),
                     "room_id": "child-" + _slot(namespace, row["path"]),
                     "logical_jat_id": "jat-"
                     + _slot(namespace, "capture:" + row["path"]),
@@ -833,6 +859,14 @@ def save_composition(
                 private / ("child-view-" + uuid.uuid4().hex),
                 request,
             )
+            row = next(row for row in assignments if row["path"] == slot["path"])
+            component_args = ({
+                "component_options": row["component_options"],
+                "component_workspace": workspace / slot["path"],
+                "component_claim": lambda name, slot=slot: claim({
+                    "logical_jat_id": _slot(namespace, slot["logical_jat_id"] + ":" + name)
+                }),
+            } if "component_plan" in slot else {})
             descriptor, scan = _capture(
                 view,
                 store,
@@ -842,6 +876,7 @@ def save_composition(
                 authority.binding["encryption_domain_id"],
                 claim=lambda slot=slot: claim(slot),
                 inherited_policy=INHERITED_POLICY,
+                **component_args,
             )
             if plan_digest(sorted(scan.paths)) != slot["approved_paths_sha256"]:
                 raise ValueError("captured inventory differs from the reserved child")
@@ -856,8 +891,14 @@ def save_composition(
                 workspace_signature=scan.signature,
                 display_name="Child Room",
             )
-            row = next(row for row in request["assignments"] if row["path"] == slot["path"])
             _, current, _ = _child_inventory(workspace, slot["path"], load_capture_policy(workspace), row.get("capture_mode"))
+            if "component_plan" in slot:
+                from .composition_components import component_plan
+
+                current["component_plan"] = component_plan(
+                    workspace / slot["path"], dimension, slot["room_id"],
+                    current["effective_policy_sha256"], row["component_options"], source=view,
+                )
             if current != request["child_evidence"][slot["path"]]:
                 raise ValueError("child source changed before publication")
             envelope, etag = _commit(authority, envelope, etag, state)
@@ -941,10 +982,11 @@ def save_composition(
 
 
 def _verify_descriptor_contract(state, descriptor):
-    from .composition_safety import snapshot_capture_contract
+    from .composition_safety import snapshot_capture_contract, verify_snapshot_artifacts
 
     value = descriptor.to_dict()
     mode, policy_digest = snapshot_capture_contract(state, value["room_id"], value["logical_jat_id"])
+    verify_snapshot_artifacts(state, descriptor)
     if value.get("capture_mode") != mode or (
         policy_digest is not None and value["capture_policy_sha256"] != policy_digest
     ):
@@ -1016,6 +1058,12 @@ def _restore(
             composition_namespace=namespace or child_namespace,
         )
 
+    def prepare_components(stage, selected, opened):
+        from .cli import _jat_root
+        from .composition_oci import verify_oci_archive
+        from .room_store_bridge import _prepare_restored_components
+        _prepare_restored_components(stage, selected, opened, private, _jat_root(), verify_hauler=verify_oci_archive)
+
     destination = Path(os.path.abspath(destination))
     parent_fd = _directory(destination.parent)
     try:
@@ -1025,6 +1073,7 @@ def _restore(
             restic_store=store,
             repository_info=repository,
             write_restore_marker=marker,
+            prepare_restored_workspace=prepare_components if any(metadata["components"].values()) else None,
             destination_parent_fd=parent_fd,
         )
     finally:

@@ -16,6 +16,11 @@ from pathlib import Path
 
 from .catalog import Catalog, _validate_identifier, _validate_logical_identifier
 from .composition import validate_paths
+from .composition_component_contract import (
+    validate_component_choices,
+    validate_component_plan,
+    verify_artifact_identities,
+)
 from .logical_jat import LogicalJat
 from .restic_store import RepositoryInfo, SnapshotInventoryItem
 from .room_store_references import build_reference_index, compare_restic_inventory
@@ -26,7 +31,7 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z")
 _PHASES = ("reserved", "children-recorded", "parent-prepared", "committed")
-_CONTRACTS = ("composition-safety-v1", "composition-safety-v2", "composition-safety-v3")
+_CONTRACTS = ("composition-safety-v1", "composition-safety-v2", "composition-safety-v3", "composition-safety-v4")
 _MODES = ("source-only", "full-repository")
 
 
@@ -59,25 +64,39 @@ def _versioned_plan(body, plan):
         raise ValueError("invalid composition plan")  # noqa: TRY004 - invalid decoded ledger data
     if "plan_version" not in plan:
         return False
-    if body["contract"] != "composition-safety-v3" or type(plan["plan_version"]) is not int or plan["plan_version"] != 3:
+    version = plan["plan_version"]
+    if type(version) is not int or version not in (3, 4) or body["contract"] not in _CONTRACTS[version - 1:]:
         raise ValueError("unsupported composition plan version")
     return True
 
 
-def _snapshot_contract(body, room, snapshot):
+def _snapshot_slot(body, room, snapshot):
     for update in body.get("child_updates", {}).values():
         plan = update["plan"]
         if update["phase"] == "committed" and (plan["room_id"], plan["logical_jat_id"]) == (room, snapshot):
-            return plan["capture_mode"], plan["capture_policy_sha256"]
+            return plan
     for op in body["operations"].values():
         plan = op["plan"]
         if op["phase"] == "committed" and (plan["parent_room_id"], plan["parent_logical_jat_id"]) == (room, snapshot):
-            return "source-only", op["parent_policy_sha256"]
+            return {"capture_mode": "source-only", "capture_policy_sha256": op["parent_policy_sha256"]}
         if plan["expected_parent_logical_jat_id"] is None or body["contract"] in _CONTRACTS[:2]:
             for slot in plan["children"]:
                 if slot["path"] in op["child_pins"] and (slot["room_id"], slot["logical_jat_id"]) == (room, snapshot):
-                    return slot.get("capture_mode", "source-only"), slot.get("capture_policy_sha256")
+                    return slot
     raise ValueError("snapshot lacks a reserved capture contract")
+
+
+def _snapshot_contract(body, room, snapshot):
+    slot = _snapshot_slot(body, room, snapshot)
+    return slot.get("capture_mode", "source-only"), slot.get("capture_policy_sha256")
+
+
+def verify_snapshot_artifacts(state, descriptor):
+    value = descriptor.to_dict()
+    slot = _snapshot_slot(state.to_dict(), value["room_id"], value["logical_jat_id"])
+    if "component_plan" not in slot:
+        validate_component_choices(slot, value["components"], {})
+    verify_artifact_identities(slot, value["components"])
 
 
 def snapshot_capture_contract(state, room, snapshot):
@@ -96,6 +115,7 @@ def _pin(pin, catalog, room_id, logical_id):
         raise ValueError("composition pin record is missing") from None
     if record.get("payload_kind") != "room-store-v1" or record["ciphertext_sha256"] != pin["descriptor_sha256"]:
         raise ValueError("composition pin record is missing or mismatched")
+    return record
 
 
 @dataclass(frozen=True)
@@ -172,7 +192,13 @@ class CompositionSafetyState:
             if not isinstance(children, list) or not 1 <= len(children) <= 32:
                 raise ValueError("invalid composition child slots")
             for row in children:
-                _object(row, "path room_id logical_jat_id" + (" capture_mode capture_policy_sha256 approved_paths_sha256 source_records_sha256" if versioned else ""))
+                fields = "path room_id logical_jat_id"
+                if versioned:
+                    fields += " capture_mode capture_policy_sha256 approved_paths_sha256 source_records_sha256"
+                if plan.get("plan_version") == 4 and isinstance(row, dict) and "component_plan" in row:
+                    validate_component_plan(row["component_plan"])
+                    fields += " component_plan"
+                _object(row, fields)
                 if versioned:
                     if row["capture_mode"] not in _MODES:
                         raise ValueError("unsupported child capture mode")
@@ -207,7 +233,10 @@ class CompositionSafetyState:
             if not isinstance(pins, dict) or not pins.keys() <= slots.keys() or (phase != "reserved" and pins.keys() != slots.keys()):
                 raise ValueError("incomplete or unknown composition child pins")
             for path, pin in pins.items():
-                _pin(pin, catalog, slots[path]["room_id"], slots[path]["logical_jat_id"])
+                slot = slots[path]
+                record = _pin(pin, catalog, slot["room_id"], slot["logical_jat_id"])
+                if versioned and baseline is None:
+                    validate_component_choices(slot, record["component_refs"], {})
             for path, slot in slots.items():
                 records = inner["projects"].get(slot["room_id"], {}).get("snapshots", {})
                 if path not in pins and slot["logical_jat_id"] in records:
@@ -218,7 +247,8 @@ class CompositionSafetyState:
                 elif operation[field] is not None:
                     raise ValueError("composition metadata appeared before preparation")
             if phase == "committed":
-                _pin(operation["parent_pin"], catalog, plan["parent_room_id"], plan["parent_logical_jat_id"])
+                record = _pin(operation["parent_pin"], catalog, plan["parent_room_id"], plan["parent_logical_jat_id"])
+                validate_component_choices({}, record["component_refs"], {})
             elif operation["parent_pin"] is not None:
                 raise ValueError("uncommitted parent pin")
         if parent_rooms & child_rooms:
@@ -237,8 +267,11 @@ class CompositionSafetyState:
                 versioned = _versioned_plan(body, plan)
                 if versioned:
                     fields += ' plan_version'
-                    if plan.get('content_digest_algorithm') != 'sha256-framed-v2':
+                    if 'content_digest_algorithm' not in plan:
                         raise ValueError('unsupported child content digest algorithm')
+                if plan.get("plan_version") == 4:
+                    fields += " component_plan"
+                    validate_component_plan(plan.get("component_plan"))
                 if isinstance(plan, dict) and 'content_digest_algorithm' in plan:
                     fields += ' content_digest_algorithm'
                     if plan['content_digest_algorithm'] != 'sha256-framed-v2':
@@ -257,7 +290,7 @@ class CompositionSafetyState:
                 if room not in child_rooms or output == baseline or (room, output) in outputs:
                     raise ValueError('invalid or duplicated child update slot')
                 outputs.add((room, output))
-                catalog.resolve_snapshot(room, baseline)
+                baseline_record = catalog.resolve_snapshot(room, baseline)
                 if update['phase'] == 'reserved':
                     if update['pin'] is not None or output in inner['projects'][room]['snapshots'] or inner['projects'][room]['latest'] != baseline:
                         raise ValueError('uncommitted child output or stale baseline')
@@ -265,7 +298,8 @@ class CompositionSafetyState:
                         raise ValueError('overlapping incomplete child updates')
                     pending.add(room)
                 elif update['phase'] == 'committed':
-                    _pin(update['pin'], catalog, room, output)
+                    record = _pin(update['pin'], catalog, room, output)
+                    validate_component_choices(plan, record["component_refs"], baseline_record["component_refs"])
                 else:
                     raise ValueError('invalid child update phase')
             for update in updates.values():
@@ -307,6 +341,7 @@ def reconcile(state, descriptors, repository, inventory, *, expected_scope):
     for pin in pins:
         key = pin["room_id"], pin["logical_jat_id"]
         child = descriptors[key].to_dict()
+        verify_artifact_identities(_snapshot_slot(body, *key), child["components"])
         mode, digest = _snapshot_contract(body, *key)
         if child.get("capture_mode", "full-repository") != mode or (digest and child["capture_policy_sha256"] != digest):
             raise ValueError("child capture contract differs from reservation")

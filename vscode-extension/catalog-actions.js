@@ -16,7 +16,18 @@ function describeMode(mode) {
   throw new Error("The controller did not provide a supported child capture mode.");
 }
 
-async function saveCatalog(vscode, { dimensions, plan, save }) {
+function describeComponents(evidence, requested) {
+  const reviewed = evidence?.component_plan?.selection?.components;
+  if (!reviewed && !requested) return "Workspace only";
+  if (!reviewed || Object.entries(requested?.component_selection.components || {}).some(([key, value]) => reviewed[key] !== value)) {
+    throw new Error("The controller could not corroborate the selected components.");
+  }
+  const modes = Object.entries(reviewed).map(([name, mode]) => `${name}: ${mode}`).join(", ");
+  const digest = evidence.component_plan.artifacts_sha256;
+  return digest ? `${modes} · reviewed artifacts ${digest}` : modes;
+}
+
+async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save }) {
   const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!source?.length) return "cancelled";
   const root = source[0].fsPath;
@@ -30,6 +41,11 @@ async function saveCatalog(vscode, { dimensions, plan, save }) {
     ], { title: `Capture mode for ${child.path}` });
     if (!mode) return "cancelled";
     if (mode.id === "source-only") child.capture_mode = mode.id;
+    if (chooseComponents) {
+      const options = await chooseComponents(path.join(root, child.path), child.path, false);
+      if (options === undefined) return "cancelled";
+      if (options) child.component_options = options;
+    }
   }
   const parentMode = await vscode.window.showQuickPick([{ label: "Metadata only parent", id: "metadata" }, { label: "Include selected parent-owned content", id: "content" }], { title: "Parent content — everything else stays local only" });
   if (!parentMode) return "cancelled";
@@ -51,8 +67,10 @@ async function saveCatalog(vscode, { dimensions, plan, save }) {
   const parentRoom = `catalog-${namespace}`;
   const selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
   const preview = await plan(selection);
-  const childSummary = assignments.filter(row => row.outcome === "child").map(row =>
-    `${row.path} — ${describeMode(preview.request?.child_evidence?.[row.path]?.capture_mode)}`);
+  const childSummary = assignments.filter(row => row.outcome === "child").map(row => {
+    const evidence = preview.request?.child_evidence?.[row.path];
+    return `${row.path} — ${describeMode(evidence?.capture_mode)}. ${describeComponents(evidence, row.component_options)}`;
+  });
   const parentSummary = assignments.filter(row => row.outcome === "parent").map(row => `Parent content: ${row.path}`);
   const approved = await vscode.window.showWarningMessage("Save this Catalog Room and its children?", {
     modal: true,
@@ -60,7 +78,8 @@ async function saveCatalog(vscode, { dimensions, plan, save }) {
   }, "Save and acknowledge local-only content");
   if (approved !== "Save and acknowledge local-only content") return "cancelled";
   const result = await save(selection, preview.approval_sha256);
-  await vscode.window.showInformationMessage(`Catalog saved. Namespace ${result.namespace}; parent recovery point ${result.parent_snapshot_id}. Source files remain in place.\n${childSummary.join("\n")}`);
+  const savedChildren = result.children?.map(row => `${row.path} — ${row.snapshot_id} · ${row.capture_mode} · ${savedComponents(row.components)}`);
+  await vscode.window.showInformationMessage(`Catalog saved. Namespace ${result.namespace}; parent recovery point ${result.parent_snapshot_id}. Source files remain in place.\n${(savedChildren || childSummary).join("\n")}`);
   return result;
 }
 
@@ -79,7 +98,13 @@ async function enterChild(vscode, { root, marker, enter, open }) {
   return result;
 }
 
-async function updateRoom(vscode, { marker, kind, pending, remember, plan, save }) {
+function savedComponents(components) {
+  if (!components) return "Component details unavailable";
+  const names = Array.isArray(components) ? components : Object.entries(components || {}).filter(([, ref]) => ref != null).map(([name]) => name);
+  return names.length ? names.join(", ") : "Workspace only";
+}
+
+async function updateRoom(vscode, { marker, kind, pending, remember, chooseComponents, plan, save }) {
   if (!marker?.composition_namespace || !marker?.snapshot_id) throw new Error("Open a verified namespace Room first.");
   let ticket = pending;
   if (ticket && (ticket.namespace !== marker.composition_namespace || ticket.room !== marker.project_id
@@ -97,18 +122,26 @@ async function updateRoom(vscode, { marker, kind, pending, remember, plan, save 
       ticket = { ...ticket, child, pin };
     }
   }
+  // Re-select explicit external inputs on retry. Only the approval and operation
+  // binding persist in workspace state; the controller verifies the same inputs.
+  if (kind === "child" && chooseComponents && (!pending || ticket.customComponents)) {
+    const options = await chooseComponents();
+    if (options === undefined) return "cancelled";
+    if (options) ticket = { ...ticket, customComponents: true, component_options: options };
+  }
   const preview = await plan(ticket);
   if (ticket.approval && ticket.approval !== preview.approval_sha256) throw new Error("Pending approval changed. Preserve the operation receipt; do not start a blind retry.");
   const action = kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
   const approved = await vscode.window.showWarningMessage(`${action}?`, { modal: true,
-    detail: `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
+    detail: `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. ${describeComponents(preview.request?.plan, ticket.component_options)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
   if (approved !== action) return "cancelled";
   ticket = { ...ticket, approval: preview.approval_sha256, output: preview.snapshot_id };
-  await remember(ticket);
+  const { component_options, ...retryTicket } = ticket;
+  await remember(retryTicket);
   const result = await save(ticket);
   if (!result?.ok || (kind === "child" && !result.marker_verified)) throw new Error("Composition update was not verified. Retain the pending operation for retry.");
   await remember(undefined);
-  await vscode.window.showInformationMessage(`${kind === "child" ? "Child saved; parent pins unchanged" : "Parent pin published; working folders unchanged"}. Exact recovery point ${result.snapshot_id}.`);
+  await vscode.window.showInformationMessage(`${kind === "child" ? "Child saved; parent pins unchanged" : "Parent pin published; working folders unchanged"}. Exact recovery point ${result.snapshot_id}.${kind === "child" ? ` ${savedComponents(result.components)}.` : ""}`);
   return result;
 }
 
