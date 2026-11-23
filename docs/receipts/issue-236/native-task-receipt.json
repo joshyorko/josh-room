@@ -1,15 +1,15 @@
 {
-  "source_commit": "f185b618a3ced7eccda5dcc765258cd953bf2e8b",
-  "viewer_template_sha256": "369e3d275c6671dee5d7deecb323e8caf48ee4755cf50488c7152d4ddebc4547",
+  "source_commit": "f6f3bc216d6c32429e4cb27c2e262164fad09ff7",
+  "viewer_template_sha256": "7bfb11e898ed2243a720151ce6ceebebf276e5a49598b1b88fdea127e82e46ed",
   "question": "Which settings.py controls application retry behavior, and how did its retry delay change between two chosen saved points and the live file?",
   "answer": {
     "application": "src/app/settings.py",
     "earlier_point_A": {
-      "snapshot": "7710cede4fd7455bb7dc4073ef48cb32",
+      "snapshot": "55ac34955e55429ca323e52845a81496",
       "RETRY_DELAY": 15
     },
     "later_point_B": {
-      "snapshot": "c57838a6433242f89ec5b21a6f4b2359",
+      "snapshot": "62bbb5a9c6524386b749536fbafb3c4b",
       "RETRY_DELAY": 30
     },
     "live": {
@@ -32,133 +32,136 @@
   ],
   "clips": {
     "investigation.webm": {
-      "sha256": "2b4c1f80b712527fe717a133116a354ec3a22bc11a68df09210557a5ff877bd1",
-      "bytes": 435978,
-      "duration_seconds": 45.2,
+      "bytes": 393740,
+      "sha256": "242e50311a33d20a9ba2a5b85c85f75b76dc7b88ae11034965d5d749bc0e4b16",
+      "duration_seconds": 35.7,
       "events": [
         {
+          "ms": 3000,
           "event": "3D lookup",
-          "clicks": 3,
-          "elapsed_ms": 3541,
-          "path": "/src/app/settings.py",
-          "ms": 3542
+          "elapsed_ms": 2952,
+          "clicks": 3
         },
         {
-          "event": "Live application policy",
-          "delay": 45,
-          "ms": 4860
+          "ms": 3654,
+          "event": "Live retry policy",
+          "RETRY_DELAY": 45,
+          "MAX_ATTEMPTS": 4
         },
         {
+          "ms": 14386,
           "event": "Saved vs live",
-          "point": "7710cede4fd7455bb7dc4073ef48cb32",
+          "point": "55ac34955e55429ca323e52845a81496",
           "before": 15,
-          "after": 45,
-          "ms": 18484
+          "after": 45
         },
         {
+          "ms": 22781,
           "event": "Saved vs live",
-          "point": "c57838a6433242f89ec5b21a6f4b2359",
+          "point": "62bbb5a9c6524386b749536fbafb3c4b",
           "before": 30,
-          "after": 45,
-          "ms": 29612
+          "after": 45
         },
         {
-          "event": "Visited adjacent file",
-          "ms": 31524
+          "ms": 24412,
+          "event": "Visited neighbor",
+          "path": "/src/app/unit_000.py"
         },
         {
-          "event": "Back restored comparison",
-          "point": "c57838a6433242f89ec5b21a6f4b2359",
-          "ms": 41999
+          "ms": 33442,
+          "event": "Back and Compare restored exact saved result",
+          "point": "62bbb5a9c6524386b749536fbafb3c4b"
         },
         {
+          "ms": 35794,
           "event": "List lookup",
-          "clicks": 3,
-          "elapsed_ms": 1829,
-          "path": "/src/app/settings.py",
-          "ms": 45256
+          "elapsed_ms": 1673,
+          "clicks": 3
         },
         {
+          "ms": 35795,
           "event": "Completed",
-          "pointer_clicks": 18,
-          "ms": 45256
+          "pointer_clicks": 18
         }
       ]
     },
     "native-continuity.webm": {
-      "sha256": "47d447ccb0883ab8759318e6d44b8614e5eb0ec5825764891fc7c28767616de5",
-      "bytes": 575190,
-      "duration_seconds": 39.6,
+      "bytes": 591700,
+      "sha256": "bc7e754ec5ef5a58ce5739c3f0889a83021d10025c392bd7f01318912df2efe0",
+      "duration_seconds": 39.8,
       "events": [
         {
-          "event": "Search complete",
-          "matches": 3,
-          "status": "Whole workspace / \u00b7 Search complete for admitted entries \u00b7 3 matches \u00b7 108 admitted entries \u00b7 1 omitted",
-          "ms": 2551
+          "ms": 2420,
+          "event": "Workspace search",
+          "status": "Whole workspace / \u00b7 Search complete for admitted entries \u00b7 3 matches \u00b7 108 admitted entries \u00b7 1 omitted"
         },
         {
-          "event": "Disambiguated path",
+          "ms": 3661,
+          "event": "Read namesake",
           "path": "/docs/settings.py",
-          "content": "EXAMPLE = True",
-          "ms": 3716
+          "value": "EXAMPLE = True"
         },
         {
-          "event": "Disambiguated path",
+          "ms": 5841,
+          "event": "Read namesake",
           "path": "/tests/fixtures/settings.py",
-          "content": "FAKE_DELAY = 0",
-          "ms": 5889
+          "value": "FAKE_DELAY = 0"
         },
         {
-          "event": "Disambiguated path",
+          "ms": 7909,
+          "event": "Read namesake",
           "path": "/src/app/settings.py",
-          "content": "RETRY_DELAY = 45",
-          "ms": 7939
+          "value": "RETRY_DELAY = 45"
         },
         {
+          "ms": 17176,
           "event": "Saved vs live",
-          "point": "c57838a6433242f89ec5b21a6f4b2359",
+          "point": "62bbb5a9c6524386b749536fbafb3c4b",
           "before": 30,
-          "after": 45,
-          "ms": 18061
+          "after": 45
         },
         {
-          "event": "Pagination preserved pinned result",
-          "count": 44,
-          "point": "c57838a6433242f89ec5b21a6f4b2359",
-          "ms": 19423
+          "ms": 18369,
+          "event": "Pagination retained result",
+          "page_rows": 44,
+          "point": "62bbb5a9c6524386b749536fbafb3c4b"
         },
         {
-          "event": "Mode switch retained comparison",
-          "ms": 20649
+          "ms": 19479,
+          "event": "Mode round trip retained result"
         },
         {
-          "event": "Back restored exact pin after visiting neighbor",
-          "point": "c57838a6433242f89ec5b21a6f4b2359",
-          "ms": 29516
+          "ms": 19822,
+          "event": "Visited neighbor",
+          "path": "/src/app/unit_046.py"
         },
         {
-          "event": "Automatic poll retained exact diff",
-          "ms": 35518
+          "ms": 28311,
+          "event": "Back and Compare restored exact saved result",
+          "point": "62bbb5a9c6524386b749536fbafb3c4b"
         },
         {
-          "event": "Narrow live comparison",
+          "ms": 34315,
+          "event": "Poll retained result"
+        },
+        {
+          "ms": 35370,
+          "event": "Narrow result",
           "width": 390,
-          "scrollWidth": 390,
-          "ms": 36428
+          "document_width": 390
         },
         {
-          "event": "Removed live file revoked",
+          "ms": 38595,
+          "event": "Removed file revoked",
           "location": "/src/app",
-          "staleContentVisible": false,
-          "ms": 38737
+          "stale_diff_visible": false
         },
         {
+          "ms": 39902,
           "event": "Completed",
-          "pointer_clicks": 26,
-          "ms": 39737
+          "pointer_clicks": 26
         }
-      ],
-      "search_coverage": "108 admitted entries, 1 omitted; 3 matches within these admitted entries."
+      ]
     }
   },
   "screenshots": [

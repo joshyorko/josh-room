@@ -1,0 +1,56 @@
+{
+  "product": "f6f3bc216d6c32429e4cb27c2e262164fad09ff7",
+  "provider": "room",
+  "launch": "Installed Linux extension Explore command",
+  "browser": "Headless Chrome, SwiftShader WebGL",
+  "viewport": [
+    1920,
+    1080
+  ],
+  "canvasPointerPicks": [
+    {
+      "path": "/src",
+      "x": 960,
+      "y": 630
+    },
+    {
+      "path": "/src/handbook.pdf",
+      "x": 926,
+      "y": 484
+    }
+  ],
+  "action": "Read PDF",
+  "documentSha256": "a98ffeb522486469dca617638e82690e40d89c3ffc028dc906072ebeb68657bb",
+  "pages": 3,
+  "page1Raster": {
+    "width": 744,
+    "height": 979,
+    "darkTeal": 4719,
+    "background": 17832
+  },
+  "page2Raster": {
+    "width": 892,
+    "height": 1175,
+    "darkTeal": 6842,
+    "background": 25659
+  },
+  "zoomButton": "+",
+  "backAction": "Back to file",
+  "resumeAction": "Read PDF",
+  "before": {
+    "page": 2,
+    "pageOffset": 277,
+    "scale": 1.2,
+    "scrollTop": 1500
+  },
+  "after": {
+    "page": 2,
+    "pageOffset": 277,
+    "scale": 1.2,
+    "scrollTop": 1500
+  },
+  "screenshot": {
+    "file": "native-document.png",
+    "sha256": "a5168a018802a92257b00bcbb75660577f58ed853bb44ae0a379abb5d10e72fd"
+  }
+}
