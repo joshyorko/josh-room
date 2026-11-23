@@ -125,7 +125,20 @@
           status.textContent = 'The selected recovery point changed. Reload the choices.';
           return;
         }
-        status.textContent = 'Comparison at time of request · ' + receipt.change;
+        status.textContent = 'File comparison · ' + receipt.change;
+        const sides = element('div');
+        sides.className = 'comparison-sides';
+        const side = (label, date, info) => {
+          const column = element('section');
+          column.append(element('h3', label), element('p', date),
+            element('p', info ? info.size + ' bytes' : 'File absent'));
+          sides.append(column);
+        };
+        side('Saved', receipt.date, receipt.saved);
+        side('Live', 'Read ' + new Date().toISOString(), receipt.live);
+        output.append(sides);
+        const provenance = element('details');
+        provenance.append(element('summary', 'Recovery point and file digests'));
         const facts = element('dl');
         const field = (name, value) => facts.append(element('dt', name), element('dd', value));
         field('Saved recovery point', receipt.date + ' · ' + receipt.snapshot);
@@ -139,12 +152,15 @@
         }
         field('Live size', receipt.live.size + ' bytes');
         field('Live SHA-256', receipt.live.sha256 || 'Unavailable within the read limit');
-        output.append(facts);
+        provenance.append(facts);
         if (receipt.unified_diff) {
           const diff = element('pre', receipt.unified_diff);
           diff.setAttribute('aria-label', 'Saved to live text diff');
           output.append(diff);
+        } else if (receipt.change === 'modified') {
+          output.append(element('p', 'The file changed. A text diff is unavailable for this comparison.'));
         }
+        output.append(provenance);
       });
       status.textContent = result.portable ? 'Portable snapshots cannot be compared here.' : '';
       this.panel.replaceChildren(label, compare, status, output, reload);

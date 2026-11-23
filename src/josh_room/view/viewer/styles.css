@@ -292,6 +292,20 @@ body {
   .advanced-actions { position: fixed; top: auto; right: 6px; margin-top: 4px; }
 }
 
+.room-location { display: grid; min-width: 0; gap: 1px; }
+#room-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-left { flex: 1 1 13rem; }
+.hud-top { padding: 7px 14px; background: linear-gradient(var(--surface-solid), var(--surface)); }
+.hud-left .hud-icon-btn { background: transparent; border-color: transparent; }
+.crumb-btn { padding: 0 2px; color: var(--text-muted); }
+.crumb-btn[aria-current] { color: var(--text); }
+.session-badges { display: flex; gap: 5px; padding: 3px; }
+[data-workspace] .hud-bottom { display: none; }
+.banner-sensitivity { border-left: 3px solid #eeb665; }
+@media (max-width: 760px) {
+  .hud-left { flex-basis: 100%; }
+  .hud-top { padding: 5px 8px; }
+}
 /* Banners */
 .banner-stack {
   position: relative;
@@ -310,7 +324,7 @@ body {
   justify-content: space-between;
 }
 
-.banner-sensitivity { background: var(--warn-bg); color: #fff6f2; border-bottom: 1px solid rgba(255, 200, 170, 0.4); }
+.banner-sensitivity { background: var(--surface); color: #ffdfa8; }
 .banner-stale { background: var(--stale-bg); color: #fff4ed; border-bottom: 1px solid rgba(255, 180, 140, 0.5); }
 
 .filesystem-status {
@@ -460,6 +474,40 @@ body {
   border: 1px solid var(--border-strong);
 }
 
+.filesystem-reader {
+  align-self: end;
+  width: min(440px, calc(100vw - 24px));
+  max-height: min(100%, 530px);
+  height: fit-content;
+}
+.filesystem-reader:has(#tab-compare:not([hidden])) {
+  width: min(630px, calc(100vw - 24px));
+  max-height: 100%;
+}
+.filesystem-reader .drawer-title-group { display: grid; gap: 4px; }
+.filesystem-reader .kind-badge { width: max-content; }
+.filesystem-reader .drawer-title-group h2 { font-size: 16px; line-height: 1.25; }
+.filesystem-reader .drawer-subtitle { overflow-wrap: anywhere; word-break: normal; }
+.filesystem-reader .tab-count { display: none; }
+.filesystem-reader .drawer-body { min-height: 0; }
+.filesystem-reader .code-viewer { font-size: 13px; line-height: 1.6; }
+.comparison-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-block: 1px solid var(--border);
+  padding: 8px 0;
+  gap: 12px;
+}
+.comparison-sides h3 { font-size: 13px; margin: 0 0 3px; }
+.comparison-sides p { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.saved-comparison-result summary { cursor: pointer; color: var(--text-muted); }
+.saved-comparison-result details { margin: 12px 0; }
+.saved-comparison-result pre {
+  background: var(--surface-solid);
+  border-left: 2px solid var(--border-strong);
+  padding: 10px;
+  font: 13px/1.6 var(--font-mono);
+}
 .saved-point-select { display: block; max-width: 100%; margin: 4px 0 10px; }
 .saved-comparison-result dd { margin: 0 0 8px; overflow-wrap: anywhere; font-family: var(--font-mono); }
 .saved-comparison-result pre { max-width: 100%; overflow: auto; }

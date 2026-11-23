@@ -372,6 +372,7 @@
 
       document.title = `${desc.title || 'Josh Room View'} — Room View`;
 
+      document.getElementById('room-title').textContent = desc.title || 'Room View';
       const modeBadge = document.getElementById('badge-mode');
       modeBadge.textContent = this.data.mode === 'live' ? 'LIVE' : 'OFFLINE';
 
@@ -663,6 +664,7 @@
         const seg = node.nodeType === 'root' ? '/' : (node.segmentLabel || node.label).replace(/^\/+/, '');
         btn.textContent = seg;
         btn.title = node.path || seg;
+        if (idx === chain.length - 1) btn.setAttribute('aria-current', 'location');
         btn.addEventListener('click', () => this.handleNodeSelect(node.id));
         nav.appendChild(btn);
       });
@@ -967,6 +969,7 @@
           if (!help.hidden) { help.hidden = true; return; }
           if (!exp.hidden) { exp.hidden = true; return; }
           if (!lb.hidden) { lb.hidden = true; return; }
+          if (this.evidence.isOpen()) { this.evidence.hide(); return; }
           this.ascendToParent();
         } else if (ev.key === 'f' || ev.key === 'F') {
           ev.preventDefault();

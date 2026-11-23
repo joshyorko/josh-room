@@ -283,11 +283,12 @@ into a structured comparison view with scripts/iframes/objects stripped.
 
 ## 3D FSN landscape, accessibility, and size accounting
 
-- **Landscapes**: full-bleed **Night** (default: zenith `#04060c`, horizon
-  `#1a2840`, matching `FogExp2`, anti-aliased infinite `fwidth` world grid) and
-  FSN-inspired **Grass** (`#0087d5` → `#91fff0` sky, `#0f4f1a` → `#418a59`
-  ground). Uses `NeutralToneMapping` and FSN-style restraint (~0.6× unselected,
-  1.0× selected).
+- **Landscapes**: Night and Grass use a plain shaded floor, rectangular
+  directory platforms and orthogonal parent-child wires. A 42-degree vertical
+  camera frames the selected branch. Focus flights take 950 ms with motion
+  enabled. Opening a file leaves its spotlight visible alongside its reader.
+  Escape closes the reader before moving up. The Compare tab puts the saved
+  and current versions above their diff, with exact provenance available on demand.
 - **Hierarchy & scale**: foreground root pedestal → branching group pedestals →
   stage pedestals connected by parent-child ground wires → upright uniform-footprint
   file blocks whose heights represent **5 quantile bins** of the metric. World
@@ -300,7 +301,7 @@ into a structured comparison view with scripts/iframes/objects stripped.
 - **Spotlight v2 & A/B baseline**: persistent `SpotLight` (never toggled at
   click time; shaders precompiled at boot) with a `SpotLight.map` radial pool,
   `FrontSide` apex-faded dithered volumetric beam cone, world dimming (lights,
-  wires, grid, fog) over 450 ms, and **no literal lamp/fixture**. Baseline
+  wires, floor, fog) over 450 ms, and **no literal lamp/fixture**. Baseline
   prototype parameters remain selectable (`Spot: base` / `?spotlight=baseline`)
   for side-by-side comparison.
 - **Accessibility & fallback**: `<canvas aria-hidden="true">` paired with a

@@ -13,10 +13,9 @@
       skyBand: 0x243c60,
       fogColor: 0x132034,
       fogDensity: 1.55 / 155,
-      groundNear: 0x090f1b,
-      groundFar: 0x121e32,
-      gridColor: 0x2c5685,
-      gridAlpha: 0.34,
+      groundNear: 0x0e1520,
+      groundFar: 0x223548,
+
       hemiSky: 0x90acd8,
       hemiGround: 0x171f2d,
       hemiIntensity: 1.05,
@@ -28,14 +27,14 @@
       headlightIntensity: 0.32,
       headlightDim: 0.03,
       pedestalPlinth: 0x1e2838,
-      pedestalTop: 0x3b4a62,
-      pedestalDeck: 0x283448,
+      pedestalTop: 0x687487,
+      pedestalDeck: 0x475369,
       pedestalSelected: 0x4f6482,
       pedestalEdge: 0x6d89ad,
       wireChannel: 0x1b2b3e,
-      wireBase: 0x3b8ea8,
-      wireSelected: 0xf4fbff,
-      wireGlowAlpha: 0.06,
+      wireBase: 0x9eaeb6,
+      wireSelected: 0xf4e5c2,
+      wireGlowAlpha: 0.02,
       failCrown: 0xffd8c8,
       labelBg: 'rgba(8, 14, 26, 0.90)',
       labelBorder: 'rgba(110, 170, 220, 0.62)',
@@ -55,15 +54,14 @@
     },
     grass: {
       // SGI Fsn app-defaults Grass landscape palette (verified)
-      skyZenith: 0x0087d5,
-      skyHorizon: 0x91fff0,
-      skyBand: 0xb8fff6,
-      fogColor: 0x86f2e2,
+      skyZenith: 0x3985a4,
+      skyHorizon: 0xb0d7cd,
+      skyBand: 0xc8ded1,
+      fogColor: 0xabcac2,
       fogDensity: 1.55 / 190,
-      groundNear: 0x0f4f1a,
-      groundFar: 0x3b8453,
-      gridColor: 0x72bca1,
-      gridAlpha: 0.28,
+      groundNear: 0x244539,
+      groundFar: 0x658975,
+
       hemiSky: 0xdff6ff,
       hemiGround: 0x1e5c2c,
       hemiIntensity: 1.04,
@@ -75,14 +73,14 @@
       headlightIntensity: 0.24,
       headlightDim: 0.03,
       pedestalPlinth: 0x35474a,
-      pedestalTop: 0x5c7276,
-      pedestalDeck: 0x455a5e,
+      pedestalTop: 0x96ab9e,
+      pedestalDeck: 0x748b80,
       pedestalSelected: 0x749094,
       pedestalEdge: 0xb0d6ca,
       wireChannel: 0x1e4e35,
-      wireBase: 0x5db08e,
+      wireBase: 0xbfcec0,
       wireSelected: 0xffffff,
-      wireGlowAlpha: 0.04,
+      wireGlowAlpha: 0.02,
       failCrown: 0xffefe8,
       labelBg: 'rgba(10, 32, 20, 0.90)',
       labelBorder: 'rgba(145, 255, 240, 0.65)',
@@ -332,21 +330,8 @@
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Architectural SGI-FSN beveled nameplate
-      ctx.fillStyle = highlighted ? 'rgba(18, 38, 62, 0.96)' : t.labelBg;
-      ctx.strokeStyle = highlighted ? '#fff2d0' : t.labelBorder;
-      ctx.lineWidth = highlighted ? 7 : 4;
-      const r = 14;
-      const w = canvas.width - 14;
-      const h = canvas.height - 14;
-      ctx.beginPath();
-      ctx.roundRect(7, 7, w, h, r);
-      ctx.fill();
-      ctx.stroke();
-
-      // Subtle top accent bar for UNIX path legibility
-      ctx.fillStyle = highlighted ? '#ffdf9e' : t.labelBorder;
-      ctx.fillRect(24, 14, w - 34, 4);
+      ctx.fillStyle = highlighted ? 'rgba(22, 24, 27, 0.95)' : t.labelBg;
+      ctx.fillRect(3, 3, canvas.width - 6, canvas.height - 6);
 
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -383,7 +368,6 @@
       this.themeKey = 'night';
       this.spotlightMode = 'v2';
       this.reducedMotion = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-      this.gridVisible = true;
       this.descriptor = null;
 
       this.stats = {
@@ -405,7 +389,6 @@
       this.hoveredNodeId = null;
       this.focusedPedestalId = 'root';
 
-      // Near-ground low forward SGI-FSN camera (FOV 62°)
       this.camPos = new THREE.Vector3(0, 6.4, 11.5);
       this.camTarget = new THREE.Vector3(0, 1.3, -11.5);
       this.overviewPos = new THREE.Vector3(0, 6.4, 11.5);
@@ -465,7 +448,7 @@
       this.renderer.shadowMap.autoUpdate = false;
 
       this.scene = new THREE.Scene();
-      this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / Math.max(1, window.innerHeight), 0.25, 650);
+      this.camera = new THREE.PerspectiveCamera(42, window.innerWidth / Math.max(1, window.innerHeight), 0.25, 650);
       this.camera.position.copy(this.camPos);
       this.camera.lookAt(this.camTarget);
       this.scene.add(this.camera);
@@ -542,61 +525,15 @@
       this.groundMesh.position.y = 0;
       this.scene.add(this.groundMesh);
 
-      const gridGeo = new THREE.PlaneGeometry(420, 420);
-      gridGeo.rotateX(-Math.PI / 2);
-      this.gridUniforms = {
-        uColor: { value: new THREE.Color(t.gridColor) },
-        uAlpha: { value: t.gridAlpha },
-        uDistance: { value: 155.0 },
-        uCamPos: { value: new THREE.Vector3() },
+      // Distance shading stays on the shadow-receiving floor material.
+      this.groundFar = new THREE.Color(t.groundFar);
+      this.groundMat.onBeforeCompile = shader => {
+        shader.uniforms.roomGroundFar = { value: this.groundFar };
+        shader.fragmentShader = 'uniform vec3 roomGroundFar;\n' + shader.fragmentShader.replace(
+          '#include <color_fragment>',
+          '#include <color_fragment>\ndiffuseColor.rgb = mix(diffuseColor.rgb, roomGroundFar, smoothstep(8.0, 140.0, length(vViewPosition)));'
+        );
       };
-      const gridMat = new THREE.ShaderMaterial({
-        transparent: true,
-        depthWrite: false,
-        fog: false,
-        uniforms: this.gridUniforms,
-        vertexShader: `
-          varying vec3 vWorldPos;
-          void main() {
-            vec4 wp = modelMatrix * vec4(position, 1.0);
-            vWorldPos = wp.xyz;
-            gl_Position = projectionMatrix * viewMatrix * wp;
-          }
-        `,
-        fragmentShader: `
-          uniform vec3 uColor;
-          uniform float uAlpha;
-          uniform float uDistance;
-          uniform vec3 uCamPos;
-          varying vec3 vWorldPos;
-
-          float gridLine(vec2 coord, float scale) {
-            vec2 r = coord / scale;
-            vec2 fw = fwidth(r);
-            vec2 grid = abs(fract(r - 0.5) - 0.5) / max(fw, vec2(0.0001));
-            float line = min(grid.x, grid.y);
-            float aa = 1.0 - min(line, 1.0);
-            float moireFade = 1.0 - smoothstep(0.35, 0.9, max(fw.x, fw.y));
-            return aa * moireFade;
-          }
-
-          void main() {
-            float d = length(vWorldPos.xz - uCamPos.xz);
-            float distFade = pow(clamp(1.0 - d / uDistance, 0.0, 1.0), 2.6);
-            float minor = gridLine(vWorldPos.xz, 1.2) * 0.40;
-            float major = gridLine(vWorldPos.xz, 9.6) * 0.95;
-            float g = max(minor, major);
-            float alpha = g * uAlpha * distFade;
-            if (alpha < 0.002) discard;
-            gl_FragColor = vec4(uColor, alpha);
-            #include <colorspace_fragment>
-          }
-        `,
-      });
-      this.gridMesh = new THREE.Mesh(gridGeo, gridMat);
-      this.gridMesh.position.y = 0.01;
-      this.gridMesh.renderOrder = 1;
-      this.scene.add(this.gridMesh);
 
       this.hemiLight = new THREE.HemisphereLight(t.hemiSky, t.hemiGround, t.hemiIntensity);
       this.scene.add(this.hemiLight);
@@ -855,9 +792,18 @@
       dom.addEventListener('pointerup', onPointerUp);
       dom.addEventListener('wheel', onWheel, { passive: false });
       dom.addEventListener('contextmenu', (ev) => ev.preventDefault());
+      const reader = document.getElementById?.('inspector-drawer');
+      if (reader && window.ResizeObserver) {
+        this.readerObserver = new window.ResizeObserver(() => {
+          this._frameReader(reader);
+          this.requestRender();
+        });
+        this.readerObserver.observe(reader);
+      }
       window.addEventListener('resize', () => this.resize());
       window.addEventListener('pagehide', (event) => {
         if (!event.persisted) {
+          this.readerObserver?.disconnect();
           this._clearLabelMeshes();
           this.labelAtlas.retainLabels(new Set());
         }
@@ -909,11 +855,34 @@
       }
     }
 
+    _frameReader(reader) {
+      if (!reader || reader.hidden) {
+        this.camera.clearViewOffset();
+        return;
+      }
+      const viewport = this.canvas.getBoundingClientRect();
+      const bounds = reader.getBoundingClientRect();
+      const width = viewport.width;
+      const height = viewport.height;
+      // A docked reader shifts the optical centre into the remaining landscape.
+      // Full-screen readers are intentionally allowed on small screens.
+      const left = bounds.left - viewport.left;
+      const above = bounds.top - viewport.top;
+      if (left >= width * 0.24 && bounds.width > 0) {
+        this.camera.setViewOffset(width, height, (width - left) / 2, 0, width, height);
+      } else if (above >= height * 0.24 && bounds.height > 0) {
+        this.camera.setViewOffset(width, height, 0, (height - above) / 2, width, height);
+      } else {
+        this.camera.clearViewOffset();
+      }
+    }
+
     resize() {
       if (this._disposed) return;
       const w = window.innerWidth;
       const h = Math.max(1, window.innerHeight);
       this.camera.aspect = w / h;
+      this._frameReader(document.getElementById?.('inspector-drawer'));
       this.camera.updateProjectionMatrix();
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       this.renderer.setSize(w, h, false);
@@ -932,7 +901,7 @@
       this.scene.fog.density = t.fogDensity * (1 + 0.3 * this.spotState.dimL);
       this.scene.background.setHex(t.fogColor);
       this.groundMat.color.setHex(t.groundNear);
-      this.gridUniforms.uColor.value.setHex(t.gridColor);
+      this.groundFar.setHex(t.groundFar);
       this.hemiLight.color.setHex(t.hemiSky);
       this.hemiLight.groundColor.setHex(t.hemiGround);
       this.keyLight.color.setHex(t.keyColor);
@@ -1050,7 +1019,7 @@
         this.camera.lookAt(this.camTarget);
         this.establishingShot = {
           startTime: performance.now(),
-          durationMs: 2200,
+          durationMs: 950,
           fromPos: this.camPos.clone(),
           toPos: this.overviewPos.clone(),
         };
@@ -1070,40 +1039,39 @@
     }
 
     _computeOverviewCamera(layout) {
-      // Near-ground low forward SGI-FSN framing:
-      // Keeps horizon high (upper ~20% sky, ~80% dense 3D filesystem architecture) with
-      // root `/` large in near foreground, all depth-1 UNIX directories (/etc, /src, /usr,
-      // /var, /home) 100% inside the frame, and deep branches rising toward the horizon.
-      const b = layout.bounds;
-      const rootPed = layout.nodeById.get('root');
-      const rootX = rootPed ? rootPed.x : 0;
-      const rootZ = rootPed ? rootPed.z : 0;
+      const root = layout.nodeById.get('root');
+      const { pos, target } = this._directoryPose(root);
+      this.overviewPos.copy(pos);
+      this.overviewTarget.copy(target);
+    }
 
-      const depth1 = layout.pedestals.filter((p) => p.treeDepth === 1);
-      let frontMinX = -10;
-      let frontMaxX = 10;
-      let frontZ = -9.4;
-      if (depth1.length) {
-        frontMinX = Math.min(...depth1.map((p) => p.x - p.width / 2));
-        frontMaxX = Math.max(...depth1.map((p) => p.x + p.width / 2));
-        frontZ = depth1[0].z;
+    _directoryPose(node) {
+      // Fit this deck and the nearest branching pads; distant siblings stay explorable.
+      const children = this.layout.pedestals.filter(p => p.parentId === node.id)
+        .sort((a, b) => Math.abs(a.x - node.x) - Math.abs(b.x - node.x)).slice(0, 5);
+      const decks = [node, ...children];
+      const front = node.z + node.depth / 2 + 1;
+      const rear = Math.min(...decks.map(p => p.z - p.depth / 2));
+      const target = new this.THREE.Vector3(node.x, 1.4, (front + rear) / 2);
+      const pitch = 18 * Math.PI / 180;
+      const sin = Math.sin(pitch);
+      const cos = Math.cos(pitch);
+      const tan = Math.tan(this.camera.fov * Math.PI / 360);
+      let distance = 9;
+      for (const deck of decks) {
+        const halfX = Math.abs(deck.x - target.x) + deck.width / 2 + 0.4;
+        for (const z of [deck.z - deck.depth / 2, deck.z + deck.depth / 2 + 1]) {
+          for (const y of [0, deck.height + 4.35]) {
+            const dz = z - target.z;
+            const dy = y - target.y;
+            const towardEye = dz * cos + dy * sin;
+            distance = Math.max(distance,
+              towardEye + halfX / (tan * this.camera.aspect * 0.90),
+              towardEye + Math.abs(dy * cos - dz * sin) / (tan * 0.74));
+          }
+        }
       }
-      const frontSpan = Math.max(14, frontMaxX - frontMinX);
-      const fovRad = (this.camera.fov * Math.PI) / 180;
-      const hFov = 2 * Math.atan(Math.tan(fovRad / 2) * this.camera.aspect);
-
-      // Fit full front row cleanly with ~8% side breathing room so /etc and /home never clip
-      const distToFront = clamp((frontSpan * 0.57) / Math.max(0.55, Math.tan(hFov / 2)), 16.5, 36);
-      const camZ = clamp(frontZ + distToFront, rootZ + 9.2, rootZ + 24.5);
-      // Aim ~18 deg downward so horizon sits high (~20% from top) and foreground towers feel monumental!
-      const lookZ = Math.min(frontZ - 6.5, Math.max(b.minZ + 5.0, frontZ - 11.5));
-      const horizSpan = Math.max(12, camZ - lookZ);
-      const pitchRad = (18.5 * Math.PI) / 180;
-      const lookY = 0.85;
-      const camY = clamp(lookY + Math.tan(pitchRad) * horizSpan, 7.6, 13.2);
-
-      this.overviewPos.set(rootX, camY, camZ);
-      this.overviewTarget.set(rootX, lookY, lookZ);
+      return { target, pos: target.clone().add(new this.THREE.Vector3(0, sin * distance, cos * distance)) };
     }
 
     _clearWorldGroup() {
@@ -1136,13 +1104,13 @@
       });
       const pedTopMat = new THREE.MeshStandardMaterial({
         color: t.pedestalTop,
-        roughness: 0.62,
-        metalness: 0.22,
+        roughness: 0.92,
+        metalness: 0.08,
       });
       const pedDeckMat = new THREE.MeshStandardMaterial({
         color: t.pedestalDeck,
-        roughness: 0.72,
-        metalness: 0.16,
+        roughness: 0.96,
+        metalness: 0.04,
       });
       const pedSelectedMat = new THREE.MeshStandardMaterial({
         color: t.pedestalSelected,
@@ -1211,7 +1179,7 @@
       });
       this._sharedMats.channelMat = channelMat;
       for (const wire of layout.wires) {
-        const channel = createWireRibbonMesh(THREE, wire.points, 0.34, 0.032, channelMat);
+        const channel = createWireRibbonMesh(THREE, wire.points, 0.21, 0.025, channelMat);
         const coreMat = new THREE.MeshStandardMaterial({
           color: t.wireBase,
           emissive: new THREE.Color(t.wireBase),
@@ -1227,7 +1195,7 @@
           depthWrite: false,
           blending: t.additiveBeam ? THREE.AdditiveBlending : THREE.NormalBlending,
         });
-        const glow = createWireRibbonMesh(THREE, wire.points, 0.44, 0.012, glowMat);
+        const glow = createWireRibbonMesh(THREE, wire.points, 0.23, 0.012, glowMat);
         if (channel) {
           channel.position.y = 0.015;
           channel.receiveShadow = true;
@@ -1642,16 +1610,10 @@
       };
 
       for (const ped of layout.pedestals) {
-        const failSuffix = ped.counts.fail ? ` · ${ped.counts.fail} fail` : '';
-        const sub = global.RoomViewLayout.isWorkspace(this.descriptor)
-          ? `${ped.childDirCount + ped.directLeafCount} listed · ${ped.coverage || 'coverage unknown'}`
-          : ped.collapsed
-          ? `${ped.counts.total} items (expand)`
-          : `${ped.counts.total} items${failSuffix}`;
-        const labelTitle = layout.isUnixTree ? ped.path : ped.label;
-        const w = ped.treeDepth === 0 ? 4.4 : (ped.treeDepth === 1 ? 3.8 : 3.1);
+        const labelTitle = ped.label;
+        const w = Math.min(ped.width - 0.2, Math.max(2.2, labelTitle.length * 0.35));
         const prio = ped.treeDepth === 0 ? 110 : (ped.treeDepth === 1 ? 92 : 76 - Math.min(20, ped.treeDepth * 5));
-        addLabelEntry(ped, labelTitle, ped.collapsed ? 'Collapsed · expand' : sub, prio, w, Math.max(0.42, ped.height * 0.72), ped.depth / 2 + 0.78, -52);
+        addLabelEntry(ped, labelTitle, ped.collapsed ? 'Expand' : '', prio, w, Math.max(0.43, ped.height * 0.56), ped.depth / 2 + 0.14, -22);
       }
 
       for (const sNode of layout.summaryBlocks) {
@@ -1791,13 +1753,11 @@
         this.hemiLight.intensity = t.hemiIntensity + (t.hemiDim - t.hemiIntensity) * dimL;
         this.keyLight.intensity = t.keyIntensity + (t.keyDim - t.keyIntensity) * dimL;
         this.headlight.intensity = t.headlightIntensity + (t.headlightDim - t.headlightIntensity) * dimL;
-        this.gridUniforms.uAlpha.value = t.gridAlpha * (1 - 0.55 * dimL);
         this.scene.fog.density = t.fogDensity * (1 + 0.35 * dimL);
       } else {
         this.hemiLight.intensity = t.hemiIntensity * (1 - 0.78 * dimL);
         this.keyLight.intensity = t.keyIntensity * (1 - 0.82 * dimL);
         this.headlight.intensity = t.headlightIntensity * (1 - 0.86 * dimL);
-        this.gridUniforms.uAlpha.value = t.gridAlpha * (1 - 0.50 * dimL);
         this.scene.fog.density = t.fogDensity * (1 + 0.25 * dimL);
       }
 
@@ -1900,7 +1860,7 @@
       const dist = this.camPos.distanceTo(destPos);
       const horizTravel = Math.hypot(destTarget.x - this.camTarget.x, destTarget.z - this.camTarget.z);
       const curViewDist = this.camPos.distanceTo(this.camTarget);
-      const durationMs = clamp(0.6 + 0.35 * Math.sqrt(dist), 0.8, 2.5) * 1000;
+      const durationMs = 950;
 
       const midPos = this.camPos.clone().lerp(destPos, 0.5);
       if (horizTravel > curViewDist * 3.0) {
@@ -1972,20 +1932,7 @@
         this.clearSpotlight();
         this._updateColorsAndSelection();
         if (moveCamera) {
-          // True SGI-FSN corridor fly-through: low near the front apron looking ACROSS the
-          // directory's files AND forward along outgoing conduits into child subdirectories!
-          const hasSubdirs = node.childDirCount > 0 && !node.collapsed;
-          const span = Math.max(node.width, node.depth);
-          const dist = hasSubdirs ? clamp(span * 1.45 + 6.2, 9.4, 16.0) : clamp(span * 1.45 + 3.8, 7.6, 13.5);
-          const elev = (hasSubdirs ? 21 : 22) * (Math.PI / 180);
-          const lookZ = hasSubdirs ? node.z - 6.8 : node.z - 0.8;
-          const sideOff = hasSubdirs ? 2.1 : 0.6;
-          const target = new THREE.Vector3(node.x, node.height + 1.1, lookZ);
-          const pos = new THREE.Vector3(
-            node.x + sideOff,
-            node.height + Math.sin(elev) * dist + 1.25,
-            node.z + node.depth / 2 + Math.cos(elev) * dist * 0.78
-          );
+          const { pos, target } = this._directoryPose(node);
           this._flyTo(pos, target, { instant, fromId, toId: this.focusedPedestalId });
         }
       } else if (node.nodeType === 'more' || node.nodeType === 'stage-summary') {
@@ -2075,8 +2022,7 @@
       this.camera.position.set(b.centerX, span * 1.05, b.centerZ + 0.01);
       this.camera.lookAt(new THREE.Vector3(b.centerX, 0, b.centerZ));
       this.skyMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
-      this.gridMesh.position.set(this.camera.position.x, 0.01, this.camera.position.z);
-      this.gridUniforms.uCamPos.value.copy(this.camera.position);
+      this.groundMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
       this._updateFloorLabels();
       this.renderer.render(this.scene, this.camera);
       const dataUrl = this.canvas.toDataURL('image/png');
@@ -2167,8 +2113,7 @@
       }
 
       this.skyMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
-      this.gridMesh.position.set(this.camera.position.x, 0.01, this.camera.position.z);
-      this.gridUniforms.uCamPos.value.copy(this.camera.position);
+      this.groundMesh.position.set(this.camera.position.x, 0, this.camera.position.z);
 
       this._updateBlockMatrices();
       this._updateFloorLabels();

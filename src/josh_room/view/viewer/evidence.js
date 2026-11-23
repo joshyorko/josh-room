@@ -401,6 +401,11 @@
       this.comparison.select(target);
       if (this.activeTab === 'compare' && !this.comparison.active) this.switchTab('content');
       const sameObject = this.currentObjectId === (target.objectId || target.id);
+      this.drawerEl.classList.toggle('filesystem-reader', !!this.data.filesystem);
+      if (this.data.filesystem) {
+        this.drawerEl.querySelector('[data-tab="timeline"]').hidden = true;
+        this.drawerEl.querySelector('[data-tab="evidence"]').hidden = !(target.attachments || []).length;
+      }
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {
         this.currentItem = target;
@@ -598,6 +603,7 @@
       } else {
         const slotBar = document.createElement('div');
         slotBar.className = 'preview-slot-bar';
+        slotBar.hidden = !!this.data.filesystem && previews.length === 1;
         const stageEl = document.createElement('div');
         stageEl.className = 'preview-stage';
         this.tabContentEl.append(slotBar, stageEl);
@@ -621,6 +627,10 @@
           left.textContent = `${prev.title} · ${prev.media_type}`;
           const right = document.createElement('span');
           right.textContent = prev.truncated ? 'BOUNDED EXCERPT' : (prev.status || 'available').toUpperCase();
+          if (this.data.filesystem && prev.status === 'available') {
+            left.textContent = [prev.language || prev.media_type, prev.summary].filter(Boolean).join(' · ');
+            right.textContent = prev.truncated ? 'Bounded excerpt' : '';
+          }
           hdr.append(left, right);
           stageEl.appendChild(hdr);
 
