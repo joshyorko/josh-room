@@ -405,11 +405,18 @@ def test_inherited_exclusions_nested_child_and_legacy_optimize(runtime):
     (r.source / "a").rename(r.source / "projects/a")
     (r.source / "projects/a/private").mkdir()
     (r.source / "projects/a/private/never.txt").write_text("excluded synthetic payload")
-    (r.source / ".josh-roomignore").write_text("projects/a/private/**\n")
+    from scripts.git_recovery_acceptance import git
+
+    git(r.source, "init", "-q")
+    git(r.source, "add", ".")
+    r.assignments[1]["path"] = "projects/a"
+    with pytest.raises(ValueError, match="cohesive Git repository"):
+        capture_plan(r.source, r.dimension, NAMESPACE, "parent", r.assignments)
+    assert r.transport.writes == 0
+    (r.source / ".josh-roomignore").write_text("# josh-room capture-mode: source-only\nprojects/a/private/**\n")
     (r.source / "projects/a/.josh-roomignore").write_text("generated/**\n")
     (r.source / "projects/a/restricted").mkdir(mode=0o700)
     (r.source / "projects/a/restricted/file.txt").write_text("permission fixture")
-    r.assignments[1]["path"] = "projects/a"
     result = save(r)
     envelope, _ = r.authority.read()
     records = envelope["state"]["dimension_catalog"]["projects"]
