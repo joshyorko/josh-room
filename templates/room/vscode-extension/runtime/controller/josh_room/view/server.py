@@ -254,7 +254,7 @@ class _SnapshotProviderAdapter:
 
 
 _FS_PARAMS = {
-    "/fs/list": {"id", "generation", "cursor"},
+    "/fs/list": {"id", "generation", "cursor", "sample"},
     "/fs/inspect": {"id", "generation"},
     "/fs/points": {"id", "generation"},
     "/fs/compare": {"id", "generation", "point"},
@@ -296,7 +296,12 @@ def _filesystem_result(adapter, path: str, query: dict[str, list[str]], policy: 
             raise ViewValidationError("response-too-large", "attachment too large")
         return attachment
     if path == "/fs/list":
-        result = adapter.listing(object_id, generation, cursor)
+        if "sample" in values:
+            if values["sample"] != "1" or generation is None or cursor is not None:
+                raise ViewValidationError("invalid-query", "invalid directory sample")
+            result = adapter.listing(object_id, generation, sample=True)
+        else:
+            result = adapter.listing(object_id, generation, cursor)
     elif path == "/fs/inspect":
         result = adapter.inspect(object_id, generation)
     else:
@@ -479,7 +484,16 @@ class RoomViewServer:
                 if owner._filesystem is None or path not in _FS_PARAMS:
                     error(HTTPStatus.NOT_FOUND, "not-found")
                     return
-                if not owner._fs_lock.acquire(blocking=False):
+                sample = path == "/fs/list" and "sample" in query
+                # One foreground request may wait for the current bounded operation.
+                # While it waits, incoming scene samples yield immediately.
+                acquired = False
+                if owner._fs_admission.acquire(blocking=False):
+                    try:
+                        acquired = owner._fs_lock.acquire(timeout=0 if sample else 0.5)
+                    finally:
+                        owner._fs_admission.release()
+                if not acquired:
                     error(HTTPStatus.TOO_MANY_REQUESTS, "filesystem-busy")
                     return
                 try:
@@ -493,6 +507,7 @@ class RoomViewServer:
                 except ViewValidationError as exc:
                     public_errors = {
                         "filesystem-stale": HTTPStatus.CONFLICT,
+                        "filesystem-scene-entry-stale": HTTPStatus.CONFLICT,
                         "workspace-binding-changed": HTTPStatus.CONFLICT,
                         "filesystem-unknown": HTTPStatus.NOT_FOUND,
                         "response-too-large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
@@ -760,6 +775,7 @@ class RoomViewServer:
             self._httpd.server_close()
             raise
         self._fs_lock = threading.Lock()
+        self._fs_admission = threading.Lock()
         self._export_lock = threading.Lock()
         self._httpd.daemon_threads = True
         self._serve_thread: threading.Thread | None = None

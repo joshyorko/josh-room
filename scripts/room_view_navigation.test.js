@@ -75,12 +75,159 @@ test('a stale file handle rechecks ancestors and selects only the same admitted 
   await app._openFilesystem(dir.id, { kind: 'directory' });
   await app._openFilesystem(file.id, { kind: 'file' });
   stale = true;
+  app.forward.push('node/obsolete');
   await app._openFilesystem(file.id, { kind: 'file', refresh: true });
   assert.equal(app.currentNodeId, 'node/f12');
   assert.equal(app.data.fsGeneration, 'g2');
+  assert.deepEqual(app.history, []);
+  assert.deepEqual(app.forward, []);
   removed = true;
   app.data.fsGeneration = 'g';
   await app._openFilesystem(file.id, { kind: 'file', refresh: true });
   assert.equal(app.currentNodeId, 'node/dir');
   assert.equal(app.layout.allLeavesByObjectId.size, 0);
+});
+
+require('../src/josh_room/view/viewer/data_layer.js');
+
+test('seven real directory IDs acquire a bounded landscape independently of the current listing', async () => {
+  const folders = Array.from({length: 7}, (_, n) => ({ ...dir, id: 'dir' + n, label: 'folder' + n, fields: {coverage: 'not-examined'} }));
+  const deeper = { ...dir, id: 'deep', parent_id: 'dir3' };
+  const leaf = { ...file, id: 'context-file', parent_id: deeper.id, previews: [{body: 'private body'}] };
+  const app = appFixture();
+  Object.assign(app, { viewMode: '3d', sceneContext: [], scene3d: {setLayout(layout) { this.layout = layout; }} });
+  const data = app.data;
+  const calls = [];
+  data.sceneNeighborhood = window.RoomViewData.RoomViewDataLayer.prototype.sceneNeighborhood;
+  data.queryFilesystem = async (op, {id, sample, cursor, generation}) => {
+    calls.push([op, id, sample, cursor, generation]);
+    const directory = [deeper, ...folders].find(d => d.id === id);
+    return {directory, generation: 'current', coverage: id === 'dir0' ? 'partial' : 'complete',
+      entries: id === deeper.id ? [leaf] : id === 'dir3' ? [deeper] : [] };
+  };
+  const page = listing(root, folders, 'current');
+  app.fsPage = page;
+  data.applyFilesystemNodes([root, ...folders], 'current');
+  app._syncFromData();
+  await app._sampleScene(page);
+  assert.deepEqual(calls.map(c => c[1]), ['dir3', 'dir0', 'dir6', 'deep']);
+  assert.ok(calls.every(([op, , sample, cursor, gen]) =>
+    op === 'list' && sample === '1' && !cursor && gen === 'current'));
+  assert.equal(data.state.nodes.length, 8);
+  assert.equal(app.layout.allLeavesByObjectId.size, 0);
+  assert.equal(app.scene3d.layout.allLeavesByObjectId.get(leaf.id).previews.length, 0);
+  assert.equal(app.scene3d.layout.nodeById.get('node/dir0').coverage, 'partial');
+  assert.equal(app.scene3d.layout.nodeById.get('node/dir1').coverage, 'not-examined');
+});
+
+test('one unavailable scene branch preserves verified neighbors while generation and binding errors discard the pass', async () => {
+  const folders = [0, 1, 2].map(n => ({ ...dir, id: 'folder-' + n }));
+  const page = listing(root, folders, 'current');
+  let code = 'filesystem-scene-entry-stale';
+  const data = Object.create(window.RoomViewData.RoomViewDataLayer.prototype);
+  data.queryFilesystem = async (_, { id }) => {
+    if (id === folders[1].id && code) throw Object.assign(new Error(code), { code });
+    return { directory: folders.find(n => n.id === id), entries: [], generation: page.generation, coverage: 'complete' };
+  };
+  const run = () => data.sceneNeighborhood(page, new AbortController().signal);
+  for (code of ['filesystem-scene-entry-stale', 'filesystem-unknown']) {
+    assert.deepEqual((await run()).map(n => n.id), ['folder-0', 'folder-2']);
+  }
+  for (code of ['filesystem-stale', 'workspace-binding-changed']) {
+    await assert.rejects(run, { code });
+  }
+  code = null;
+  assert.deepEqual((await run()).map(n => n.id), ['folder-1', 'folder-0', 'folder-2']);
+});
+
+test('late geometry from an abandoned sample cannot reappear after navigation', async () => {
+  const app = appFixture();
+  const page = listing(root, [dir]);
+  let release;
+  Object.assign(app, {viewMode: '3d', fsPage: page, sceneContext: [], scene3d: {}});
+  app.data.sceneNeighborhood = () => new Promise(resolve => { release = resolve; });
+  const pending = app._sampleScene(page);
+  app._clearSceneContext();
+  app.fsPage = listing(other, []);
+  release([file]);
+  await pending;
+  assert.deepEqual(app.sceneContext, []);
+  assert.equal(app.currentNodeId, 'root');
+});
+
+test('selection commits the verified neighborhood atomically and sends the relative destination to the camera', async () => {
+  let release;
+  const app = appFixture(async op => op === 'preview' ? {node: preview} : {node: file});
+  const oldBranch = {...other, parent_id: dir.id, fields: {coverage: 'complete'}};
+  const currentPage = listing(dir, [file, oldBranch]);
+  const branchFile = {...file, id: 'sibling-file', parent_id: oldBranch.id};
+  const frames = [];
+  const poses = [];
+  Object.assign(app, {fsPage: currentPage, viewMode: '3d', sceneContext: [oldBranch, branchFile],
+    scene3d: {
+      setLayout(layout, options) { frames.push([layout, options]); },
+      focusNode(target) { poses.push(target); },
+    },
+  });
+  app.data.applyFilesystemNodes([root, dir, oldBranch, file], 'g');
+  app._syncFromData();
+  const sync = app._syncFromData;
+  app._syncFromData = function(options) {
+    sync.call(this);
+    this._drawScene(options);
+  };
+  app.data.sceneNeighborhood = async (page, signal, prior) => {
+    assert.deepEqual(prior, [oldBranch.id]);
+    await new Promise(resolve => { release = resolve; });
+    return [oldBranch, branchFile];
+  };
+  const selecting = app._openFilesystem(file.id, {kind: file.node_kind});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(frames.length, 0, 'previous verified world stays visible while the new observation is validated');
+  assert.equal(app.currentNodeId, 'root');
+  release();
+  await selecting;
+  assert.deepEqual(poses, ['node/f12']);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0][1].navigationTargetId, 'node/f12');
+  assert.ok(frames[0][0].nodeById.has('node/sibling-file'));
+  assert.equal(app.layout.nodeById.has('node/sibling-file'), false);
+});
+
+test('page continuation revalidates prior directory IDs without copying unobserved geometry', async () => {
+  const folders = [0,1,2].map(i => ({...dir, id: 'old'+i, parent_id: root.id}));
+  const calls = [];
+  const data = Object.create(window.RoomViewData.RoomViewDataLayer.prototype);
+  data.queryFilesystem = async (_, {id, generation}) => {
+    calls.push(id);
+    if (id === folders[1].id) throw Object.assign(new Error('changed'), {code: 'filesystem-scene-entry-stale'});
+    return {directory: folders.find(f => f.id === id), generation, coverage: 'complete', entries: []};
+  };
+  const result = await data.sceneNeighborhood(listing(root, [file]), new AbortController().signal, folders.map(f => f.id));
+  assert.deepEqual(calls, folders.map(f => f.id));
+  assert.deepEqual(result.map(f => f.id), [folders[0].id, folders[2].id]);
+});
+
+test('transient sample congestion preserves the displayed frame; revoked authority removes every object immediately', async () => {
+  const app = appFixture();
+  app.viewMode = '3d';
+  app.fsPage = listing(dir, [file]);
+  const prior = app.sceneContext = [other];
+  app.scene3d = {clearSpotlight() {}};
+  app.data.applyFilesystemNodes([root, dir, file], 'g');
+  app._syncFromData();
+  app.currentNodeId = 'node/f12';
+  app.evidence.target = file;
+  let status = 429;
+  app.data.sceneNeighborhood = async () => { throw Object.assign(new Error('sample error'), {status}); };
+  await app._sampleScene(app.fsPage);
+  assert.equal(app.sceneContext, prior);
+  status = 403;
+  await app._sampleScene(app.fsPage);
+  assert.equal(app.fsPage, null);
+  assert.equal(app.currentNodeId, 'root');
+  assert.equal(app.evidence.target, null);
+  assert.deepEqual(app.sceneContext, []);
+  assert.equal(app.data.fsGeneration, null);
+  assert.deepEqual(app.data.state.nodes.map(n => n.id), ['root']);
 });

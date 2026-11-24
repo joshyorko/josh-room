@@ -206,7 +206,8 @@
     };
 
     if (hasCustomNodes) {
-      const rawNodes = state.nodes.slice().sort((a, b) => ((a.order ?? 0) - (b.order ?? 0)) || a.id.localeCompare(b.id));
+      const rawNodes = state.nodes.slice().sort((a, b) => ((a.order ?? 0) - (b.order ?? 0)) ||
+        (isWorkspace(descriptor) ? a.label.localeCompare(b.label) : 0) || a.id.localeCompare(b.id));
       const rawById = new Map(rawNodes.map((n) => [n.id, n]));
       const rootRaw = rawNodes.find((n) => n.parent_id == null) || rawNodes[0];
 

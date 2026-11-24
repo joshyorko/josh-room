@@ -1,0 +1,61 @@
+{
+  "product": "3ab227f3ed61f2421a9cdcb493aae7c6acfcf47d",
+  "vsix_sha256": "1abf0ef1d0295c72eec1971b1c652e817f9c7602e574091f06a8a6a4a5b0bbed",
+  "controller_artifact": "sha256:4f5f2dcd727b26ee6cef6ffd20b9ec030d08da15685c062f1fa4ed2b7ec45d96",
+  "served_viewer_sha256": "2c51e865168bb4694032606be0fcaa52a1cc58f73acbc5af663c686719819937",
+  "environment": "Linux x64, disposable local VS Code profile and Xvfb",
+  "vscode": "1.147.0",
+  "chrome": "Google Chrome 158.0.8127.36",
+  "handoff": "The registered Explore command launched the packaged controller. The driver passed its real loopback browser URL to three isolated Chrome processes by stdin, then executed the registered Stop command.",
+  "rendering": "Headless Chrome with SwiftShader for 3D and disabled WebGL for scoped Grid.",
+  "commands": [
+    "joshRoom.explore3D",
+    "joshRoom.stopRoomView"
+  ],
+  "http": {
+    "root": 200,
+    "state": 200,
+    "hasFixture": true,
+    "unauthenticated": 403,
+    "post": 405
+  },
+  "native_document": "native-document.json",
+  "native_document_verified": true,
+  "spatial": {
+    "nativeFilesystem": true,
+    "webglActive": true,
+    "initialMode": "3d",
+    "viewport": [
+      1280,
+      800
+    ],
+    "firstFrameMs": 1449.9,
+    "canvasPointerSelections": [
+      "/src",
+      "/src/main.py"
+    ],
+    "readButton": "Read file",
+    "visibleExactSourceText": true
+  },
+  "fallback": {
+    "nativeFilesystem": true,
+    "webglActive": false,
+    "initialMode": "grid",
+    "viewport": [
+      1280,
+      800
+    ],
+    "scopedGridSelections": [
+      "/src",
+      "/src/main.py"
+    ],
+    "readButton": "Read file",
+    "visibleExactSourceText": true
+  },
+  "screenshot": {
+    "file": "native-fallback.png",
+    "sha256": "8852bda3108ec153e49c7b74bbff9ea75fab213ee5057119d6cc2971d7356c58"
+  },
+  "listener_closed_after_stop": true,
+  "limits": "Same-host Linux. The OS default-browser picker, hardware GPU, remote forwarding, Windows, and human performance were outside this run."
+}

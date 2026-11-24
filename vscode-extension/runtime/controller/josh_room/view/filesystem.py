@@ -27,8 +27,10 @@ from .room_provider import (
 
 _SCAN_BATCH = 128
 _PAGE = 48
+_SCENE_SAMPLE = 8
 _MAX_CURSORS = 8
 _MAX_HANDLES = 8192
+_MAX_SAMPLE_HANDLES = 256
 _BLOCKED = {"reserved-boundary", "git-pointer-unsupported", "inaccessible-boundary"}
 
 
@@ -135,6 +137,7 @@ class WorkspaceFilesystem:
         self._generation = None
         self._policy_hash = None
         self._handles = OrderedDict()
+        self._sample_handles = OrderedDict()
         self._cursors = OrderedDict()
         self._last_page = None
 
@@ -143,6 +146,7 @@ class WorkspaceFilesystem:
             scan.close()
         self._cursors.clear()
         self._handles.clear()
+        self._sample_handles.clear()
         self._last_page = None
         self._generation = None
 
@@ -151,11 +155,13 @@ class WorkspaceFilesystem:
             self._clear()
 
     def _remember(self, entry):
+        self._sample_handles.pop(entry.id, None)
         self._handles[entry.id] = entry
         self._handles.move_to_end(entry.id)
         if len(self._handles) > _MAX_HANDLES:
             self._handles.move_to_end("root")
-            self._handles.popitem(last=False)
+            evicted, _ = self._handles.popitem(last=False)
+            self._sample_handles.pop(evicted, None)
 
     def _bootstrap(self):
         fd, _ = self.provider._open_bound_root()
@@ -174,11 +180,12 @@ class WorkspaceFilesystem:
     def _boundary(self, entry, fd):
         return self.provider._dir_boundary_kind(fd, self.provider._root.joinpath(*entry.parts), is_root=not entry.parts)
 
-    def _open_entry(self, entry):
+    def _open_entry(self, entry, *, refresh_directory=False):
         fd, _ = self.provider._open_bound_root()
         try:
             policy = self.provider._capture_policy(fd)
             if policy.sha256 != self._policy_hash:
+                self._clear()
                 raise _stale()
             mount = _safe_mount_id(fd)
             if mount is None:
@@ -202,7 +209,15 @@ class WorkspaceFilesystem:
                     child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                     os.close(fd)
                     fd = child
-                if stamp(os.fstat(fd)) != stamp(component.info) or _safe_mount_id(fd) != mount:
+                observed = stamp(os.fstat(fd))
+                expected = stamp(component.info)
+                # The admitted name and inode still belong to the unchanged parent.
+                # A scene sample can start a fresh scan of this directory's children.
+                if refresh_directory and index and component is entry:
+                    observed, expected = observed[:2], expected[:2]
+                if observed != expected or _safe_mount_id(fd) != mount:
+                    if index == 0:
+                        self._clear()
                     raise _stale()
                 if index < len(chain) - 1 and self._boundary(component, fd) in _BLOCKED:
                     raise _stale()
@@ -211,31 +226,57 @@ class WorkspaceFilesystem:
             os.close(fd)
             raise
 
+    def _validate_sample_root(self, generation):
+        if self._generation != generation:
+            raise _stale()
+        try:
+            fd, _ = self._open_entry(self._handles["root"])
+            os.close(fd)
+        except ViewValidationError:
+            self._clear()
+            raise
+        except (OSError, ValueError):
+            self._clear()
+            raise _stale() from None
+
     @contextmanager
-    def _bound(self, object_id, generation):
+    def _bound(self, object_id, generation, *, sample=False):
         if generation != self._generation or generation is None:
             raise _stale()
-        entry = self._handles.get(object_id)
+        primary = self._handles.get(object_id)
+        sampled = self._sample_handles.get(object_id)
+        entry = (sampled or primary) if sample else (primary or sampled)
         if entry is None:
+            if sample:
+                self._validate_sample_root(generation)
             raise _unknown()
-        self._handles.move_to_end(entry.id)
         try:
-            fd, policy = self._open_entry(entry)
+            fd, policy = self._open_entry(entry, refresh_directory=sample)
             try:
+                if sample and entry.parent and stat.S_ISDIR(entry.info.st_mode):
+                    entry = replace(entry, info=os.fstat(fd))
+                if not sample:
+                    self._remember(entry)
                 yield entry, fd, policy
                 fresh, _ = self._open_entry(entry)
                 os.close(fresh)
             finally:
                 os.close(fd)
         except ViewValidationError as error:
-            if error.code in {"filesystem-stale", "workspace-binding-changed"}:
+            if sample and entry.parent and error.code == "filesystem-stale":
+                self._validate_sample_root(generation)
+                raise ViewValidationError("filesystem-scene-entry-stale", "scene branch changed") from None
+            if error.code in {"workspace-binding-changed", "filesystem-stale"}:
                 self._clear()
             raise
         except (OSError, ValueError):
+            if sample and entry.parent:
+                self._validate_sample_root(generation)
+                raise ViewValidationError("filesystem-scene-entry-stale", "scene branch changed") from None
             self._clear()
             raise _stale() from None
 
-    def _child(self, parent, fd, policy, name):
+    def _child(self, parent, fd, policy, name, *, sample=False):
         parts = (*parent.parts, name)
         if policy.is_excluded("/".join(parts)):
             return None
@@ -257,21 +298,28 @@ class WorkspaceFilesystem:
         identity = f"{info.st_dev}:{info.st_ino}:" + "/".join(parts)
         token = hashlib.blake2s(identity.encode(), key=self._key, digest_size=16).hexdigest()
         child = Entry(f"n-{token}", parent, parts, info)
-        self._remember(child)
+        if sample:
+            self._sample_handles[child.id] = child
+            self._sample_handles.move_to_end(child.id)
+            if len(self._sample_handles) > _MAX_SAMPLE_HANDLES:
+                self._sample_handles.popitem(last=False)
+        else:
+            self._remember(child)
         return child
 
-    def _page(self, scan, entry, fd, policy, rows):
+    def _page(self, scan, entry, fd, policy, rows, *, sample=False):
+        limit = _SCENE_SAMPLE if sample else _PAGE
         candidates = scan.db.execute(
             "select name,sortkey,ambiguous from siblings where sortkey>? order by sortkey limit ?",
-            (scan.after, _PAGE + 1),
+            (scan.after, limit + 1),
         ).fetchall()
-        for name, key, aliases in candidates[:_PAGE]:
+        for name, key, aliases in candidates[:limit]:
             scan.after = key
             if aliases:
                 scan.omitted += 1 + aliases
                 continue
             try:
-                child = self._child(entry, fd, policy, name)
+                child = self._child(entry, fd, policy, name, sample=sample)
             except OSError:
                 scan.inaccessible = True
                 child = None
@@ -279,14 +327,16 @@ class WorkspaceFilesystem:
                 rows.append(child.node().to_dict())
             else:
                 scan.omitted += 1
-        return len(candidates) > _PAGE
+        return len(candidates) > limit
 
-    def listing(self, object_id, generation=None, cursor=None):
+    def listing(self, object_id, generation=None, cursor=None, *, sample=False):
+        if sample and (cursor is not None or generation is None):
+            raise ViewValidationError("invalid-query", "sample requires an admitted generation without a cursor")
         with self._lock:
             if object_id == "root" and generation is None and cursor is None:
                 self._bootstrap()
                 generation = self._generation
-            with self._bound(object_id, generation) as (entry, fd, policy):
+            with self._bound(object_id, generation, sample=sample) as (entry, fd, policy):
                 if not stat.S_ISDIR(entry.info.st_mode):
                     raise _unknown()
                 boundary = self._boundary(entry, fd)
@@ -319,8 +369,8 @@ class WorkspaceFilesystem:
                 try:
                     if scan.iterator is not None:
                         scan.advance()
-                    more = scan.iterator is not None or self._page(scan, entry, fd, policy, rows)
-                    if more:
+                    more = scan.iterator is not None or self._page(scan, entry, fd, policy, rows, sample=sample)
+                    if more and not sample:
                         if len(self._cursors) >= _MAX_CURSORS:
                             _, evicted = self._cursors.popitem(last=False)
                             evicted.close()
@@ -364,9 +414,9 @@ class WorkspaceFilesystem:
         media = kind.embed_media_type
         limit = min(self.provider._max_attachment_bytes, 1024 * 1024)
         if media and not self.provider._include_attachments:
-            preview = replace(preview, reason="binary evidence disabled for this session")
+            preview = replace(preview, reason="binary file previews disabled for this session")
         elif media and entry.info.st_size > limit:
-            preview = replace(preview, reason="file exceeds bounded binary evidence size")
+            preview = replace(preview, reason="file exceeds the binary preview size limit")
         elif media:
             data = self.provider._read_regular_file_bytes(fd, directory, name, entry.info, limit)
             signatures = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff",
@@ -375,7 +425,7 @@ class WorkspaceFilesystem:
                 attachment = Attachment("evidence" + Path(name).suffix.lower(), media, data)
                 refs = (AttachmentRef(attachment.name, media, len(data), attachment.sha256),)
             else:
-                preview = replace(preview, reason="file unreadable or evidence signature does not match its type")
+                preview = replace(preview, reason="file unreadable or its signature does not match its type")
         fields = {**node.fields, "preview_status": preview.status}
         return replace(node, previews=(preview,), attachments=refs, fields=fields), attachment
 

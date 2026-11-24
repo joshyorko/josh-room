@@ -37,15 +37,15 @@ function setup() {
     id, label: id, node_kind: 'file', parent_id, kind: 'source', metric: 64, fields: { file_bytes: 97405 },
   });
   const state = { nodes: [
-    directory('room', null), directory('src', 'room'), file('unrelated', 'room'),
+    directory('room', null), directory('empty', 'room'), directory('src', 'room'), file('unrelated', 'room'),
     file('abc', 'src'), directory('xyz', 'src'), file('deeper', 'xyz'),
   ] };
   const selected = [];
   const grid = new window.RoomViewGrid.GridFallbackView(new Element('div'), new Element('div'), null,
     { onSelectItem: id => selected.push(id) });
   const layout = window.RoomViewLayout.buildFsnLayout(descriptor, state);
-  const render = (directoryId, coverage) => grid.render(descriptor, state, layout, {
-    directoryId, selectedId: 'node/abc', coverage,
+  const render = (directoryId, coverage, coverageLabel) => grid.render(descriptor, state, layout, {
+    directoryId, selectedId: 'node/abc', coverage, coverageLabel,
   });
   return { grid, selected, render };
 }
@@ -72,4 +72,11 @@ test('an unresolved folder never claims an empty complete listing', () => {
   render('node/removed');
   assert.match(grid.summaryEl.textContent, /Completeness unknown/);
   assert.equal(grid.contentEl.children[1].textContent, 'No entries available in this observation.');
+});
+
+test('empty grid uses typed complete coverage alongside a detailed summary', () => {
+  const { grid, render } = setup();
+  render('node/empty', 'complete', 'complete · 0 shown · 5 examined · 5 omitted');
+  assert.match(grid.summaryEl.textContent, /5 omitted/);
+  assert.equal(grid.contentEl.children[1].textContent, 'No visible entries in this folder.');
 });

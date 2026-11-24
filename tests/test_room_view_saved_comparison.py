@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -124,11 +125,37 @@ def test_comparison_is_digest_only_under_session_and_server_policy(tmp_path, mon
             "snapshot": "point-a", "date": "2026-11-23T00:00:00Z", "tree_id": "a" * 64,
             "workspace_snapshot_id": "b" * 64, "file": file,
         })
+        started = datetime.now(UTC).replace(microsecond=0)
         receipt = service.query(adapter, entry["id"], page["generation"], "a" * 32)
+        assert started <= datetime.fromisoformat(receipt["live_observed_at"]) <= datetime.now(UTC)
+        assert receipt["path"] == name
+        assert receipt["diff_status"] == (
+            "preview-disabled" if not include_previews else "size-limit" if limit == 256 else "text-withheld"
+        )
         assert receipt["change"] == "modified"
         assert receipt["saved"]["sha256"] == hashlib.sha256(saved).hexdigest()
         assert receipt["live"]["sha256"] == hashlib.sha256(current).hexdigest()
         assert receipt["unified_diff"] is None
+    finally:
+        adapter.close()
+
+
+def test_comparison_does_not_disclose_a_redacted_path(tmp_path, monkeypatch):
+    name = "record-123456789012345.py"
+    (tmp_path / name).write_text("value = 4\n")
+    adapter = RoomWorkspaceProvider(tmp_path).open_filesystem()
+    try:
+        listing = adapter.listing("root")
+        [entry] = listing["entries"]
+        assert entry["label"] != name
+        monkeypatch.setattr("josh_room.view.saved_comparison._query", lambda *_: {
+            "snapshot": "point-a", "date": "2026-11-23T00:00:00Z", "tree_id": "a" * 64,
+            "workspace_snapshot_id": "b" * 64, "file": None,
+        })
+        receipt = SavedComparison(tmp_path / "broker").query(adapter, entry["id"], listing["generation"], "a" * 32)
+        assert receipt["path"] is None
+        assert name not in str(receipt)
+        assert receipt["change"] == "added"
     finally:
         adapter.close()
 

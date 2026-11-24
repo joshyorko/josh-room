@@ -23,14 +23,15 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <button id="btn-back" class="hud-btn hud-icon-btn" type="button" title="Go back (Backspace)" aria-label="Go back" disabled>&#8592;</button>
       <button id="btn-forward" class="hud-btn hud-icon-btn" type="button" title="Go forward" aria-label="Go forward" disabled>&#8594;</button>
       <button id="btn-up" class="hud-btn hud-icon-btn" type="button" title="Go to parent folder" aria-label="Go to parent folder" disabled>&#8593;</button>
-      <nav id="breadcrumbs" class="breadcrumbs" aria-label="Directory path"></nav>
-      <span id="badge-mode" class="pill pill-mode">OFFLINE</span>
-      <span id="badge-sensitivity" class="pill pill-sensitivity">SYNTHETIC</span>
+      <div class="room-location">
+        <div class="room-heading"><strong id="room-title"></strong><div class="session-badges"><span id="badge-mode" class="pill pill-mode">Offline</span> <span id="badge-sensitivity" class="pill pill-sensitivity"></span></div></div>
+        <nav id="breadcrumbs" class="breadcrumbs" aria-label="Directory path"></nav>
+      </div>
     </div>
     <div class="hud-right">
       <label class="search-wrap" aria-label="Search files and directories">
         <span class="search-slash" aria-hidden="true">/</span>
-        <input id="search-input" type="search" placeholder="Search paths, files, runs..." autocomplete="off" spellcheck="false">
+        <input id="search-input" type="search" placeholder="Find in this view" autocomplete="off" spellcheck="false">
       </label>
       <select id="fs-search-scope" class="hud-btn" aria-label="Search scope" hidden>
         <option value="directory">This folder</option>
@@ -49,6 +50,8 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <details class="advanced-hud">
         <summary class="hud-btn">More</summary>
         <div class="advanced-actions">
+          <button id="btn-help" class="hud-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">Keyboard help</button>
+          <details class="world-key"><summary>Map key</summary><div id="menu-map-key"></div></details>
           <button id="btn-mode-sql" class="seg-btn" type="button" data-view="sql">SQL</button>
           <button id="btn-spotlight-ab" class="hud-btn" type="button" title="Switch Spotlight v2 / Baseline">Spot: v2</button>
           <button id="btn-motion" class="hud-btn" type="button" title="Toggle motion (M)">Motion</button>
@@ -57,7 +60,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
           <button id="btn-print" class="hud-btn" type="button" title="Print top-down map and 2D grid">Print</button>
         </div>
       </details>
-      <button id="btn-help" class="hud-btn hud-icon-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">?</button>
+
     </div>
   </header>
 
@@ -87,7 +90,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
   <div id="aria-live-region" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <!-- Dismissible Contextual Inspector & Evidence Drawer (HIDDEN until selection) -->
-  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object content, details, links, and evidence" hidden>
+  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object" hidden>
     <div class="drawer-header">
       <div class="drawer-title-group">
         <span id="inspector-kind-badge" class="kind-badge"></span>
@@ -99,13 +102,21 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <div class="drawer-header-actions">
         <button id="btn-prev-fail" class="hud-btn hud-sm" type="button" title="Previous failure ([)">[ Fail</button>
         <button id="btn-next-fail" class="hud-btn hud-sm" type="button" title="Next failure (])">Fail ]</button>
-        <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector (Esc)">&times;</button>
+        <button id="btn-reader-back" class="hud-btn hud-sm" type="button" hidden>Back to file</button>
+        <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector">&times;</button>
       </div>
     </div>
+    <section id="file-summary" aria-label="Selected object actions" hidden>
+      <p id="file-summary-info"></p>
+      <div class="file-summary-actions">
+        <button id="btn-read-file" class="hud-btn" type="button">Read file</button>
+        <button id="btn-compare-file" class="hud-btn" type="button" hidden>Compare saved version</button>
+      </div>
+    </section>
     <div class="drawer-tabs" role="tablist" aria-label="Inspector sections">
       <button class="tab-btn active" role="tab" aria-selected="true" data-tab="content" type="button">Content <span id="content-count-badge" class="tab-count">0</span></button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="details" type="button">Details</button>
-      <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button">Evidence <span id="evidence-count-badge" class="tab-count">0</span></button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button"><span id="attachment-tab-label">Evidence</span> <span id="evidence-count-badge" class="tab-count">0</span></button>
       <button id="btn-compare-tab" class="tab-btn" role="tab" aria-controls="tab-compare" aria-selected="false" data-tab="compare" type="button" hidden>Compare</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="timeline" type="button">Timeline</button>
     </div>
@@ -169,7 +180,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
         <button id="btn-help-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close help">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="muted-text">Click a directory slab or conduit wire to fly along its branch; click any file, run, or artifact block to spotlight it and inspect bounded read-only source, diffs, JSON trees, execution logs, evidence, and relationship links. Drag to orbit, Shift-drag to pan, scroll to zoom.</p>
+        <p class="muted-text">Select a directory to follow its branch. Select a block to spotlight the object and see what you can open. Drag to orbit, Shift-drag to pan, or scroll to zoom.</p>
         <table class="shortcuts-table">
           <tbody>
             <tr><td><kbd>&#8593;</kbd> / <kbd>&#8595;</kbd></td><td>Previous / next sibling</td></tr>
