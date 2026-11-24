@@ -125,8 +125,12 @@ receipt** in the Save confirmation and keep the receipt for cold parent restore.
 In a restored Catalog parent, **Enter Child Room** lets you choose a saved child.
 **Refresh Catalog Child Pins** lets you choose a child and a particular saved
 version. The controller verifies the parent's membership and exact recovery points.
-Cold parent restore uses the CLI above. Native discovery and restore from a fresh
-machine are tracked in [issue #231](https://github.com/joshyorko/josh-room/issues/231).
+On an enrolled machine, reload **Rooms** and expand the storage bucket. Saved
+Catalog parents appear as **Catalog Room** entries with their most recent save
+date. Select the parent and an exact recovery point, then choose a new folder
+for **Restore Catalog Room**. Use **Enter Child Room** from the restored parent
+to open a pinned child. If discovery is marked incomplete, the receipt and CLI
+still allow restoring a known exact recovery point.
 
 ## Selecting child components
 

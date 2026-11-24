@@ -8334,3 +8334,45 @@ test("Catalog preview and Save hand off SecretStorage provider credentials while
   }
   assert.equal(reads, 2);
 });
+
+test("registered Catalog restore submits the selected exact pin and only opens a verified parent", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-restore-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode, executeCalls } = fixture;
+  const namespace = "1".repeat(32);
+  const dimension = { id: "fixture", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" };
+  const target = path.join(root, "new-parent");
+  let calls = 0;
+  let verified = false;
+  const harness = createSpawnHarness(({ args }) => {
+    if (args[0] === "encryption") {
+      return { stdout: JSON.stringify({ ok: true, ...dimension, key_generation: 1 }) };
+    }
+    assert.deepEqual(args, ["composition", "restore-parent", "--dimension", "fixture", "--namespace", namespace,
+      "--parent-room", "parent", "--parent-snapshot", "jat-older", "--destination", target, "--json"]);
+    calls++;
+    return { stdout: JSON.stringify({ ok: true, marker_verified: verified, namespace, unit: "parent",
+      room_id: "parent", snapshot_id: "jat-older" }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
+  const restore = fixture.commandCallbacks.get("joshRoom.restoreCatalog");
+  const point = { kind: "catalog-point", dimension, catalog: { namespace, parent_room_id: "parent" },
+    point: { snapshot_id: "jat-older" } };
+  vscode.window.showSaveDialog = async () => undefined;
+  assert.equal(await restore(point), "cancelled");
+  assert.equal(calls, 0);
+  vscode.window.showSaveDialog = async () => ({ scheme: "file", fsPath: root });
+  assert.equal(await restore(point), "failed");
+  assert.equal(calls, 0);
+  vscode.window.showSaveDialog = async () => ({ scheme: "file", fsPath: target });
+  assert.equal(await restore(point), "failed");
+  assert.equal(calls, 1, JSON.stringify(fixture.errorCalls));
+  assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 0);
+  verified = true;
+  assert.equal((await restore(point)).snapshot_id, "jat-older");
+  assert.equal(calls, 2);
+  assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 1);
+});

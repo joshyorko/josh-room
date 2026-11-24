@@ -69,6 +69,7 @@
     "onView:joshRoom.rooms",
     "onCommand:joshRoom.splitWorkspace",
     "onCommand:joshRoom.saveCatalog",
+    "onCommand:joshRoom.restoreCatalog",
     "onCommand:joshRoom.enterChild",
     "onCommand:joshRoom.saveChild",
     "onCommand:joshRoom.refreshCatalogPins",
@@ -325,6 +326,10 @@
       {
         "command": "joshRoom.saveCatalog",
         "title": "Josh: Save Catalog Room"
+      },
+      {
+        "command": "joshRoom.restoreCatalog",
+        "title": "Josh: Restore Catalog Room"
       },
       {
         "command": "joshRoom.enterChild",

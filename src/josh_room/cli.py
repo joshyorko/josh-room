@@ -3080,10 +3080,21 @@ def _dimension_hierarchy(instance, dimension, backend):
 
 
 def _dimension_hierarchy_with_encryption(instance, dimension):
+    from .composition_discovery import discover_catalogs
+
     with sdk_error_boundary(dimension):
         backend = _backend(dimension.provider, instance, dimension.dimension_id)
         if dimension.provider not in {"minio", "s3"}:
-            return _dimension_hierarchy(instance, dimension, backend)
+            result = _dimension_hierarchy(instance, dimension, backend)
+            if dimension.provider == "r2" and hasattr(backend, "client"):
+                from .room_store_bridge import _resolve_material
+
+                try:
+                    material, _session = _resolve_material(dimension, None, None, allow_initialize=False)
+                    result.update(discover_catalogs(backend, dimension, material))
+                except (BotoCoreError, ClientError, OSError, RuntimeError, ValueError):
+                    result["catalog_discovery_partial"] = True
+            return result
         def resolve_selected(identity_path):
             return resolve_encryption_material(
                 dimension,
@@ -3099,6 +3110,8 @@ def _dimension_hierarchy_with_encryption(instance, dimension):
             state = encryption_status(dimension, backend)
             with _encryption_material_environment(material):
                 result = _dimension_hierarchy(instance, dimension, backend)
+            if hasattr(backend, "client"):
+                result.update(discover_catalogs(backend, dimension, material))
             result.update({
                 "encryption_state": state["state"],
                 "encryption_domain_id": material.encryption_domain_id,

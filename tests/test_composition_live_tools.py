@@ -47,6 +47,16 @@ class SQLiteS3:
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
         return {"Body": io.BytesIO(row[0]), "ETag": hashlib.sha256(row[0]).hexdigest()}
 
+    def list_objects_v2(self, Bucket, Prefix, Delimiter, MaxKeys, ContinuationToken=None):
+        keys = [key for (key,) in self.db.execute("select key from objects where bucket=?", (Bucket,))
+                if key.startswith(Prefix)]
+        prefixes = sorted({Prefix + key[len(Prefix):].split(Delimiter, 1)[0] + Delimiter
+                           for key in keys if Delimiter in key[len(Prefix):]})
+        offset = int(ContinuationToken or 0)
+        end = offset + MaxKeys
+        return {"CommonPrefixes": [{"Prefix": prefix} for prefix in prefixes[offset:end]],
+                "IsTruncated": end < len(prefixes), "NextContinuationToken": str(end)}
+
     def put_object(self, Bucket, Key, Body, IfNoneMatch=None, IfMatch=None):
         with self.db:
             row = self.db.execute(
@@ -280,6 +290,18 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
         preview["approval_sha256"], r.authority, r.factory, r.private,
         root_files_only=True,
     )
+    from josh_room.composition_discovery import discover_catalogs
+
+    other_namespace = "2" * 32
+    bucket = r.dimension.bucket
+    original = r.transport.get_object(Bucket=bucket, Key=f"composition/v1/{NAMESPACE}/authority.age")["Body"].read()
+    r.transport.put_object(Bucket=bucket, Key=f"composition/v1/{other_namespace}/authority.age", Body=original)
+    writes = r.transport.writes
+    discovery = discover_catalogs(SimpleNamespace(client=r.transport), r.dimension, r.authority.material)
+    assert discovery["catalog_discovery_partial"] is True
+    assert [(row["namespace"], row["parent_room_id"]) for row in discovery["catalogs"]] == [(NAMESPACE, "parent")]
+    assert discovery["catalogs"][0]["recovery_points"][0]["snapshot_id"] == saved["parent_snapshot_id"]
+    assert r.transport.writes == writes
     target = r.tmp / "root-files-only-entered"
     parent = hydrate_composition(
         r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],

@@ -436,3 +436,22 @@ test("pull references require the reported registry authority and matching immut
     assert.equal(verify(unsafe), undefined);
   }
 });
+
+test("Catalog parents and exact points are separate from ordinary Rooms", () => {
+  const tree = buildProviderTree({ dimensions: [{
+    id: "synthetic", provider: "minio", display_name: "Synthetic bucket",
+    rooms: [{ id: "ordinary", display_name: "Ordinary Room" }],
+    catalogs: [{ namespace: "1".repeat(32), parent_room_id: "parent", display_name: "Catalog Room", recovery_points: [
+      { snapshot_id: "jat-old", created_at: "2026-01-01T00:00:00Z", child_count: 2 },
+      { snapshot_id: "jat-new", created_at: "2026-01-02T00:00:00Z", child_count: 3 },
+      { snapshot_id: "latest", created_at: "2026-01-03T00:00:00Z", child_count: 4 },
+    ] }],
+    catalog_discovery_partial: true,
+  }] });
+  const bucket = tree[0].children[0].children[0];
+  assert.deepEqual(bucket.children.map(child => child.kind), ["catalog-parent", "catalog-partial", "room"]);
+  const parent = bucket.children[0];
+  assert.equal(parent.label, "Catalog Room");
+  assert.deepEqual(parent.children.map(row => row.point.snapshot_id), ["jat-new", "jat-old"]);
+  assert.ok(parent.children.every(row => row.kind === "catalog-point" && row.dimension.id === "synthetic"));
+});

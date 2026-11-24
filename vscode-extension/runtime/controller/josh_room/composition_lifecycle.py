@@ -1464,6 +1464,8 @@ def hydrate_composition(
         raise ValueError("parent pin is not committed in this namespace")
     catalog = Catalog.from_body(body["dimension_catalog"])
     parent_record = catalog.resolve_snapshot(room, snapshot)
+    if parent_record["ciphertext_sha256"] != operation["parent_pin"]["descriptor_sha256"]:
+        raise ValueError("parent descriptor differs from the committed pin")
     parent_descriptor = authority.descriptor(parent_record)
     corroborate_logical_snapshot(room, parent_record, parent_descriptor)
     _verify_descriptor_contract(state, parent_descriptor)

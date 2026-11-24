@@ -285,6 +285,34 @@ function snapshotRecords(project) {
   }));
 }
 
+function catalogNodes(dimension) {
+  const parents = records(dimension.catalogs, "parent_room_id").flatMap(catalog => {
+    if (!/^[a-f0-9]{32}$/.test(catalog.namespace) || !catalog.parent_room_id) return [];
+    const points = records(catalog.recovery_points, "snapshot_id").filter(point => /^jat-[a-z0-9-]+$/.test(point.snapshot_id)
+      && Number.isFinite(Date.parse(point.created_at)))
+      .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+    if (!points.length) return [];
+    const parent = {
+      kind: "catalog-parent", id: `${catalog.namespace}:${catalog.parent_room_id}`,
+      label: catalog.display_name || "Catalog Room",
+      description: new Date(points[0].created_at).toLocaleString(),
+      catalog, dimension,
+    };
+    parent.children = points.map(point => ({
+      kind: "catalog-point", id: `${parent.id}:${point.snapshot_id}`,
+      label: new Date(point.created_at).toLocaleString(),
+      description: `${point.child_count} child ${point.child_count === 1 ? "Room" : "Rooms"}`,
+      catalog, point, dimension,
+    }));
+    return [parent];
+  });
+  if (dimension.catalog_discovery_partial) parents.push({
+    kind: "catalog-partial", id: "catalog-partial", label: "Catalog discovery incomplete", dimension,
+    description: "Some Catalogs could not be checked",
+  });
+  return parents;
+}
+
 function buildProviderTree(catalog = {}) {
   const dimensions = records(catalog.dimensions);
   const connections = connectionRecords(catalog);
@@ -378,7 +406,7 @@ function buildProviderTree(catalog = {}) {
         error: loadError,
         dimension,
         connection,
-      }] : connectionState === "connected" ? roomNodes : [],
+      }] : connectionState === "connected" ? [...catalogNodes(dimension), ...roomNodes] : [],
     };
     let connectionNode = connectionNodes.get(`${providerId}:${connectionId}`);
     if (!connectionNode) {

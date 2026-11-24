@@ -2250,7 +2250,7 @@ async function saveCatalogRoom() {
     "--parent-room", selection.parentRoom, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
       ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : []),
       ...(row.component_options ? ["--child-components", row.path, JSON.stringify(row.component_options)] : [])])];
-  return require("./catalog-actions").saveCatalog(vscode, {
+  const result = await require("./catalog-actions").saveCatalog(vscode, {
     selectChildren: root => require("./catalog-selection").selectCatalogChildren(vscode, root),
     chooseComponents: async sources => {
       const selected = await require("./component-picker").pickComponents(vscode, sources[0],
@@ -2269,6 +2269,52 @@ async function saveCatalogRoom() {
     save: (selection, approval) => runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"], selection.root,
       selection.dimension, { title: "Saving Catalog Room…", action: "save a Catalog Room" }),
   });
+  if (result?.ok && roomsProvider?.reload) {
+    void roomsProvider.reload().catch(error => outputChannel?.warn(sanitizeControllerText(error.message)));
+  }
+  return result;
+}
+
+async function restoreCatalogRoom(item) {
+  assertWorkspaceTrusted("restore a Catalog Room");
+  const root = activeWorkspace();
+  if (!item) {
+    const catalog = await loadCatalog(root, "Finding Catalog Rooms…");
+    const parents = nativeRegistry.buildProviderTree(catalog).flatMap(provider => (provider.children || [])
+      .flatMap(connection => (connection.children || []).flatMap(dimension => (dimension.children || [])
+        .filter(row => row.kind === "catalog-parent"))));
+    item = (await vscode.window.showQuickPick(parents.map(parent => ({
+      label: parent.label, description: parent.description, detail: parent.dimension.display_name, parent,
+    })), { title: "Choose a Catalog Room" }))?.parent;
+  }
+  if (!item) return "cancelled";
+  const selection = item.kind === "catalog-parent"
+    ? (await vscode.window.showQuickPick(item.children.map(point => ({
+      label: point.label, description: point.description, point,
+    })), { title: "Choose an exact Catalog recovery point" }))?.point : item;
+  if (!selection) return "cancelled";
+  const { dimension, catalog, point } = selection;
+  const id = dimension?.id || dimension?.dimension_id;
+  if (selection.kind !== "catalog-point" || !id || !/^[a-f0-9]{32}$/.test(catalog?.namespace)
+      || !catalog?.parent_room_id || !/^jat-[a-z0-9-]+$/.test(point?.snapshot_id)) {
+    throw new Error("Choose an exact Catalog recovery point from Rooms.");
+  }
+  const destination = await vscode.window.showSaveDialog({ title: "Restore Catalog Room to a new folder",
+    saveLabel: "Restore Catalog", defaultUri: vscode.Uri.file(path.join(root, "Restored Catalog")) });
+  if (!destination) return "cancelled";
+  if (destination.scheme !== "file" || fs.lstatSync(destination.fsPath, { throwIfNoEntry: false })) {
+    throw new Error("Choose a new, absent folder for Catalog restore.");
+  }
+  const result = await runSelectedEncryption(["composition", "restore-parent", "--dimension", id,
+    "--namespace", catalog.namespace, "--parent-room", catalog.parent_room_id, "--parent-snapshot", point.snapshot_id,
+    "--destination", destination.fsPath], root, dimension,
+  { title: "Restoring Catalog Room…", action: "restore a Catalog Room" });
+  if (!result?.ok || !result.marker_verified || result.unit !== "parent" || result.namespace !== catalog.namespace
+      || result.room_id !== catalog.parent_room_id || result.snapshot_id !== point.snapshot_id) {
+    throw new Error("Catalog restore could not verify the selected recovery point.");
+  }
+  await vscode.commands.executeCommand("vscode.openFolder", destination, false);
+  return result;
 }
 
 function listCatalogChildren(root, dimension, marker, { childPath, offset, revision }) {
@@ -3789,6 +3835,7 @@ function activate(context) {
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
   register(context, "joshRoom.enterChild", () => enterChildRoom());
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
   register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
@@ -3824,6 +3871,7 @@ module.exports.__test__ = {
   agentPartialMatchesReview,
   agentPartialWorkspace,
   saveCatalogRoom,
+  restoreCatalogRoom,
   enterChildRoom,
   splitWorkspace,
   enterRoom,
@@ -5106,6 +5154,13 @@ class HierarchyRoomsProvider {
           : item.kind === "connection" ? item.state === "connected" ? "pass-filled" : item.state === "expired" || item.state === "disconnected" ? "warning" : "plug"
             : item.kind === "room" ? "archive" : "history",
     );
+    if (item.kind === "catalog-parent" || item.kind === "catalog-point") {
+      treeItem.iconPath = new vscode.ThemeIcon(item.kind === "catalog-parent" ? "library" : "history");
+      treeItem.command = { command: "joshRoom.restoreCatalog", title: "Restore Catalog Room", arguments: [item] };
+      treeItem.tooltip = [item.label, item.description].filter(Boolean).join(" · ");
+      return treeItem;
+    }
+    if (item.kind === "catalog-partial") treeItem.iconPath = new vscode.ThemeIcon("warning");
     if (item.kind === "dimension") {
       treeItem.command = item.action
         ? { ...item.action, arguments: [item] }
@@ -6256,6 +6311,7 @@ function activateNative(context) {
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
   register(context, "joshRoom.enterChild", () => enterChildRoom());
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
   register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
