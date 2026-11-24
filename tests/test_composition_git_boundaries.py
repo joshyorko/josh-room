@@ -87,7 +87,7 @@ def test_active_submodule_manifest_refusal_has_a_safe_actionable_code(tmp_path):
     assert str(tmp_path) not in str(failure.value)
 
 
-def test_unverified_git_extension_offers_files_only_for_that_child(tmp_path):
+def test_active_worktree_config_offers_files_only_for_that_child(tmp_path):
     if not shutil.which("git"):
         pytest.skip("requires Git for a real repository boundary")
     source = tmp_path / "source"
@@ -97,6 +97,7 @@ def test_unverified_git_extension_offers_files_only_for_that_child(tmp_path):
     (child / "payload.txt").write_text("synthetic source content")
     subprocess.run(["git", "init", "-q", str(child)], check=True)
     subprocess.run(["git", "-C", str(child), "config", "extensions.worktreeConfig", "true"], check=True)
+    (child / ".git/config.worktree").write_text("[core]\n\tfilemode = true\n")
     dimension = DimensionConfig(
         "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
         "synthetic-bucket", "synthetic-profile", connection_id="synthetic",

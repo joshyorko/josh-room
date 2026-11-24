@@ -471,3 +471,6 @@ operations. Policy changes require reconciliation, which remains unsupported.
 A full Git child requires Git to inspect its index. Catalog capture refuses an index that tracks the generated child policy, guard, or marker at its root, even when the working copy of that file is missing. Sparse directory indexes, split indexes requiring an external base, and submodule gitlinks are unsupported. Save such a repository as one ordinary Room. The same checks apply before a subsequent child Save.
 A standalone `.gitmodules` file without sibling Git metadata is ordinary source
 content and does not make a copied folder a submodule repository.
+An enabled `extensions.worktreeConfig` flag is supported when the repository has
+no worktree configuration file or linked worktree metadata. The child still
+passes the full Git integrity check.

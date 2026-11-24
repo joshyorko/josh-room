@@ -29,6 +29,11 @@ def object_format(store):
             if name == "extensions":
                 if key == "objectformat" and value in {"sha1", "sha256"}:
                     result = value
+                elif (key == "worktreeconfig" and value is not None and value.lower() == "true"
+                      and not any(os.path.lexists(store / entry)
+                                  for entry in ("config.worktree", "commondir", "gitdir", "worktrees"))):
+                    # An enabled flag without a worktree config or linked store is inert.
+                    continue
                 else:
                     raise ValueError("Catalog capture cannot verify this Git repository extension")
     return result
