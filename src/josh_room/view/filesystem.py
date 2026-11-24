@@ -48,6 +48,7 @@ class Entry:
     parent: Entry | None
     parts: tuple[str, ...]
     info: os.stat_result
+    object_key: str | None = None
 
     def ancestors(self):
         result = []
@@ -66,6 +67,7 @@ class Entry:
             return NodeState(self.id, parent, "directory", label, when, fields={"coverage": "not-examined"})
         kind = _classify_file(name)
         fields = {"file_bytes": self.info.st_size, "entry_kind": kind.node_kind, "preview_status": "not-examined"}
+        fields["object_key"] = self.object_key
         if kind.language:
             fields["language"] = kind.language
         return NodeState(self.id, parent, kind.node_kind, label, when, kind=kind.legend_kind,
@@ -276,7 +278,7 @@ class WorkspaceFilesystem:
             self._clear()
             raise _stale() from None
 
-    def _child(self, parent, fd, policy, name, *, sample=False):
+    def _observe_child(self, parent, fd, policy, name):
         parts = (*parent.parts, name)
         if policy.is_excluded("/".join(parts)):
             return None
@@ -295,9 +297,31 @@ class WorkspaceFilesystem:
                 return None
         finally:
             os.close(probe)
+        return info
+
+    def _revision_id(self, parent, parts, info):
+        identity = f"{stamp(parent.info)}:{stamp(info)}:" + "/".join(parts)
+        return "v-" + hashlib.blake2s(identity.encode(), key=self._key, digest_size=16).hexdigest()
+
+    def _child(self, parent, fd, policy, name, *, sample=False):
+        info = self._observe_child(parent, fd, policy, name)
+        if info is None:
+            return None
+        parts = (*parent.parts, name)
         identity = f"{info.st_dev}:{info.st_ino}:" + "/".join(parts)
         token = hashlib.blake2s(identity.encode(), key=self._key, digest_size=16).hexdigest()
-        child = Entry(f"n-{token}", parent, parts, info)
+        object_id = f"n-{token}"
+        object_key = None
+        if stat.S_ISREG(info.st_mode):
+            # The public key identifies the file across edits. Its handle pins
+            # one observed revision for preview and authenticated comparisons.
+            # An intervening directory edit may have unlinked the old file and
+            # recycled its inode. Only infer continuity under the same parent stamp.
+            continuity = hashlib.blake2s(f"{token}:{stamp(parent.info)}".encode(),
+                                         key=self._key, digest_size=16).hexdigest()
+            object_key = "-".join(continuity[i:i + 8] for i in range(0, len(continuity), 8))
+            object_id = self._revision_id(parent, parts, info)
+        child = Entry(object_id, parent, parts, info, object_key)
         if sample:
             self._sample_handles[child.id] = child
             self._sample_handles.move_to_end(child.id)
@@ -394,6 +418,33 @@ class WorkspaceFilesystem:
                 if cursor is not None:
                     self._last_page = (key, entry, result)
                 return result
+
+    def metadata(self, directory_id, generation, children):
+        """Refresh one batch from already admitted siblings, without reading file bodies."""
+        if len(children) > _PAGE or len(set(children)) != len(children):
+            raise ViewValidationError("invalid-query", "invalid metadata batch")
+        with self._lock, self._bound(directory_id, generation) as (directory, fd, policy):
+            if not stat.S_ISDIR(directory.info.st_mode) or self._boundary(directory, fd) in _BLOCKED:
+                raise _unknown()
+            nodes = []
+            for object_id in children:
+                previous = self._handles.get(object_id)
+                if not previous or not previous.parent or previous.parent.id != directory_id:
+                    raise _unknown()
+                if stamp(previous.parent.info) != stamp(directory.info):
+                    raise _stale()
+                info = self._observe_child(directory, fd, policy, previous.parts[-1])
+                if (info is None or (info.st_dev, info.st_ino) != (previous.info.st_dev, previous.info.st_ino)
+                        or stat.S_IFMT(info.st_mode) != stat.S_IFMT(previous.info.st_mode)):
+                    raise _stale()
+                current = replace(previous, info=info)
+                if stamp(info) != stamp(previous.info):
+                    if stat.S_ISREG(info.st_mode):
+                        # A different tab can still be reading the previous observation.
+                        current = replace(current, id=self._revision_id(directory, current.parts, info))
+                    self._remember(current)
+                nodes.append(current.node().to_dict())
+            return {"generation": generation, "entries": nodes}
 
     def inspect(self, object_id, generation):
         with self._lock, self._bound(object_id, generation) as (entry, _, _policy):

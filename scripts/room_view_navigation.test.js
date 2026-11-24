@@ -231,3 +231,177 @@ test('transient sample congestion preserves the displayed frame; revoked authori
   assert.equal(app.data.fsGeneration, null);
   assert.deepEqual(app.data.state.nodes.map(n => n.id), ['root']);
 });
+
+test('an in-place sibling edit refreshes only changed rows while the same selected reader and cursor stay active', async () => {
+  const old = { ...file, id: 'sibling', metric: 10 };
+  const updated = { ...old, id: 'sibling-revision-2', metric: 42 };
+  const ops = [];
+  const app = appFixture(async (op, params) => {
+    ops.push([op, params]);
+    if (op === 'metadata') return {generation: 'g', entries: [updated]};
+    if (op === 'inspect') return {generation: 'g', node: file};
+    throw new Error('unexpected read');
+  });
+  app.fsPage = listing(dir, [file, old], 'g', 'next-page');
+  app.currentNodeId = 'node/f12';
+  app.data.applyFilesystemNodes([root, dir, preview, old], 'g');
+  app._syncFromData();
+  app.evidence.target = preview;
+  app.tooltipEl = { hidden: false, textContent: '10 bytes' };
+  const changedRows = [];
+  let syncs = 0;
+  const sync = app._syncFromData.bind(app);
+  app._syncFromData = () => { syncs++; sync(); };
+  app.filesystemSearch = {
+    reconcileMetadata(rows) { changedRows.push([...rows.keys()]); },
+    validateDisplayed() {},
+  };
+  app.scene3d = { focusNode() { assert.fail('poll moved camera'); } };
+  await app._pollFilesystem();
+  await app._pollFilesystem();
+  assert.deepEqual(ops.map(([op, p]) => [op, p.children || p.id]), [
+    ['metadata', old.id], ['inspect', file.id], ['metadata', updated.id], ['inspect', file.id],
+  ]);
+  assert.equal(app.fsPage.cursor, 'next-page');
+  assert.equal(app.currentNodeId, 'node/f12');
+  assert.equal(app.evidence.target, preview);
+  assert.equal(app.data.state.nodes.find(n => n.id === file.id), preview);
+  assert.equal(app.layout.allLeavesByObjectId.get(updated.id).metric, 42);
+  assert.deepEqual(changedRows, [[old.id]]);
+  assert.equal(app.tooltipEl.hidden, true);
+  assert.equal(app.tooltipEl.textContent, '');
+  assert.equal(syncs, 1);
+});
+
+test('a page poll completing after navigation cannot patch or revoke the destination', async () => {
+  let release;
+  const app = appFixture(async (op) => {
+    if (op === 'list') return listing(other, []);
+    return new Promise(resolve => { release = resolve; });
+  });
+  app.fsPage = listing(dir, [file]);
+  app.currentNodeId = 'node/dir';
+  app.data.applyFilesystemNodes([root, dir, file], 'g');
+  app._syncFromData();
+  const pending = app._pollFilesystem();
+  await app._openFilesystem(other.id, {kind: 'directory'});
+  release({generation: 'stale', entries: []});
+  await pending;
+  assert.equal(app.fsPage.directory.id, other.id);
+  assert.equal(app.currentNodeId, 'node/other');
+});
+
+test('selected-directory poll updates edited child geometry, grid metadata, and tooltip without redrawing when unchanged', async () => {
+  const first = { ...file, id: 'f-a', label: 'alpha.txt', metric: 10, fields: { file_bytes: 10, object_key: 'k-alpha' } };
+  const second = { ...file, id: 'f-b', label: 'beta.txt', metric: 20, fields: { file_bytes: 20, object_key: 'k-beta' } };
+  const third = { ...file, id: 'f-c', label: 'gamma.txt', metric: 1000, fields: { file_bytes: 1000, object_key: 'k-gamma' } };
+  const edited = { ...second, id: 'f-b-v2', metric: 50000, fields: { file_bytes: 50000, object_key: 'k-beta' } };
+  let editedNow = false;
+  const ops = [];
+  const app = appFixture(async (op, params) => {
+    ops.push([op, params]);
+    if (op === 'metadata') {
+      const byId = new Map([
+        [first.id, first],
+        [second.id, editedNow ? edited : second],
+        [edited.id, edited],
+        [third.id, third],
+      ]);
+      const rows = params.children.split(',').map(id => byId.get(id));
+      return { generation: 'g', entries: rows };
+    }
+    if (op === 'inspect') return { generation: 'g', node: dir };
+    throw new Error(`unexpected op ${op}`);
+  });
+  app.viewMode = '3d';
+  app.fsPage = listing(dir, [first, second, third], 'g', 'page-2');
+  app.currentNodeId = 'node/dir';
+  app.data.applyFilesystemNodes([root, dir, first, second, third], 'g');
+  app._syncFromData();
+  const initialHeight = app.layout.nodeById.get('node/f-b').height;
+  app.tooltipEl = { hidden: false, textContent: '20 bytes' };
+  let sceneDraws = 0;
+  let gridRenders = 0;
+  let syncs = 0;
+  const baseSync = app._syncFromData.bind(app);
+  app._syncFromData = () => { syncs++; baseSync(); app._drawScene({ preserveCamera: true }); app._renderGrid(); };
+  app._renderGrid = () => { gridRenders++; };
+  app._sampleScene = async () => {};
+  app.scene3d = {
+    setLayout(layout, options) { sceneDraws++; this.lastLayout = layout; this.lastOptions = options; },
+    focusNode() { assert.fail('poll moved camera'); },
+  };
+  // Unchanged poll does not redraw scene or grid or clear tooltip.
+  await app._pollFilesystem();
+  assert.equal(syncs, 0);
+  assert.equal(sceneDraws, 0);
+  assert.equal(gridRenders, 0);
+  assert.equal(app.tooltipEl.hidden, false);
+  // In-place sibling edit updates metadata, geometry height, grid, clears tooltip, preserves cursor & directory selection.
+  editedNow = true;
+  await app._pollFilesystem();
+  assert.equal(syncs, 1);
+  assert.equal(sceneDraws, 1);
+  assert.equal(gridRenders, 1);
+  assert.equal(app.scene3d.lastOptions.preserveCamera, true);
+  assert.equal(app.fsPage.cursor, 'page-2');
+  assert.equal(app.currentNodeId, 'node/dir');
+  assert.equal(app.tooltipEl.hidden, true);
+  assert.equal(app.tooltipEl.textContent, '');
+  assert.equal(app.layout.allLeavesByObjectId.get(edited.id).fields.file_bytes, 50000);
+  assert.ok(app.layout.nodeById.get('node/f-b-v2').height > initialHeight);
+  // Subsequent unchanged poll with the new revision ID triggers zero additional redraws.
+  await app._pollFilesystem();
+  assert.equal(syncs, 1);
+  assert.equal(sceneDraws, 1);
+  assert.equal(gridRenders, 1);
+});
+
+test('a stale selected file reacquires its new revision via object_key with deferred content, while a replacement falls back to parent', async () => {
+  const v1 = { ...file, id: 'v-1', fields: { file_bytes: 7, object_key: 'stable-key' } };
+  const v2 = { ...file, id: 'v-2', fields: { file_bytes: 12, object_key: 'stable-key' } };
+  const replaced = { ...file, id: 'v-3', fields: { file_bytes: 9, object_key: 'other-key' } };
+  const previewV1 = { ...v1, previews: [{ slot: 'source', body: 'initial' }] };
+  const previewV2 = { ...v2, previews: [{ slot: 'source', body: 'updated body' }] };
+  let phase = 'initial';
+  const showCalls = [];
+  const app = appFixture(async (op, { id, generation }) => {
+    if (phase === 'edited' && generation === 'g1') throw Object.assign(new Error('stale'), { status: 409 });
+    if (phase === 'replaced' && generation === 'g2') throw Object.assign(new Error('stale'), { status: 409 });
+    const gen = phase === 'initial' ? 'g1' : phase === 'edited' ? 'g2' : 'g3';
+    if (op === 'preview') {
+      return { generation: gen, node: id === v1.id ? previewV1 : previewV2 };
+    }
+    if (id === 'root') return listing(root, [dir], gen);
+    return listing(dir, [phase === 'initial' ? v1 : phase === 'edited' ? v2 : replaced], gen);
+  });
+  app.evidence = {
+    target: null,
+    isOpen() { return !!this.target; },
+    captureReadingPosition() {
+      return this.target ? { id: this.target.objectId, objectKey: this.target.fields?.object_key, digest: 'd1' } : null;
+    },
+    async readingUnchanged() { return false; },
+    showTarget(target, _d, _s, _l, opts = {}) { this.target = target; showCalls.push({ id: target.objectId, opts }); },
+    hide() { this.target = null; },
+  };
+  await app._openFilesystem(dir.id, { kind: 'directory' });
+  await app._openFilesystem(v1.id, { kind: 'file' });
+  assert.equal(app.currentNodeId, 'node/v-1');
+
+  // In-place edit: new revision ID, same object_key -> stays selected with deferred content prompt.
+  phase = 'edited';
+  await app._openFilesystem(v1.id, { kind: 'file', refresh: true });
+  assert.equal(app.currentNodeId, 'node/v-2');
+  assert.equal(app.data.fsGeneration, 'g2');
+  assert.equal(showCalls.at(-1).id, 'v-2');
+  assert.equal(showCalls.at(-1).opts.deferContent, true);
+  assert.equal(showCalls.at(-1).opts.reading, null);
+
+  // Unlink + recreate: different object_key -> falls back to parent directory and closes reader.
+  phase = 'replaced';
+  await app._openFilesystem(v2.id, { kind: 'file', refresh: true });
+  assert.equal(app.currentNodeId, 'node/dir');
+  assert.equal(app.data.fsGeneration, 'g3');
+  assert.equal(app.evidence.isOpen(), false);
+});

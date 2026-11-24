@@ -471,7 +471,8 @@
         textTop: scroll?.scrollTop || 0, textLeft: scroll?.scrollLeft || 0,
         pageOffset: page ? Math.max(0, viewport.getBoundingClientRect().top - page.getBoundingClientRect().top) : 0,
         pdfLeft: viewport?.scrollLeft || 0,
-        id: this.currentObjectId, tab: this.activeTab, slot: this.activePreviewSlot,
+        id: this.currentObjectId, objectKey: this.currentItem.fields?.object_key || null,
+        tab: this.activeTab, slot: this.activePreviewSlot,
         summary: this.reader && !this.fileSummary.hidden,
         comparison: this.comparison.capture(),
         digest: this._contentDigest(this.currentItem),
@@ -528,7 +529,9 @@
     }
 
     async readingUnchanged(target, position) {
-      return (target.objectId || target.id) === position.id && await position.digest === await this._contentDigest(target);
+      const sameFile = (target.objectId || target.id) === position.id ||
+        Boolean(position.objectKey && target.fields?.object_key === position.objectKey);
+      return sameFile && await position.digest === await this._contentDigest(target);
     }
 
     _rememberPosition(position) {

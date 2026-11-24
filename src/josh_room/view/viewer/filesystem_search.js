@@ -22,6 +22,7 @@
 
     async advance(signal) {
       const hits = this.matches.splice(0, 16);
+      this.inFlightHits = hits;
       for (let pages = 0; this.pending.length && pages < 8 && hits.length < 16; pages++) {
         let result;
         const reopening = this.reopenIndex != null;
@@ -71,6 +72,7 @@
         hits.push(...matches.splice(0, 16 - hits.length));
         this.matches.push(...matches);
       }
+      this.inFlightHits = null;
       return { hits, more: Boolean(this.pending.length || this.matches.length) };
     }
   }
@@ -122,6 +124,18 @@
       this.bar.hidden = false;
       this.status('Search results changed. Recheck the original scope to search again.');
       this.button('Restart search', () => this.start(chain?.at(-1), chain));
+    }
+
+    reconcileMetadata(changed) {
+      if (!this.walk) return;
+      let visibleChanged = false;
+      for (const hit of [...this.displayed, this.active, ...this.walk.matches, ...(this.walk.inFlightHits || [])]) {
+        const node = hit && changed.get(hit.node.id);
+        if (!node) continue;
+        hit.node = node;
+        if (this.displayed.includes(hit) || hit === this.active) visibleChanged = true;
+      }
+      if (visibleChanged) this.publishMatches();
     }
 
     async validateDisplayed() {

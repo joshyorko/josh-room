@@ -11,6 +11,11 @@
       this.resultsEl = document.getElementById('sql-results');
       this.runBtn = document.getElementById('btn-sql-run');
       this.downloadBtn = document.getElementById('btn-download-sqlite');
+      this.downloadAck = document.getElementById('sql-download-ack');
+      if (this.data.filesystem) {
+        document.getElementById('sql-download-consent').hidden = !this.data.sensitivity.requires_acknowledgment;
+        document.getElementById('sql-scope').textContent = 'SQL and SQLite cover the current directory page, its ancestors and the selected file. Attachment rows contain metadata only.';
+      }
       const initialPreset = dataLayer.descriptor.sql_presets?.[0];
       if (initialPreset && this.inputEl.value === this.inputEl.defaultValue) {
         this.inputEl.value = initialPreset.sql;
@@ -26,13 +31,14 @@
           this.execute();
         }
       });
+      this.downloadAck.addEventListener('change', () => this._updateDownloadButton());
       this.downloadBtn.addEventListener('click', () => {
-        const blob = this.data.getSqliteDownloadBlob();
+        const blob = this.data.getSqliteDownloadBlob({ ack: this.downloadAck.checked });
         if (!blob) return;
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'room-view-snapshot.sqlite';
+        a.download = this.data.filesystem ? 'room-view-directory-page.sqlite' : 'room-view-snapshot.sqlite';
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -40,7 +46,20 @@
       });
     }
 
+    _updateDownloadButton() {
+      this.downloadBtn.disabled = this.data.filesystem && (!this.data.fsSqlPage ||
+        (this.data.sensitivity.requires_acknowledgment && !this.downloadAck.checked));
+    }
+
     renderPresets(descriptor) {
+      if (this.data.filesystem && this.fsSqlPage !== this.data.fsSqlPage) {
+        this.fsSqlPage = this.data.fsSqlPage;
+        this.resultsEl.textContent = '';
+        this.statusEl.textContent = this.fsSqlPage ? '' : 'Open a directory page to query the live workspace.';
+        this.runBtn.disabled = !this.fsSqlPage;
+        this.downloadAck.checked = false;
+        this._updateDownloadButton();
+      }
       const focusedId = this.presetsEl.contains(document.activeElement)
         ? document.activeElement.getAttribute('data-preset-id') : null;
       this.presetsEl.textContent = '';
@@ -48,6 +67,7 @@
       for (const preset of presets) {
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.disabled = this.runBtn.disabled;
         btn.className = 'hud-btn';
         btn.textContent = preset.name;
         btn.title = preset.description || preset.sql;

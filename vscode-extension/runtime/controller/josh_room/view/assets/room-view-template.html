@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;72c42365463a8d0f82e4508aae58192f8e4036f6f84b92e7bd9c23a09198e8c8&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;ee0d20c1d386dec7d9984a5df391a4b0401591392200fb3fa3827b6aea1a856c&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -1058,6 +1058,8 @@ body {
 /* SQL Console */
 .sql-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
 .sql-header h2 { margin: 0 0 4px; font-size: 16px; }
+.sql-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+#sql-download-consent:not([hidden]) { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .sql-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 #sql-input {
   width: 100%;
@@ -1348,9 +1350,10 @@ body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-b
     <div class="sql-header">
       <div>
         <h2>Read-Only SQL Console</h2>
-        <p class="muted-text">Runs locally in WebAssembly (sql.js) over the embedded <code>room-view-v1</code> SQLite database (<code>nodes</code>, <code>previews</code>, <code>links</code>, <code>items</code>, <code>attachments</code>). Zero network calls.</p>
+        <p class="muted-text" id="sql-scope">Runs locally in WebAssembly (sql.js) over the embedded <code>room-view-v1</code> SQLite database (<code>nodes</code>, <code>previews</code>, <code>links</code>, <code>items</code>, <code>attachments</code>). Zero network calls.</p>
       </div>
       <div class="sql-actions">
+        <label id="sql-download-consent" hidden><input id="sql-download-ack" type="checkbox"> I will keep this sensitive SQLite file on approved storage.</label>
         <button id="btn-download-sqlite" class="hud-btn hud-btn-accent" type="button">Download .sqlite</button>
       </div>
     </div>
@@ -15249,6 +15252,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.filesystem = mode === 'live' && initialPayload.server?.filesystem === true;
       this.comparison = this.filesystem && initialPayload.server?.comparison === true;
       this.fsGeneration = null;
+      this.fsSqlPage = null;
       this._blobCache = new Map();
       this._indexAttachments();
       this._refreshSequence = 0;
@@ -15354,13 +15358,20 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     applyFilesystemNodes(nodes, generation) {
+      const signature = generation && JSON.stringify(nodes);
+      if (!generation || generation !== this.fsSqlPage?.generation || signature !== this.fsSqlPage?.signature) {
+        this.db?.close();
+        this.db = null;
+        this.rawSqliteBytes = null;
+        this.fsSqlPage = generation ? { generation, signature } : null;
+      }
       this.fsGeneration = generation;
       this.state = { ...this.state, nodes, items: [], groups: [] };
       this._indexAttachments();
     }
 
     async refreshLive() {
-      if (this.mode !== 'live') return false;
+      if (this.mode !== 'live' || this.filesystem) return false;
       const sequence = ++this._refreshSequence;
       const resp = await fetch(`/state.json${this._liveQuerySuffix()}`, {
         cache: 'no-store',
@@ -15481,21 +15492,34 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       }
     }
 
-    runReadOnlySql(sqlText) {
+    _sqlDatabase() {
+      if (this.filesystem) {
+        if (!this.fsSqlPage) throw new Error('Open a directory page to query the live workspace.');
+        if (!this.db && this.SQL) {
+          const db = hydrateLiveSqlite(this.SQL, this.descriptor, { nodes: this.state.nodes }, this.sensitivity);
+          db.run('INSERT INTO meta(key, value) VALUES (?, ?)', ['scope', 'live-native-directory-page']);
+          this.db = db;
+        }
+      }
       if (!this.db) throw new Error('SQLite database is unavailable');
+      return this.db;
+    }
+
+    runReadOnlySql(sqlText) {
       const trimmed = (sqlText || '').trim();
       if (!trimmed) throw new Error('Enter a SELECT query');
       if (!READONLY_START_RE.test(trimmed) || MUTATION_SQL_RE.test(trimmed)) {
         throw new Error('Only read-only SELECT / WITH / EXPLAIN queries are permitted');
       }
       const started = performance.now();
-      const results = this.db.exec(trimmed);
+      const results = this._sqlDatabase().exec(trimmed);
       const elapsedMs = Math.round((performance.now() - started) * 10) / 10;
       return { results, elapsedMs };
     }
 
-    getSqliteDownloadBlob() {
-      const bytes = this.rawSqliteBytes || (this.db ? this.db.export() : null);
+    getSqliteDownloadBlob({ ack = false } = {}) {
+      if (this.filesystem && (!this.fsSqlPage || (this.sensitivity.requires_acknowledgment && !ack))) return null;
+      const bytes = this.filesystem ? this._sqlDatabase().export() : this.rawSqliteBytes || this.db?.export();
       if (!bytes) return null;
       return new Blob([bytes], { type: 'application/x-sqlite3' });
     }
@@ -19100,8 +19124,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       });
       const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${this.scope.coverageLabel || coverage}`;
       this.summaryEl.textContent = summary;
-      const activeId = this.contentEl.contains(document.activeElement)
-        ? document.activeElement.getAttribute('data-item-id') : null;
+      const activeEl = this.contentEl.contains(document.activeElement) ? document.activeElement : null;
+      const activeId = activeEl?.getAttribute('data-item-id') || null;
+      const activeKey = activeEl?.getAttribute('data-object-key') || null;
       this.contentEl.textContent = '';
       const table = document.createElement('table');
       table.className = 'directory-list';
@@ -19129,8 +19154,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         button.textContent = node.segmentLabel || node.label;
         button.title = node.path;
         button.setAttribute('data-item-id', node.objectId);
+        if (node.fields?.object_key) button.setAttribute('data-object-key', node.fields.object_key);
         button.addEventListener('click', () => this.callbacks.onSelectItem?.(node.objectId));
-        if (activeId === node.objectId) focusTarget = button;
+        if (activeId === node.objectId || (activeKey && activeKey === node.fields?.object_key)) focusTarget = button;
         name.appendChild(button);
         const type = document.createElement('td');
         type.textContent = folder ? 'Folder' : global.RoomViewLayout.getLegendEntry(this.descriptor, node.kind).label;
@@ -19933,7 +19959,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         textTop: scroll?.scrollTop || 0, textLeft: scroll?.scrollLeft || 0,
         pageOffset: page ? Math.max(0, viewport.getBoundingClientRect().top - page.getBoundingClientRect().top) : 0,
         pdfLeft: viewport?.scrollLeft || 0,
-        id: this.currentObjectId, tab: this.activeTab, slot: this.activePreviewSlot,
+        id: this.currentObjectId, objectKey: this.currentItem.fields?.object_key || null,
+        tab: this.activeTab, slot: this.activePreviewSlot,
         summary: this.reader && !this.fileSummary.hidden,
         comparison: this.comparison.capture(),
         digest: this._contentDigest(this.currentItem),
@@ -19990,7 +20017,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     async readingUnchanged(target, position) {
-      return (target.objectId || target.id) === position.id && await position.digest === await this._contentDigest(target);
+      const sameFile = (target.objectId || target.id) === position.id ||
+        Boolean(position.objectKey && target.fields?.object_key === position.objectKey);
+      return sameFile && await position.digest === await this._contentDigest(target);
     }
 
     _rememberPosition(position) {
@@ -20866,6 +20895,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.resultsEl = document.getElementById('sql-results');
       this.runBtn = document.getElementById('btn-sql-run');
       this.downloadBtn = document.getElementById('btn-download-sqlite');
+      this.downloadAck = document.getElementById('sql-download-ack');
+      if (this.data.filesystem) {
+        document.getElementById('sql-download-consent').hidden = !this.data.sensitivity.requires_acknowledgment;
+        document.getElementById('sql-scope').textContent = 'SQL and SQLite cover the current directory page, its ancestors and the selected file. Attachment rows contain metadata only.';
+      }
       const initialPreset = dataLayer.descriptor.sql_presets?.[0];
       if (initialPreset && this.inputEl.value === this.inputEl.defaultValue) {
         this.inputEl.value = initialPreset.sql;
@@ -20881,13 +20915,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.execute();
         }
       });
+      this.downloadAck.addEventListener('change', () => this._updateDownloadButton());
       this.downloadBtn.addEventListener('click', () => {
-        const blob = this.data.getSqliteDownloadBlob();
+        const blob = this.data.getSqliteDownloadBlob({ ack: this.downloadAck.checked });
         if (!blob) return;
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'room-view-snapshot.sqlite';
+        a.download = this.data.filesystem ? 'room-view-directory-page.sqlite' : 'room-view-snapshot.sqlite';
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -20895,7 +20930,20 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       });
     }
 
+    _updateDownloadButton() {
+      this.downloadBtn.disabled = this.data.filesystem && (!this.data.fsSqlPage ||
+        (this.data.sensitivity.requires_acknowledgment && !this.downloadAck.checked));
+    }
+
     renderPresets(descriptor) {
+      if (this.data.filesystem && this.fsSqlPage !== this.data.fsSqlPage) {
+        this.fsSqlPage = this.data.fsSqlPage;
+        this.resultsEl.textContent = '';
+        this.statusEl.textContent = this.fsSqlPage ? '' : 'Open a directory page to query the live workspace.';
+        this.runBtn.disabled = !this.fsSqlPage;
+        this.downloadAck.checked = false;
+        this._updateDownloadButton();
+      }
       const focusedId = this.presetsEl.contains(document.activeElement)
         ? document.activeElement.getAttribute('data-preset-id') : null;
       this.presetsEl.textContent = '';
@@ -20903,6 +20951,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       for (const preset of presets) {
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.disabled = this.runBtn.disabled;
         btn.className = 'hud-btn';
         btn.textContent = preset.name;
         btn.title = preset.description || preset.sql;
@@ -20993,6 +21042,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
     async advance(signal) {
       const hits = this.matches.splice(0, 16);
+      this.inFlightHits = hits;
       for (let pages = 0; this.pending.length && pages < 8 && hits.length < 16; pages++) {
         let result;
         const reopening = this.reopenIndex != null;
@@ -21042,6 +21092,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         hits.push(...matches.splice(0, 16 - hits.length));
         this.matches.push(...matches);
       }
+      this.inFlightHits = null;
       return { hits, more: Boolean(this.pending.length || this.matches.length) };
     }
   }
@@ -21093,6 +21144,18 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.bar.hidden = false;
       this.status('Search results changed. Recheck the original scope to search again.');
       this.button('Restart search', () => this.start(chain?.at(-1), chain));
+    }
+
+    reconcileMetadata(changed) {
+      if (!this.walk) return;
+      let visibleChanged = false;
+      for (const hit of [...this.displayed, this.active, ...this.walk.matches, ...(this.walk.inFlightHits || [])]) {
+        const node = hit && changed.get(hit.node.id);
+        if (!node) continue;
+        hit.node = node;
+        if (this.displayed.includes(hit) || hit === this.active) visibleChanged = true;
+      }
+      if (visibleChanged) this.publishMatches();
     }
 
     async validateDisplayed() {
@@ -21429,6 +21492,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
       refresh = false, instant = false, moveCamera = true, reading = null, reconcile = true, frame = false, invalidation = null } = {}) {
       this.fsRequest?.abort();
+      this.pagePoll?.abort();
       this.sceneRequest?.abort();
       this.sceneRequest = null;
       this.fsResume = null;
@@ -21437,7 +21501,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const wasReading = this.evidence.isOpen();
       const previousChain = previousPage
         ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
-          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
+          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind,
+              object_key: previousNode.fields?.object_key || null }] : [])] : [];
       const request = new AbortController();
       this.fsRequest = request;
       this.fsBusy = true;
@@ -21516,7 +21581,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
         if (target && ((!refresh && file && (!cursor || wasReading)) || (refresh && wasReading))) {
-          const restoring = reading && target.objectId === reading.id;
+          const restoring = reading && (target.objectId === reading.id ||
+            Boolean(reading.objectKey && target.fields?.object_key === reading.objectKey));
           const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
           if (request.signal.aborted) return;
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
@@ -21583,7 +21649,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
             if (signal.aborted) return;
             generation = page.generation;
             cursor = page.cursor;
-            const next = page.entries.find(node => node.id === chain[index]?.id);
+            const expected = chain[index];
+            const next = page.entries.find(node => node.id === expected?.id ||
+              (expected?.object_key && node.node_kind !== 'directory' && node.fields?.object_key === expected.object_key));
             if (next?.node_kind === 'directory') {
               directory = next.id;
               index++;
@@ -22410,26 +22478,64 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       });
     }
 
+    async _pollFilesystem() {
+      if (this.fsBusy || !this.fsPage || this.pagePoll) return;
+      const request = new AbortController();
+      this.pagePoll = request;
+      const page = this.fsPage;
+      const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
+      const current = () => !request.signal.aborted && page === this.fsPage && !this.fsBusy;
+      try {
+        const siblings = page.entries.filter(node => node.id !== selected?.objectId);
+        const changed = new Map();
+        // The selected object keeps its original content binding. All other
+        // visible rows are reobserved through their issued direct-child IDs.
+        for (let offset = 0; offset < siblings.length; offset += 48) {
+          const batch = siblings.slice(offset, offset + 48);
+          const fresh = await this.data.queryFilesystem('metadata', {
+            id: page.directory.id, generation: page.generation, children: batch.map(n => n.id).join(','),
+          }, request.signal);
+          if (!current()) return;
+          if (fresh.generation !== page.generation || fresh.entries.length !== batch.length ||
+              fresh.entries.some((n, i) => n.parent_id !== page.directory.id || n.node_kind !== batch[i].node_kind ||
+                (n.node_kind === 'directory' && n.id !== batch[i].id))) {
+            throw Object.assign(new Error('Directory observation changed'), { status: 409 });
+          }
+          fresh.entries.forEach((n, i) => {
+            if (JSON.stringify(n) !== JSON.stringify(batch[i])) changed.set(batch[i].id, n);
+          });
+        }
+        await this.data.queryFilesystem('inspect', {
+          id: selected?.objectId || page.directory.id, generation: page.generation,
+        }, request.signal);
+        if (!current()) return;
+        if (changed.size) {
+          page.entries = page.entries.map(n => changed.get(n.id) || n);
+          const nodes = this.data.state.nodes.map(n => changed.get(n.id) || n);
+          this.data.applyFilesystemNodes(nodes, page.generation);
+          this.filesystemSearch?.reconcileMetadata(changed);
+          if (this.tooltipEl) {
+            this.tooltipEl.hidden = true;
+            this.tooltipEl.textContent = '';
+          }
+          this._syncFromData();
+        }
+        await this.filesystemSearch?.validateDisplayed();
+        if (current()) await this._sampleScene(page);
+      } catch (error) {
+        if (!current() || error.status === 429) return;
+        return this._openFilesystem(selected?.objectId || page.directory.id, {
+          kind: selected?.nodeKind, refresh: true, pushHistory: false, invalidation: error,
+        });
+      } finally {
+        if (this.pagePoll === request) this.pagePoll = null;
+      }
+    }
+
     _startLivePolling() {
       const intervalMs = Math.max(1000, (this.data.liveConfig && this.data.liveConfig.pollIntervalMs) || 5000);
       const poll = async () => {
-        if (this.data.filesystem) {
-          if (this.fsBusy || !this.fsPage) return;
-          const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
-          const page = this.fsPage;
-          const navigation = this.fsRequest;
-          try {
-            await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
-            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) await this.filesystemSearch.validateDisplayed();
-            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) await this._sampleScene(page);
-          } catch (error) {
-            if (error.status === 429) return;
-            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) {
-              return this._openFilesystem(selected?.objectId || page.directory.id, { kind: selected?.nodeKind, refresh: true, pushHistory: false, invalidation: error });
-            }
-          }
-          return;
-        }
+        if (this.data.filesystem) return this._pollFilesystem();
         try {
           await this.data.refreshLive();
           this._syncFromData({ isInitial: false });
@@ -22613,12 +22719,13 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const resp = await fetch(`/state.json${query}`, { cache: 'no-store', headers });
         if (!resp.ok) throw new Error(`Failed to fetch /state.json (HTTP ${resp.status})`);
         const payload = await resp.json();
-        const liveDb = global.RoomViewData.hydrateLiveSqlite(SQL, payload.descriptor, payload.state, payload.sensitivity);
+        const liveDb = payload.server?.filesystem === true ? null :
+          global.RoomViewData.hydrateLiveSqlite(SQL, payload.descriptor, payload.state, payload.sensitivity);
         dataLayer = new global.RoomViewData.RoomViewDataLayer({
           mode: 'live',
           sqlModule: SQL,
           db: liveDb,
-          rawSqliteBytes: liveDb.export(),
+          rawSqliteBytes: liveDb?.export(),
           liveConfig,
           initialPayload: payload,
         });

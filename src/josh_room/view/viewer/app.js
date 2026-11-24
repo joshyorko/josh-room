@@ -140,6 +140,7 @@
     async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
       refresh = false, instant = false, moveCamera = true, reading = null, reconcile = true, frame = false, invalidation = null } = {}) {
       this.fsRequest?.abort();
+      this.pagePoll?.abort();
       this.sceneRequest?.abort();
       this.sceneRequest = null;
       this.fsResume = null;
@@ -148,7 +149,8 @@
       const wasReading = this.evidence.isOpen();
       const previousChain = previousPage
         ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
-          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
+          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind,
+              object_key: previousNode.fields?.object_key || null }] : [])] : [];
       const request = new AbortController();
       this.fsRequest = request;
       this.fsBusy = true;
@@ -227,7 +229,8 @@
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
         if (target && ((!refresh && file && (!cursor || wasReading)) || (refresh && wasReading))) {
-          const restoring = reading && target.objectId === reading.id;
+          const restoring = reading && (target.objectId === reading.id ||
+            Boolean(reading.objectKey && target.fields?.object_key === reading.objectKey));
           const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
           if (request.signal.aborted) return;
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
@@ -294,7 +297,9 @@
             if (signal.aborted) return;
             generation = page.generation;
             cursor = page.cursor;
-            const next = page.entries.find(node => node.id === chain[index]?.id);
+            const expected = chain[index];
+            const next = page.entries.find(node => node.id === expected?.id ||
+              (expected?.object_key && node.node_kind !== 'directory' && node.fields?.object_key === expected.object_key));
             if (next?.node_kind === 'directory') {
               directory = next.id;
               index++;
@@ -1121,26 +1126,64 @@
       });
     }
 
+    async _pollFilesystem() {
+      if (this.fsBusy || !this.fsPage || this.pagePoll) return;
+      const request = new AbortController();
+      this.pagePoll = request;
+      const page = this.fsPage;
+      const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
+      const current = () => !request.signal.aborted && page === this.fsPage && !this.fsBusy;
+      try {
+        const siblings = page.entries.filter(node => node.id !== selected?.objectId);
+        const changed = new Map();
+        // The selected object keeps its original content binding. All other
+        // visible rows are reobserved through their issued direct-child IDs.
+        for (let offset = 0; offset < siblings.length; offset += 48) {
+          const batch = siblings.slice(offset, offset + 48);
+          const fresh = await this.data.queryFilesystem('metadata', {
+            id: page.directory.id, generation: page.generation, children: batch.map(n => n.id).join(','),
+          }, request.signal);
+          if (!current()) return;
+          if (fresh.generation !== page.generation || fresh.entries.length !== batch.length ||
+              fresh.entries.some((n, i) => n.parent_id !== page.directory.id || n.node_kind !== batch[i].node_kind ||
+                (n.node_kind === 'directory' && n.id !== batch[i].id))) {
+            throw Object.assign(new Error('Directory observation changed'), { status: 409 });
+          }
+          fresh.entries.forEach((n, i) => {
+            if (JSON.stringify(n) !== JSON.stringify(batch[i])) changed.set(batch[i].id, n);
+          });
+        }
+        await this.data.queryFilesystem('inspect', {
+          id: selected?.objectId || page.directory.id, generation: page.generation,
+        }, request.signal);
+        if (!current()) return;
+        if (changed.size) {
+          page.entries = page.entries.map(n => changed.get(n.id) || n);
+          const nodes = this.data.state.nodes.map(n => changed.get(n.id) || n);
+          this.data.applyFilesystemNodes(nodes, page.generation);
+          this.filesystemSearch?.reconcileMetadata(changed);
+          if (this.tooltipEl) {
+            this.tooltipEl.hidden = true;
+            this.tooltipEl.textContent = '';
+          }
+          this._syncFromData();
+        }
+        await this.filesystemSearch?.validateDisplayed();
+        if (current()) await this._sampleScene(page);
+      } catch (error) {
+        if (!current() || error.status === 429) return;
+        return this._openFilesystem(selected?.objectId || page.directory.id, {
+          kind: selected?.nodeKind, refresh: true, pushHistory: false, invalidation: error,
+        });
+      } finally {
+        if (this.pagePoll === request) this.pagePoll = null;
+      }
+    }
+
     _startLivePolling() {
       const intervalMs = Math.max(1000, (this.data.liveConfig && this.data.liveConfig.pollIntervalMs) || 5000);
       const poll = async () => {
-        if (this.data.filesystem) {
-          if (this.fsBusy || !this.fsPage) return;
-          const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
-          const page = this.fsPage;
-          const navigation = this.fsRequest;
-          try {
-            await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
-            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) await this.filesystemSearch.validateDisplayed();
-            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) await this._sampleScene(page);
-          } catch (error) {
-            if (error.status === 429) return;
-            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) {
-              return this._openFilesystem(selected?.objectId || page.directory.id, { kind: selected?.nodeKind, refresh: true, pushHistory: false, invalidation: error });
-            }
-          }
-          return;
-        }
+        if (this.data.filesystem) return this._pollFilesystem();
         try {
           await this.data.refreshLive();
           this._syncFromData({ isInitial: false });

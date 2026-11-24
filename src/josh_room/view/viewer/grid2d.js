@@ -190,8 +190,9 @@
       });
       const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${this.scope.coverageLabel || coverage}`;
       this.summaryEl.textContent = summary;
-      const activeId = this.contentEl.contains(document.activeElement)
-        ? document.activeElement.getAttribute('data-item-id') : null;
+      const activeEl = this.contentEl.contains(document.activeElement) ? document.activeElement : null;
+      const activeId = activeEl?.getAttribute('data-item-id') || null;
+      const activeKey = activeEl?.getAttribute('data-object-key') || null;
       this.contentEl.textContent = '';
       const table = document.createElement('table');
       table.className = 'directory-list';
@@ -219,8 +220,9 @@
         button.textContent = node.segmentLabel || node.label;
         button.title = node.path;
         button.setAttribute('data-item-id', node.objectId);
+        if (node.fields?.object_key) button.setAttribute('data-object-key', node.fields.object_key);
         button.addEventListener('click', () => this.callbacks.onSelectItem?.(node.objectId));
-        if (activeId === node.objectId) focusTarget = button;
+        if (activeId === node.objectId || (activeKey && activeKey === node.fields?.object_key)) focusTarget = button;
         name.appendChild(button);
         const type = document.createElement('td');
         type.textContent = folder ? 'Folder' : global.RoomViewLayout.getLegendEntry(this.descriptor, node.kind).label;

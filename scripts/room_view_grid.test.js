@@ -80,3 +80,34 @@ test('empty grid uses typed complete coverage alongside a detailed summary', () 
   assert.match(grid.summaryEl.textContent, /5 omitted/);
   assert.equal(grid.contentEl.children[1].textContent, 'No visible entries in this folder.');
 });
+
+test('in-place sibling edit updates exact file bytes and preserves keyboard focus via object_key', () => {
+  global.document = {
+    body: { toggleAttribute() {} },
+    createElement: tag => new Element(tag),
+    getElementById: () => null,
+  };
+  const descriptor = { tool: 'josh-room', group_label: 'Directory' };
+  const root = { id: 'room', label: '/', node_kind: 'directory', parent_id: null };
+  const v1 = { id: 'v-1', label: 'notes.txt', node_kind: 'file', parent_id: 'room', kind: 'doc', metric: 12,
+    fields: { file_bytes: 12, object_key: 'stable-key-1' } };
+  const v2 = { ...v1, id: 'v-2', metric: 4096, fields: { file_bytes: 4096, object_key: 'stable-key-1' } };
+  const clicked = [];
+  const grid = new window.RoomViewGrid.GridFallbackView(new Element('div'), new Element('div'), null,
+    { onSelectItem: id => clicked.push(id) });
+  const renderNodes = (nodes) => {
+    const state = { nodes };
+    const layout = window.RoomViewLayout.buildFsnLayout(descriptor, state);
+    grid.render(descriptor, state, layout, { directoryId: 'root', selectedId: 'root', coverage: 'complete' });
+  };
+  renderNodes([root, v1]);
+  const row1 = grid.contentEl.children[0].children[2].children[0];
+  assert.equal(row1.children[2].textContent, '12 B');
+  row1.children[0].children[0].focus();
+  renderNodes([root, v2]);
+  const row2 = grid.contentEl.children[0].children[2].children[0];
+  assert.equal(row2.children[2].textContent, '4096 B');
+  assert.equal(document.activeElement, row2.children[0].children[0]);
+  row2.children[0].children[0].dispatchEvent(new Event('click'));
+  assert.deepEqual(clicked, ['v-2']);
+});

@@ -356,6 +356,7 @@
       this.filesystem = mode === 'live' && initialPayload.server?.filesystem === true;
       this.comparison = this.filesystem && initialPayload.server?.comparison === true;
       this.fsGeneration = null;
+      this.fsSqlPage = null;
       this._blobCache = new Map();
       this._indexAttachments();
       this._refreshSequence = 0;
@@ -461,13 +462,20 @@
     }
 
     applyFilesystemNodes(nodes, generation) {
+      const signature = generation && JSON.stringify(nodes);
+      if (!generation || generation !== this.fsSqlPage?.generation || signature !== this.fsSqlPage?.signature) {
+        this.db?.close();
+        this.db = null;
+        this.rawSqliteBytes = null;
+        this.fsSqlPage = generation ? { generation, signature } : null;
+      }
       this.fsGeneration = generation;
       this.state = { ...this.state, nodes, items: [], groups: [] };
       this._indexAttachments();
     }
 
     async refreshLive() {
-      if (this.mode !== 'live') return false;
+      if (this.mode !== 'live' || this.filesystem) return false;
       const sequence = ++this._refreshSequence;
       const resp = await fetch(`/state.json${this._liveQuerySuffix()}`, {
         cache: 'no-store',
@@ -588,21 +596,34 @@
       }
     }
 
-    runReadOnlySql(sqlText) {
+    _sqlDatabase() {
+      if (this.filesystem) {
+        if (!this.fsSqlPage) throw new Error('Open a directory page to query the live workspace.');
+        if (!this.db && this.SQL) {
+          const db = hydrateLiveSqlite(this.SQL, this.descriptor, { nodes: this.state.nodes }, this.sensitivity);
+          db.run('INSERT INTO meta(key, value) VALUES (?, ?)', ['scope', 'live-native-directory-page']);
+          this.db = db;
+        }
+      }
       if (!this.db) throw new Error('SQLite database is unavailable');
+      return this.db;
+    }
+
+    runReadOnlySql(sqlText) {
       const trimmed = (sqlText || '').trim();
       if (!trimmed) throw new Error('Enter a SELECT query');
       if (!READONLY_START_RE.test(trimmed) || MUTATION_SQL_RE.test(trimmed)) {
         throw new Error('Only read-only SELECT / WITH / EXPLAIN queries are permitted');
       }
       const started = performance.now();
-      const results = this.db.exec(trimmed);
+      const results = this._sqlDatabase().exec(trimmed);
       const elapsedMs = Math.round((performance.now() - started) * 10) / 10;
       return { results, elapsedMs };
     }
 
-    getSqliteDownloadBlob() {
-      const bytes = this.rawSqliteBytes || (this.db ? this.db.export() : null);
+    getSqliteDownloadBlob({ ack = false } = {}) {
+      if (this.filesystem && (!this.fsSqlPage || (this.sensitivity.requires_acknowledgment && !ack))) return null;
+      const bytes = this.filesystem ? this._sqlDatabase().export() : this.rawSqliteBytes || this.db?.export();
       if (!bytes) return null;
       return new Blob([bytes], { type: 'application/x-sqlite3' });
     }
