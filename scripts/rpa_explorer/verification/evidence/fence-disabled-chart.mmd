@@ -1,0 +1,33 @@
+---
+title: "Single-owner explorer receiver fence"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Breaks NoStaleDispatch
+    lg1: Path to the NoStaleDispatch bug
+  }
+  class lg0 breaks
+  class lg1 bugPath
+  s0: Ready for a bound request
+  s1: Bound request pending
+  s2: Lease closed
+  s3: Queued request after new observation
+  s4: Current request dispatched
+  s5: Queued request after closure
+  s6: Wrong context dispatched
+  [*] --> s0
+  s0 --> s1: Explorer submits a bound request
+  s0 --> s2: Owner closes the session
+  s1 --> s3: Collector retains a new observation
+  s1 --> s5: Owner closes the session
+  s1 --> s6: Receiver checks immediately before dispatch
+  s1 --> s4: Receiver checks immediately before dispatch
+  s2 --> s5: Explorer submits a bound request
+  s3 --> s5: Owner closes the session
+  s3 --> s6: Receiver checks immediately before dispatch
+  s5 --> s6: Receiver checks immediately before dispatch
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 bugPath
+  class s1 bugPath
+  class s6 breaks
+  class s6 bugPath

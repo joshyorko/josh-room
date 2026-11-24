@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "scope": "real Python bounded receiver equality and close guards; Ledger retained dispatch charge",
+  "fence": {
+    "pass": true,
+    "checked": 288,
+    "positive_dispatches": 2,
+    "closed_states": 2
+  },
+  "mutants": {
+    "identity-comparison-removed": {
+      "pass": false,
+      "checked": 1,
+      "counterexample": {
+        "closed": false,
+        "current": {
+          "session_id": "session-a",
+          "generation": 1,
+          "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "attempt_set": [
+            "attempt-a"
+          ]
+        },
+        "submitted": {
+          "session_id": "session-a",
+          "generation": 0,
+          "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "attempt_set": [
+            "attempt-a"
+          ]
+        },
+        "accepted": true
+      }
+    },
+    "closed-lease-guard-removed": {
+      "pass": false,
+      "checked": 169,
+      "counterexample": {
+        "closed": true,
+        "current": {
+          "session_id": "session-a",
+          "generation": 2,
+          "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "attempt_set": [
+            "attempt-a"
+          ]
+        },
+        "submitted": {
+          "session_id": "session-a",
+          "generation": 2,
+          "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "attempt_set": [
+            "attempt-a"
+          ]
+        },
+        "accepted": true
+      }
+    }
+  },
+  "ledger": {
+    "retained_uncertain_ui_calls": 1,
+    "next_call_rejected": true
+  },
+  "sha256": {
+    "ownership.py": "e0b30dbe442d38c81ee0f36859ffb42abbbd0c9e43df475acc606046647efccd",
+    "contracts.py": "53aed3e1605d042b69b36e8abe2522ae1fb7ecce4b17e7652349b168385624aa"
+  }
+}

@@ -1,0 +1,268 @@
+{
+  "scope": "Manifest-declared actions; availability and runtime behavior not all qualified",
+  "actions": [
+    {
+      "command": "joshRoom.new",
+      "title": "Josh: New Room",
+      "icon": "$(add)"
+    },
+    {
+      "command": "joshRoom.addStorage",
+      "title": "Josh: Connect Storage",
+      "icon": "$(cloud)"
+    },
+    {
+      "command": "joshRoom.connectCloudflare",
+      "title": "Josh: Connect Cloudflare",
+      "icon": "$(plug)"
+    },
+    {
+      "command": "joshRoom.reconnectCloudflare",
+      "title": "Josh: Reconnect Cloudflare",
+      "icon": "$(sync)"
+    },
+    {
+      "command": "joshRoom.initializeEncryption",
+      "title": "Josh: Initialize Storage Encryption",
+      "icon": "$(key)"
+    },
+    {
+      "command": "joshRoom.migrateEncryption",
+      "title": "Josh: Migrate Storage Encryption",
+      "icon": "$(key)"
+    },
+    {
+      "command": "joshRoom.resumeEncryption",
+      "title": "Josh: Resume Encryption Migration",
+      "icon": "$(sync)"
+    },
+    {
+      "command": "joshRoom.exportRecovery",
+      "title": "Josh: Export Recovery Identity",
+      "icon": "$(export)"
+    },
+    {
+      "command": "joshRoom.importRecovery",
+      "title": "Josh: Import Recovery Identity",
+      "icon": "$(clippy)"
+    },
+    {
+      "command": "joshRoom.connectStorage",
+      "title": "Josh: Connect",
+      "icon": "$(plug)"
+    },
+    {
+      "command": "joshRoom.reconnectStorage",
+      "title": "Josh: Reconnect",
+      "icon": "$(sync)"
+    },
+    {
+      "command": "joshRoom.editConnection",
+      "title": "Josh: Edit Connection",
+      "icon": "$(settings-gear)"
+    },
+    {
+      "command": "joshRoom.disconnectStorage",
+      "title": "Josh: Disconnect",
+      "icon": "$(debug-disconnect)"
+    },
+    {
+      "command": "joshRoom.editStorageSettings",
+      "title": "Josh: Edit Settings",
+      "icon": "$(settings-gear)"
+    },
+    {
+      "command": "joshRoom.link",
+      "title": "Josh: Link Existing Folder",
+      "icon": "$(link)"
+    },
+    {
+      "command": "joshRoom.repair",
+      "title": "Josh: Repair Room Ledger",
+      "icon": "$(wrench)"
+    },
+    {
+      "command": "joshRoom.save",
+      "title": "Josh: Save Current Room",
+      "icon": "$(save-as)"
+    },
+    {
+      "command": "joshRoom.saveFolderAs",
+      "title": "Josh: Save Folder As Room",
+      "icon": "$(save-as)"
+    },
+    {
+      "command": "joshRoom.checkWorkspace",
+      "title": "Josh: Check Workspace",
+      "icon": "$(check-all)"
+    },
+    {
+      "command": "joshRoom.enter",
+      "title": "Josh: Enter Room",
+      "icon": "$(folder-opened)"
+    },
+    {
+      "command": "joshRoom.remove",
+      "title": "Josh: Delete Snapshot",
+      "icon": "$(trash)"
+    },
+    {
+      "command": "joshRoom.deleteRecoveryPoint",
+      "title": "Josh: Delete Recovery Point",
+      "icon": "$(trash)"
+    },
+    {
+      "command": "joshRoom.deleteRoom",
+      "title": "Josh: Delete Room",
+      "icon": "$(trash)"
+    },
+    {
+      "command": "joshRoom.serve",
+      "title": "Josh: Serve Room Content\u2026",
+      "icon": "$(server-process)"
+    },
+    {
+      "command": "joshRoom.serveLogicalSnapshot",
+      "title": "Josh: Serve this Logical JAT\u2026",
+      "icon": "$(server-process)"
+    },
+    {
+      "command": "joshRoom.inspectLogicalSnapshot",
+      "title": "Josh: Inspect Logical JAT",
+      "icon": "$(search)"
+    },
+    {
+      "command": "joshRoom.agentSessionsStatus",
+      "title": "Josh: Agent Sessions\u2026",
+      "icon": "$(comment-discussion)"
+    },
+    {
+      "command": "joshRoom.agentRecoveryStatus",
+      "title": "Josh: Agent Recovery Status",
+      "icon": "$(search)"
+    },
+    {
+      "command": "joshRoom.captureAgentRecovery",
+      "title": "Josh: Capture Agent History Reference",
+      "icon": "$(archive)"
+    },
+    {
+      "command": "joshRoom.restoreAgentRecovery",
+      "title": "Josh: Restore Native Agent History",
+      "icon": "$(history)"
+    },
+    {
+      "command": "joshRoom.exportPortableJat",
+      "title": "Josh: Export Portable JAT",
+      "icon": "$(export)"
+    },
+    {
+      "command": "joshRoom.extractLogicalSnapshot",
+      "title": "Josh: Extract from Logical JAT",
+      "icon": "$(go-to-file)"
+    },
+    {
+      "command": "joshRoom.verifyRoomStore",
+      "title": "Josh: Verify Room Store",
+      "icon": "$(verified)"
+    },
+    {
+      "command": "joshRoom.optimizeRoomStore",
+      "title": "Josh: Optimize Room Store\u2026",
+      "icon": "$(tools)"
+    },
+    {
+      "command": "joshRoom.reconcileRoomStore",
+      "title": "Josh: Reconcile Room Store",
+      "icon": "$(sync)"
+    },
+    {
+      "command": "joshRoom.refresh",
+      "title": "Josh: Refresh Rooms",
+      "icon": "$(refresh)"
+    },
+    {
+      "command": "joshRoom.prepare",
+      "title": "Josh: Load Storage / Prepare Runtime",
+      "icon": "$(cloud-download)"
+    },
+    {
+      "command": "joshRoom.showLogs",
+      "title": "Josh: Show Logs",
+      "icon": "$(output)"
+    },
+    {
+      "command": "joshRoom.clearLocalFallback",
+      "title": "Josh: Retry Portable Runtime",
+      "icon": "$(sync)"
+    },
+    {
+      "command": "joshRoom.jatBuild",
+      "title": "JAT: Pack Folder into JAT",
+      "icon": "$(package)"
+    },
+    {
+      "command": "joshRoom.jatInspect",
+      "title": "JAT: Inspect Haul",
+      "icon": "$(search)"
+    },
+    {
+      "command": "joshRoom.jatExtract",
+      "title": "JAT: Extract from JAT",
+      "icon": "$(go-to-file)"
+    },
+    {
+      "command": "joshRoom.jatRestore",
+      "title": "JAT: Restore Workspace",
+      "icon": "$(folder-library)"
+    },
+    {
+      "command": "joshRoom.jatServe",
+      "title": "JAT: Serve Haul\u2026",
+      "icon": "$(server-process)"
+    },
+    {
+      "command": "joshRoom.jatExport",
+      "title": "JAT: Export Images\u2026",
+      "icon": "$(archive)"
+    },
+    {
+      "command": "joshRoom.jatCopy",
+      "title": "JAT: Copy / Seed\u2026",
+      "icon": "$(copy)"
+    },
+    {
+      "command": "joshRoom.splitWorkspace",
+      "title": "Josh: Split Workspace into Rooms (Preview Only)"
+    },
+    {
+      "command": "joshRoom.saveCatalog",
+      "title": "Josh: Save Catalog Room"
+    },
+    {
+      "command": "joshRoom.enterChild",
+      "title": "Josh: Enter Child Room"
+    },
+    {
+      "command": "joshRoom.saveChild",
+      "title": "Josh: Save Child Room"
+    },
+    {
+      "command": "joshRoom.refreshCatalogPins",
+      "title": "Josh: Refresh Catalog Child Pins"
+    },
+    {
+      "command": "joshRoom.browseRecoveryPoint",
+      "title": "Josh Room: Browse Recovery Point\u2026"
+    },
+    {
+      "command": "joshRoom.explore3D",
+      "title": "Josh: Explore Room in 3D\u2026",
+      "icon": "$(globe)"
+    },
+    {
+      "command": "joshRoom.stopRoomView",
+      "title": "Josh: Stop Room 3D Viewer"
+    }
+  ]
+}

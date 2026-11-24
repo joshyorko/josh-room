@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "scope": "Invocation-scoped pilot choices; no global defaults changed",
+  "coordinator": {
+    "providerInstanceId": "codex",
+    "model": "gpt-6.2-sol",
+    "options": {
+      "reasoningEffort": "high"
+    },
+    "verification": "current provider"
+  },
+  "mechanical": {
+    "providerInstanceId": "codex",
+    "model": "gpt-6-luna",
+    "options": {
+      "reasoningEffort": "medium"
+    },
+    "verification": "catalog only; no child claimed"
+  },
+  "judgment": {
+    "providerInstanceId": "codex",
+    "model": "gpt-6.2-astra",
+    "options": {
+      "reasoningEffort": "high"
+    },
+    "verification": "executed PStack read-only audit"
+  },
+  "antigravity_neon": {
+    "verification": "NOT RUN: no verified model entry; no substitution"
+  }
+}

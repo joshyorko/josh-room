@@ -1,0 +1,18 @@
+{
+  "task_containers_remaining": 0,
+  "original_listener_closed": true,
+  "pulled_editor_image_removed": true,
+  "preview_tab_closed": true,
+  "replay_cleanup_verified": {
+    "container_removed": true,
+    "listener_closed": true,
+    "scratch_removed": true
+  },
+  "discovery_cleanup_verified": {
+    "container_removed": true,
+    "listener_closed": true,
+    "scratch_removed": true
+  },
+  "task_scratch_removed": true,
+  "generated_repo_output_removed": true
+}

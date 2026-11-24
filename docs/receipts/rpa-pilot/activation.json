@@ -1,0 +1,49 @@
+{
+  "driver": "Playwright fallback (not code mode)",
+  "phase": "activation",
+  "budget": {
+    "seconds": 600,
+    "actions": 60
+  },
+  "events": [
+    {
+      "phase": "browser",
+      "seconds": 2.19,
+      "version": "158.0.8127.36"
+    },
+    {
+      "phase": "workbench",
+      "seconds": 2.31,
+      "text": "workspace\nExplorer\nworkspace\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nFind in Files\nCtrl\n+\nShift\n+\nF\nChat\nAgent\nModels\nCopilot\nDefault permissions\nLayout: us",
+      "actions": 1
+    },
+    {
+      "phase": "command",
+      "seconds": 2.65,
+      "title": "Josh: Check Workspace"
+    },
+    {
+      "phase": "workspace-check",
+      "seconds": 24.67,
+      "text": "workspace\nExplorer\nworkspace\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nFind in Files\nCtrl\n+\nShift\n+\nF\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Checking workspace 100%\n 0 \n 0\n 0\nLayout: us\nInfo: Workspace valid \u00b7 5 entries\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nWorkspace valid \u00b7 5 entries",
+      "actions": 4
+    },
+    {
+      "phase": "command",
+      "seconds": 25.05,
+      "title": "Developer: Show Running Extensions"
+    },
+    {
+      "phase": "running-extensions",
+      "seconds": 25.2,
+      "text": "workspace\nExplorer\nworkspace\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nFind in Files\nCtrl\n+\nShift\n+\nF\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Checking workspace 100%\n 0 \n 0\n 0\nLayout: us\nInfo: Workspace valid \u00b7 5 entries\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nWorkspace valid \u00b7 5 entries\nRunning Extensions\nGitHub\n0.0.1\n 127.0.0.1:18742\nActivation: 82ms\nGit Base\n10.0.0\n 127.0.0.1:18742\nActivation: 51ms\nJosh Room\n1.0.2\n 127.0.0.1:18742\nActivation: 50ms\nEmmet\n10.0.0\n 127.0.0.1:18742\nActivation: 43ms\nGit\n10.0.0\n 127.0.0.1:18742\nActivation: 35ms\nGitHub Authentication\n0.0.2\n 127.0.0.1:18742\nActivation: 30ms\nMerge Conflict\n10.0.0\n 127.0.0.1:18742\nActivation: 15ms\nNode Debug Auto-attach\n10.0.0\n 127.0.0.1:18742\nActivation: 2ms",
+      "actions": 7
+    },
+    {
+      "phase": "browser-cleanup",
+      "seconds": 25.2
+    }
+  ],
+  "verdict": "PASS",
+  "actions": 7
+}

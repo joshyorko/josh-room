@@ -1,0 +1,15 @@
+2026-11-24 16:12:53.111 [info] START · controller workspace-check --workspace /pilot/workspace
+2026-11-24 16:12:53.111 [info] ░░░░░░░░░░░░░░░░░░░░ … · Resolving managed RCC
+2026-11-24 16:12:53.113 [info] ░░░░░░░░░░░░░░░░░░░░ … · Resolving managed RCC
+2026-11-24 16:12:53.118 [info] ░░░░░░░░░░░░░░░░░░░░ … · Downloading RCC
+2026-11-24 16:12:56.578 [info] ░░░░░░░░░░░░░░░░░░░░ … · Verifying RCC SHA256
+2026-11-24 16:12:58.018 [info] ░░░░░░░░░░░░░░░░░░░░ … · Managed RCC ready
+2026-11-24 16:12:58.018 [info] ░░░░░░░░░░░░░░░░░░░░ … · Preparing Josh Room controller environment
+2026-11-24 16:12:58.020 [info] ░░░░░░░░░░░░░░░░░░░░ … · Downloading controller Environment Artifact
+2026-11-24 16:13:08.268 [info] ░░░░░░░░░░░░░░░░░░░░ … · Verifying controller Environment Artifact
+2026-11-24 16:13:08.381 [info] ░░░░░░░░░░░░░░░░░░░░ … · Importing controller Environment Artifact into private RCC storage
+2026-11-24 16:13:13.397 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-11-24 16:13:14.645 [info] DONE · workspace-check
+2026-11-24 16:13:14.645 [info] ████████████████████ 100% · Complete
+2026-11-24 16:13:14.646 [info] Workspace scan: valid; coverage complete
+2026-11-24 16:13:14.646 [info] Workspace check: Workspace valid · 5 entries

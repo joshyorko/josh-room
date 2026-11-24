@@ -1,0 +1,24 @@
+tasks:
+  explore_batches:
+    shell: python tasks.py explore_batches
+  replay_batches:
+    shell: python tasks.py replay_batches
+  catalog_select_all_regression:
+    shell: python tasks.py catalog_select_all_regression
+  verify_selection:
+    shell: python tasks.py verify_selection
+  contract_checks:
+    shell: python tasks.py contract_checks
+  clipboard_adapter_check:
+    shell: python tasks.py clipboard_adapter_check
+environmentConfigs:
+  - environment_linux_amd64_freeze.yaml
+  - conda.yaml
+artifactsDir: output
+PATH:
+  - .
+PYTHONPATH:
+  - .
+  - ../rpa_pilot
+ignoreFiles:
+  - .gitignore

@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "mission": {
+    "schema_version": 1,
+    "id": "installed-room-adaptive-v1",
+    "target": "task-owned-code-server",
+    "budgets": {
+      "seconds": 900,
+      "actions": 100,
+      "ui_calls": 240,
+      "batches": 24,
+      "model_calls": 0,
+      "evidence_bytes": 16777216,
+      "repetitions": 2,
+      "output_bytes": 40000
+    },
+    "commands": [
+      "joshRoom.new",
+      "joshRoom.checkWorkspace",
+      "joshRoom.addStorage",
+      "joshRoom.splitWorkspace",
+      "joshRoom.saveCatalog",
+      "joshRoom.enterChild",
+      "joshRoom.refresh",
+      "joshRoom.showLogs"
+    ]
+  },
+  "counts": {
+    "output_bytes": 2722,
+    "batches": 1,
+    "actions": 6,
+    "ui_calls": 10,
+    "evidence_bytes": 72216
+  },
+  "elapsed_seconds": 25.21,
+  "decisions": [],
+  "batches": [
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "command",
+            "command": "joshRoom.saveCatalog"
+          },
+          {
+            "kind": "folder",
+            "path": "/pilot/workspace"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Catalog children"
+          },
+          {
+            "kind": "choose",
+            "label": "Browse all folders"
+          },
+          {
+            "kind": "choose",
+            "label": "Select All on This Page"
+          },
+          {
+            "kind": "assert_selection"
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-ro5j6_fc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "attempt_set": [
+            "codex-room-explorer-ro5j6_fc"
+          ]
+        }
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 1,
+        "state": {
+          "title": "",
+          "placeholder": "",
+          "rows": [],
+          "checked": [],
+          "notices": [
+            "Select either deep/level-00 or its enclosing folder. The previous selection was kept."
+          ],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-01.txt",
+            "sha256": "ba7cc7665d4326a9fc855ada6e3308da04dd9b932659b6c852a14dbbcbc6b60d",
+            "bytes": 778
+          },
+          {
+            "path": "batch-01.png",
+            "sha256": "857910687d48ec35bb120f1b8d2a67f1b89f7b19a47169e76098e30af4dbaf06",
+            "bytes": 71438
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-ro5j6_fc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "be23fed50cbb961a5ed42e8764ce408e4dc2da27d3585e2e3dc1fdfb1eeadebf",
+          "attempt_set": [
+            "codex-room-explorer-ro5j6_fc"
+          ]
+        },
+        "ok": false,
+        "error": {
+          "type": "AssertionError",
+          "message": "KNOWN_CONTROL: Catalog bulk selection rejected its own overlap\nFailed: assert 'Select either' not in self.page.locator('body').inner_text()\nVariables:\n  self.page.locator('body').inner_text() = 'workspace\\nExplorer\\nworkspace\\ndeep\\nfolders\\nnonportable:name\\nprojects\\nOutline\\nTimeline\\nOpen Chat\\nCtrl\\n+\\nAlt\\n+\\nI\\nShow All Commands\\nCtrl\\n+\\nShift\\n+\\nP\\nGo to File\\nCtrl\\n+\\nP\\nChat\\nBuild with Agent\\n\\nAI responses may be inaccurate\\n\\nGenerate Agent Instructions to onboard AI onto your codebase.\\n\\nChoose how you want to use Copilot.\\nSign in to use GitHub Copilot models, or add a model with your own API key.\\nAdd Models\\nSign In\\nChat with Copilot\\nAgent\\nModels\\nCopilot\\n Josh Room\\n 0 \\n 0\\n 0\\nLayout: us\\nWarning: Select either deep/level-00 or its enclosing folder. The previous selection was kept.\\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\\nSelect either deep/level-00 or its enclosing folder. The previous"
+        },
+        "counts": {
+          "output_bytes": 549,
+          "batches": 1,
+          "actions": 6,
+          "ui_calls": 10,
+          "evidence_bytes": 72216
+        }
+      }
+    }
+  ],
+  "errors": [
+    {
+      "type": "AssertionError",
+      "message": "KNOWN_CONTROL: Catalog bulk selection rejected its own overlap\nFailed: assert 'Select either' not in self.page.locator('body').inner_text()\nVariables:\n  self.page.locator('body').inner_text() = 'workspace\\nExplorer\\nworkspace\\ndeep\\nfolders\\nnonportable:name\\nprojects\\nOutline\\nTimeline\\nOpen Chat\\nCtrl\\n+\\nAlt\\n+\\nI\\nShow All Commands\\nCtrl\\n+\\nShift\\n+\\nP\\nGo to File\\nCtrl\\n+\\nP\\nChat\\nBuild with Agent\\n\\nAI responses may be inaccurate\\n\\nGenerate Agent Instructions to onboard AI onto your codebase.\\n\\nChoose how you want to use Copilot.\\nSign in to use GitHub Copilot models, or add a model with your own API key.\\nAdd Models\\nSign In\\nChat with Copilot\\nAgent\\nModels\\nCopilot\\n Josh Room\\n 0 \\n 0\\n 0\\nLayout: us\\nWarning: Select either deep/level-00 or its enclosing folder. The previous selection was kept.\\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\\nSelect either deep/level-00 or its enclosing folder. The previous"
+    }
+  ]
+}

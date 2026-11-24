@@ -1,0 +1,12 @@
+tasks:
+  catalog_select_all:
+    shell: python tasks.py catalog_select_all
+  discovery_walk:
+    shell: python tasks.py discovery_walk
+environmentConfigs:
+  - conda.yaml
+artifactsDir: output
+PATH:
+  - .
+PYTHONPATH:
+  - .

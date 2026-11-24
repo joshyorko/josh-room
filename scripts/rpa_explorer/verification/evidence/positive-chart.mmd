@@ -1,0 +1,22 @@
+---
+title: "Single-owner explorer receiver fence"
+---
+stateDiagram-v2
+  s0: Ready for a bound request
+  s1: Bound request pending
+  s2: Lease closed
+  s3: Stale request rejected
+  s4: Queued request after new observation
+  s5: Current request dispatched
+  s6: Queued request after closure
+  [*] --> s0
+  s0 --> s1: Explorer submits a bound request
+  s0 --> s2: Owner closes the session
+  s1 --> s3: Receiver checks immediately before dispatch
+  s1 --> s4: Collector retains a new observation
+  s1 --> s6: Owner closes the session
+  s1 --> s5: Receiver checks immediately before dispatch
+  s2 --> s6: Explorer submits a bound request
+  s4 --> s3: Receiver checks immediately before dispatch
+  s4 --> s6: Owner closes the session
+  s6 --> s3: Receiver checks immediately before dispatch

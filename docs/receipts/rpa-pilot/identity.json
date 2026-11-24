@@ -1,0 +1,13 @@
+{
+  "source_sha": "87c51089c2dccf6b03663544a761fee714541299",
+  "vsix_sha256": "663e943cca9b353815fe4ebf9e8f4d2b401ea1bc2b0a16d01127a6a4ed56ef22",
+  "extension_version": "1.0.2",
+  "installed_files_compared": 165,
+  "image": "codercom/code-server@sha256:fc708b18f6c613b5a9d00f1d1801e58376d3df9c5b5de77f5c02d67b711f99c9",
+  "installed_comparison": "164 files byte-identical; package.json original fields identical, only __metadata added by editor",
+  "node_extension_host": "24.22.1",
+  "browser": "Chrome 158.0.8127.36",
+  "driver": "Playwright 1.58.0 fallback; no exposed node_repl/code mode",
+  "rcc": "18.19.11",
+  "controller_artifact": "sha256:322695861045b249ae650802c791b0d9fe7bb761e85ff890106daf1a7f83e3f9"
+}

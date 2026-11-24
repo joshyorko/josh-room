@@ -1,0 +1,431 @@
+{
+  "schema_version": 1,
+  "mission": {
+    "schema_version": 1,
+    "id": "installed-room-adaptive-v1",
+    "target": "task-owned-code-server",
+    "budgets": {
+      "seconds": 900,
+      "actions": 100,
+      "ui_calls": 240,
+      "batches": 24,
+      "model_calls": 0,
+      "evidence_bytes": 16777216,
+      "repetitions": 2,
+      "output_bytes": 40000
+    },
+    "commands": [
+      "joshRoom.new",
+      "joshRoom.checkWorkspace",
+      "joshRoom.addStorage",
+      "joshRoom.splitWorkspace",
+      "joshRoom.saveCatalog",
+      "joshRoom.enterChild",
+      "joshRoom.refresh",
+      "joshRoom.showLogs"
+    ]
+  },
+  "counts": {
+    "output_bytes": 4776,
+    "batches": 7,
+    "actions": 17,
+    "ui_calls": 24,
+    "evidence_bytes": 548216
+  },
+  "elapsed_seconds": 202.53,
+  "decisions": [
+    {
+      "after_batch": 2,
+      "reason": "Observed New Room offers Catalog. Choose it and restrict source to projects: this tests non-Git sibling selection without the known overlapping-tree control.",
+      "classification": "adaptive-follow-up"
+    },
+    {
+      "after_batch": 3,
+      "reason": "The observed Suggested repositories scope reports zero eligible rows yet offers Browse all folders. Follow that recovery affordance rather than retrying zero-selection Continue.",
+      "classification": "adaptive-follow-up"
+    },
+    {
+      "after_batch": 4,
+      "reason": "Browse returned two independent sibling rows a and b. Select that observed sibling page, then inspect the settings offered before any provider or Save action.",
+      "classification": "adaptive-follow-up"
+    },
+    {
+      "after_batch": 5,
+      "reason": "The observed settings menu offers Change Git settings even for no-Git sibling folders. Inspect that scope and its default selections before deciding whether this is meaningful or confusing.",
+      "classification": "previously-unprescribed-follow-up"
+    }
+  ],
+  "batches": [
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "command",
+            "command": "joshRoom.new"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 1,
+        "state": {
+          "title": "",
+          "placeholder": "",
+          "rows": [],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-01.txt",
+            "sha256": "335dfc727fd30ea5ffd8216331b25f7ebcece7c44dc25b578cbe2c8a97b6cd8c",
+            "bytes": 234
+          },
+          {
+            "path": "batch-01.png",
+            "sha256": "22fb021e0f3aa670441ea674d94aa05ffce80a686ddb1dc9b729e7ae09387b9d",
+            "bytes": 44101
+          }
+        ],
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 141,
+          "batches": 1,
+          "actions": 1,
+          "ui_calls": 4,
+          "evidence_bytes": 44335
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": []
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 2,
+        "state": {
+          "title": "New Room",
+          "placeholder": "Save one Room is the default",
+          "rows": [
+            "Save one Room",
+            "Configure Catalog Room"
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-02.txt",
+            "sha256": "b78bb747468d1285b59ffafe327c3bba8ba581b548e3c71b34f230393ea26941",
+            "bytes": 675
+          },
+          {
+            "path": "batch-02.png",
+            "sha256": "e5d6cc8d8fccda389feba1544e5c530c8e8f0bd432e6d389ea3ad9f432d37008",
+            "bytes": 75077
+          }
+        ],
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 609,
+          "batches": 2,
+          "actions": 1,
+          "ui_calls": 5,
+          "evidence_bytes": 120087
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "decision",
+            "classification": "adaptive-follow-up",
+            "reason": "Observed New Room offers Catalog. Choose it and restrict source to projects: this tests non-Git sibling selection without the known overlapping-tree control."
+          },
+          {
+            "kind": "choose",
+            "label": "Configure Catalog Room"
+          },
+          {
+            "kind": "folder",
+            "path": "/pilot/workspace/projects"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Catalog children"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 3,
+        "state": {
+          "title": "Catalog children \u2014 0 selected \u00b7 Suggested repositories",
+          "placeholder": "0 eligible on this page. Select folders to toggle.",
+          "rows": [
+            "Select All on This Page (0)",
+            "Clear All0 selected across all pages",
+            "Browse all folders",
+            "Search folders",
+            "Continue with 0 selected"
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-03.txt",
+            "sha256": "c499b7cc3b95ebab9c19689f7fc6179d9478e67be2767d5f62ce4d60b49f2c94",
+            "bytes": 837
+          },
+          {
+            "path": "batch-03.png",
+            "sha256": "7be3273bffa1939c4fe2f3508f269d793b34c0feee09136b6fc8c4fdf8416655",
+            "bytes": 81888
+          }
+        ],
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 1154,
+          "batches": 3,
+          "actions": 5,
+          "ui_calls": 10,
+          "evidence_bytes": 202812
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "decision",
+            "classification": "adaptive-follow-up",
+            "reason": "The observed Suggested repositories scope reports zero eligible rows yet offers Browse all folders. Follow that recovery affordance rather than retrying zero-selection Continue."
+          },
+          {
+            "kind": "choose",
+            "label": "Browse all folders"
+          },
+          {
+            "kind": "assert_text",
+            "text": "All indexed folders"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 4,
+        "state": {
+          "title": "Catalog children \u2014 0 selected \u00b7 All indexed folders",
+          "placeholder": "2 eligible on this page. Select folders to toggle.",
+          "rows": [
+            "Select All on This Page (2)",
+            "Clear All0 selected across all pages",
+            "aOwnership unknown; available for explicit manual choice",
+            "bOwnership unknown; available for explicit manual choice",
+            "Show suggested repositories",
+            "Search folders",
+            "Continue with 0 selected"
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-04.txt",
+            "sha256": "79607c1544f66a41b7478b05130c365f2efc808b2da29b0337d926f50853b96c",
+            "bytes": 957
+          },
+          {
+            "path": "batch-04.png",
+            "sha256": "981e9262c445e4cc8fa0262e133eca120b27c83378b60c01cc85c3747a3684b3",
+            "bytes": 96666
+          }
+        ],
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 1872,
+          "batches": 4,
+          "actions": 8,
+          "ui_calls": 13,
+          "evidence_bytes": 300435
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "decision",
+            "classification": "adaptive-follow-up",
+            "reason": "Browse returned two independent sibling rows a and b. Select that observed sibling page, then inspect the settings offered before any provider or Save action."
+          },
+          {
+            "kind": "choose",
+            "label": "Select All on This Page (2)"
+          },
+          {
+            "kind": "choose",
+            "label": "Continue with 2 selected"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Save 2 selected folders as Rooms"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 5,
+        "state": {
+          "title": "Save 2 selected folders as Rooms",
+          "placeholder": "Each folder uses its Git capture policy. Optional components are off by default.",
+          "rows": [
+            "Continue to destination",
+            "Change Git settings",
+            "Customize optional components",
+            "Choose files for the catalog itself"
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-05.txt",
+            "sha256": "2c3d7306b3519c560342809a7e207763a899a70e64a2c790b1fc62f617dd7d10",
+            "bytes": 798
+          },
+          {
+            "path": "batch-05.png",
+            "sha256": "dff5640957a4a0b750fc6083bb5426822747755b5f84e5ef735ed0ba475b7842",
+            "bytes": 85718
+          }
+        ],
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 2714,
+          "batches": 5,
+          "actions": 12,
+          "ui_calls": 18,
+          "evidence_bytes": 386951
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "decision",
+            "classification": "previously-unprescribed-follow-up",
+            "reason": "The observed settings menu offers Change Git settings even for no-Git sibling folders. Inspect that scope and its default selections before deciding whether this is meaningful or confusing."
+          },
+          {
+            "kind": "choose",
+            "label": "Change Git settings"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Apply settings to folders"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 6,
+        "state": {
+          "title": "Apply settings to folders",
+          "placeholder": "All selected by default. Uncheck folders to override a subset.",
+          "rows": [
+            "a",
+            "b"
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-06.txt",
+            "sha256": "af36845b3ecbf88106dbabc8c0a303eb154a0349b86fef0423486c20a5b2705e",
+            "bytes": 699
+          },
+          {
+            "path": "batch-06.png",
+            "sha256": "dbed3d6b96b16bd69b9b01ce0fbe29e93f62e0af563198a37e8484bb76ff6827",
+            "bytes": 76526
+          }
+        ],
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 3415,
+          "batches": 6,
+          "actions": 15,
+          "ui_calls": 21,
+          "evidence_bytes": 464176
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "dismiss"
+          },
+          {
+            "kind": "dismiss"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 7,
+        "state": {
+          "title": "Apply settings to folders",
+          "placeholder": "All selected by default. Uncheck folders to override a subset.",
+          "rows": [
+            "a",
+            "b"
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-07.txt",
+            "sha256": "2c3d7306b3519c560342809a7e207763a899a70e64a2c790b1fc62f617dd7d10",
+            "bytes": 798
+          },
+          {
+            "path": "batch-07.png",
+            "sha256": "1be604f4f6e63e1291a92797fbd60bc0a5b1d0c56915fc08680a04a8354a6cd3",
+            "bytes": 83242
+          }
+        ],
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 3981,
+          "batches": 7,
+          "actions": 17,
+          "ui_calls": 24,
+          "evidence_bytes": 548216
+        }
+      }
+    }
+  ],
+  "errors": []
+}

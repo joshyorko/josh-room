@@ -1,0 +1,40 @@
+{
+  "scope": "Actual composition_safety._pin over 48 finite room/pin/digest/reserved-slot combinations",
+  "positive": {
+    "pass": true,
+    "cases": 48,
+    "positive_exact_pins": 2
+  },
+  "mutations": {
+    "reserved-identity-check-removed": {
+      "pass": false,
+      "cases": 8,
+      "counterexample": {
+        "pin": {
+          "room_id": "child",
+          "logical_jat_id": "jat-child",
+          "descriptor_sha256": "e47125968b3b71049fbc4802d1e40a71ea1359decfabacf70b34588037d4ff0c"
+        },
+        "reserved_room": "parent",
+        "reserved_pin": "jat-parent",
+        "accepted": true
+      }
+    },
+    "descriptor-digest-check-removed": {
+      "pass": false,
+      "cases": 5,
+      "counterexample": {
+        "pin": {
+          "room_id": "child",
+          "logical_jat_id": "jat-child",
+          "descriptor_sha256": "e47125968b3b71049fbc4802d1e40a71ea1359decfabacf70b34588037d4ff0c"
+        },
+        "reserved_room": "child",
+        "reserved_pin": "jat-child",
+        "accepted": true
+      }
+    }
+  },
+  "product_source_sha256": "d2e2e501b71bdfbd4937639231cd2d4ee458aff1bca0fe3658d8379a3ec55b38",
+  "limits": "No cryptography, provider authentication, capture atomicity or filesystem restore proof. Live restoration is separate evidence."
+}

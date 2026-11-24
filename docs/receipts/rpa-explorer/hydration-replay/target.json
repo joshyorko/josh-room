@@ -1,0 +1,15 @@
+{
+  "image": "sha256:5e7522da9365e13cd2b7f4ca82ea0e27db2c728e86d25d9180181439f14d8657",
+  "cleanup": {
+    "container_removed": true,
+    "listener_closed": true,
+    "scratch_removed": true
+  },
+  "vsix_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+  "loopback_port": 32787,
+  "session_id": "codex-room-explorer-duyev33q",
+  "installed_files_verified": 165,
+  "extension_version": "1.0.2",
+  "editor": "4.146.0 9cc1033c190703416bbd5ec95d8f7db9f3edb63d with Code 1.146.0",
+  "node": "v24.22.1"
+}

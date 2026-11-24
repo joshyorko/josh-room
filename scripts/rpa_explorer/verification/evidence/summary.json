@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "base_commit": "87c51089c2dccf6b03663544a761fee714541299",
+  "code_fence_cases": 288,
+  "real_source_mutants_killed": 2,
+  "ledger_uncertain_charge_retained": true,
+  "tlc": {
+    "artifact_version": "1.7.4",
+    "reported_version": "2.19 of 08 August 2024 (rev 5a47802)",
+    "java": "Eclipse Adoptium 25.0.5.1",
+    "positive": {
+      "states": 72,
+      "steps": 120,
+      "invariants": [
+        "TypeOK",
+        "NoStaleDispatch",
+        "NoDeadlock"
+      ],
+      "exit": 0
+    },
+    "fence_disabled": {
+      "expected_exit": 1,
+      "violated": "NoStaleDispatch",
+      "shortest_steps": 2
+    },
+    "positive_reachability": {
+      "expected_exit": 1,
+      "witness_predicate": "NotYetDispatched",
+      "shortest_steps": 2
+    }
+  },
+  "design_bundle_sha256": "bf482bffc4d2313b35d8a1f99eb9bbe90fd898eeef1e4f07abc886ff2e0ac978",
+  "scope": "bounded receiver value seam plus executable Ledger charge check; model does not prove browser focus, retention, expiry, cleanup or billing",
+  "sha256": {
+    "scripts/rpa_explorer/ownership.py": "e0b30dbe442d38c81ee0f36859ffb42abbbd0c9e43df475acc606046647efccd",
+    "scripts/rpa_explorer/contracts.py": "53aed3e1605d042b69b36e8abe2522ae1fb7ecce4b17e7652349b168385624aa",
+    "scripts/rpa_explorer/verification/SessionFence.tla": "8fbc636af6b34184b077d754fc379e239a71c407e536487124c0d8dc8840c53e",
+    "scripts/rpa_explorer/verification/SessionFence.cfg": "0d20362ec39d2b2a503f98c8722947b20f03e8c5a86a9d5d2481b883c0aed302",
+    "scripts/rpa_explorer/verification/SessionFence-mutant.cfg": "6c87693c2cf8d6f6be37749a134170722fa6ff238d5892f55b42224c77c5f20c",
+    "scripts/rpa_explorer/verification/SessionFence-reachability.cfg": "d45b673d455396e51e75be131b68b54c8c50cf651aa573b44018f2f2d5cb019b",
+    "scripts/rpa_explorer/verification/check.py": "59a37b1abce9d2df457632d124c9a3c3b16601aacf1301880593f92f86305b07",
+    "scripts/rpa_explorer/verification/view.mjs": "d58a6e5edc48dd3f29c79cce5edc80e730dfb60dbfc24f254ba3198250364d83"
+  }
+}

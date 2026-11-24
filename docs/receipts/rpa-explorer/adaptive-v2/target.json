@@ -1,0 +1,13 @@
+{
+  "image": "codercom/code-server@sha256:fc708b18f6c613b5a9d00f1d1801e58376d3df9c5b5de77f5c02d67b711f99c9",
+  "cleanup": {
+    "container_removed": true,
+    "listener_closed": true,
+    "scratch_removed": true
+  },
+  "vsix_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+  "installed_files_verified": 165,
+  "extension_version": "1.0.2",
+  "editor": "4.146.0 9cc1033c190703416bbd5ec95d8f7db9f3edb63d with Code 1.146.0",
+  "node": "v24.22.1"
+}

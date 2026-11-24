@@ -1,0 +1,48 @@
+workspace
+Explorer
+workspace
+deep
+folders
+nonportable:name
+projects
+Outline
+Timeline
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Go to File
+Ctrl
++
+P
+Chat
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Choose how you want to use Copilot.
+Sign in to use GitHub Copilot models, or add a model with your own API key.
+Add Models
+Sign In
+Chat with Copilot
+Agent
+Models
+Copilot
+ Josh Room
+ 0 
+ 0
+ 0
+Layout: us
+Warning: Select either deep/level-00 or its enclosing folder. The previous selection was kept.
+Choose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.
+Select either deep/level-00 or its enclosing folder. The previous selection was kept.

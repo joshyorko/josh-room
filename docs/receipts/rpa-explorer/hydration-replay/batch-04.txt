@@ -1,0 +1,48 @@
+parent
+Explorer
+parent
+a
+.josh-room-composition.json
+.josh-room.json
+.josh-roomignore
+Outline
+Timeline
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Open Settings
+Ctrl
++
+,
+Chat
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Choose how you want to use Copilot.
+Sign in to use GitHub Copilot models, or add a model with your own API key.
+Add Models
+Sign In
+Chat with Copilot
+Agent
+Models
+Copilot
+ Entering pinned child Room 100%
+ 0 
+ 0
+ 0
+Layout: us
+Info: Child Room verified at exact recovery point jat-4dc8ac044f2d57a49aafe0584619128d.
+Choose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.
+Child Room verified at exact recovery point jat-4dc8ac044f2d57a49aafe0584619128d.

@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "id": "installed-room-adaptive-v1",
+  "target": "task-owned-code-server",
+  "budgets": {"seconds": 900, "actions": 100, "ui_calls": 240, "batches": 24, "model_calls": 0, "evidence_bytes": 16777216, "repetitions": 2, "output_bytes": 40000},
+  "commands": ["joshRoom.new", "joshRoom.checkWorkspace", "joshRoom.addStorage", "joshRoom.splitWorkspace", "joshRoom.saveCatalog", "joshRoom.enterChild", "joshRoom.refresh", "joshRoom.showLogs"]
+}
