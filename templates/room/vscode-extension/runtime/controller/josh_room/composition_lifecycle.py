@@ -96,9 +96,13 @@ def _catalog_directory_names(root_fd):
     return aliases, directories
 
 
-def _catalog_root_scan(policy, root_fd):
+def _catalog_root_scan(policy, root_fd, children):
     """Inspect only immediate root entries; selected children are scanned separately."""
-    from .room_store_operations import WorkspaceScan, _relative_parts
+    from .room_store_operations import (
+        RoomStoreOperationsError,
+        WorkspaceScan,
+        _relative_parts,
+    )
 
     effective = replace(policy, capture_mode="source-only")
     root_device = os.fstat(root_fd).st_dev
@@ -113,13 +117,16 @@ def _catalog_root_scan(policy, root_fd):
     for name in names:
         if effective.is_excluded(name):
             continue
+        info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
         try:
             _relative_parts(name)
-        except ValueError:
+            name.encode("utf-8")
+        except (RoomStoreOperationsError, UnicodeEncodeError):
+            if stat.S_ISDIR(info.st_mode) and name not in children:
+                continue
             raise ValueError("workspace path cannot be restored safely") from None
         if name == ".josh-roomignore":
             continue
-        info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
         if info.st_dev != root_device:
             raise ValueError("workspace crosses a filesystem boundary")
         mode = stat.S_IMODE(info.st_mode)
@@ -185,10 +192,6 @@ def _catalog_admission(root_fd, children, expected_mount=None):
 def _parent_scan(source, policy, children):
     return _scan_workspace(source, replace(policy, capture_mode="source-only"),
                            opaque_directories=frozenset(children))
-
-
-def _catalog_parent_scan(policy, source_fd):
-    return _catalog_root_scan(policy, source_fd)
 
 
 def _has_git(directory):
@@ -372,7 +375,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
                 raise ValueError("approved source identity changed")
             _aliases, directories = _catalog_directory_names(root_fd)
             opaque_directories = frozenset(directories)
-            scan = _catalog_root_scan(policy, root_fd)
+            scan = _catalog_root_scan(policy, root_fd, children)
         finally:
             os.close(root_fd)
     else:
@@ -444,7 +447,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
             if ([os.fstat(root_fd).st_dev, os.fstat(root_fd).st_ino] != source_identity
                     or _mount_id(root_fd) != source_mount_id):
                 raise ValueError("approved source identity changed")
-            if _catalog_root_scan(policy, root_fd).signature != scan.signature:
+            if _catalog_root_scan(policy, root_fd, children).signature != scan.signature:
                 raise ValueError("Catalog root inventory changed during planning")
             source_records = _records(workspace, scan.paths, root_fd)
         finally:
@@ -922,7 +925,7 @@ def _build_child_view(source, child, target, request, source_fd):
     root_policy = load_capture_policy(source)
     if request.get("root_files_only"):
         with _catalog_admission(source_fd, [child], request["source_mount_id"]):
-            root_scan = _catalog_parent_scan(root_policy, source_fd)
+            root_scan = _catalog_root_scan(root_policy, source_fd, request["child_evidence"])
     else:
         root_scan = _parent_scan(source, root_policy, request["child_evidence"])
     original = source / child
@@ -996,7 +999,7 @@ def _build_parent_view(source, target, assignments, manifest, request, source_fd
     if request.get("root_files_only"):
         children = [row["path"] for row in assignments]
         with _catalog_admission(source_fd, children, request["source_mount_id"]):
-            scan = _catalog_parent_scan(policy, source_fd)
+            scan = _catalog_root_scan(policy, source_fd, children)
     else:
         scan = _parent_scan(source, policy, request["child_evidence"])
     if (
@@ -1044,7 +1047,7 @@ def _build_parent_view(source, target, assignments, manifest, request, source_fd
     if request.get("root_files_only"):
         children = [row["path"] for row in assignments]
         with _catalog_admission(source_fd, children, request["source_mount_id"]):
-            after = _catalog_parent_scan(load_capture_policy(source), source_fd)
+            after = _catalog_root_scan(load_capture_policy(source), source_fd, children)
     else:
         after = _parent_scan(source, load_capture_policy(source), request["child_evidence"])
     if (
