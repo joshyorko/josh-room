@@ -356,3 +356,52 @@ test('selected-directory poll updates edited child geometry, grid metadata, and 
   assert.equal(sceneDraws, 1);
   assert.equal(gridRenders, 1);
 });
+
+test('a stale selected file reacquires its new revision via object_key with deferred content, while a replacement falls back to parent', async () => {
+  const v1 = { ...file, id: 'v-1', fields: { file_bytes: 7, object_key: 'stable-key' } };
+  const v2 = { ...file, id: 'v-2', fields: { file_bytes: 12, object_key: 'stable-key' } };
+  const replaced = { ...file, id: 'v-3', fields: { file_bytes: 9, object_key: 'other-key' } };
+  const previewV1 = { ...v1, previews: [{ slot: 'source', body: 'initial' }] };
+  const previewV2 = { ...v2, previews: [{ slot: 'source', body: 'updated body' }] };
+  let phase = 'initial';
+  const showCalls = [];
+  const app = appFixture(async (op, { id, generation }) => {
+    if (phase === 'edited' && generation === 'g1') throw Object.assign(new Error('stale'), { status: 409 });
+    if (phase === 'replaced' && generation === 'g2') throw Object.assign(new Error('stale'), { status: 409 });
+    const gen = phase === 'initial' ? 'g1' : phase === 'edited' ? 'g2' : 'g3';
+    if (op === 'preview') {
+      return { generation: gen, node: id === v1.id ? previewV1 : previewV2 };
+    }
+    if (id === 'root') return listing(root, [dir], gen);
+    return listing(dir, [phase === 'initial' ? v1 : phase === 'edited' ? v2 : replaced], gen);
+  });
+  app.evidence = {
+    target: null,
+    isOpen() { return !!this.target; },
+    captureReadingPosition() {
+      return this.target ? { id: this.target.objectId, objectKey: this.target.fields?.object_key, digest: 'd1' } : null;
+    },
+    async readingUnchanged() { return false; },
+    showTarget(target, _d, _s, _l, opts = {}) { this.target = target; showCalls.push({ id: target.objectId, opts }); },
+    hide() { this.target = null; },
+  };
+  await app._openFilesystem(dir.id, { kind: 'directory' });
+  await app._openFilesystem(v1.id, { kind: 'file' });
+  assert.equal(app.currentNodeId, 'node/v-1');
+
+  // In-place edit: new revision ID, same object_key -> stays selected with deferred content prompt.
+  phase = 'edited';
+  await app._openFilesystem(v1.id, { kind: 'file', refresh: true });
+  assert.equal(app.currentNodeId, 'node/v-2');
+  assert.equal(app.data.fsGeneration, 'g2');
+  assert.equal(showCalls.at(-1).id, 'v-2');
+  assert.equal(showCalls.at(-1).opts.deferContent, true);
+  assert.equal(showCalls.at(-1).opts.reading, null);
+
+  // Unlink + recreate: different object_key -> falls back to parent directory and closes reader.
+  phase = 'replaced';
+  await app._openFilesystem(v2.id, { kind: 'file', refresh: true });
+  assert.equal(app.currentNodeId, 'node/dir');
+  assert.equal(app.data.fsGeneration, 'g3');
+  assert.equal(app.evidence.isOpen(), false);
+});

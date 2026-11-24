@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;155b212d86ba8ddf10a83a1e3be53c5362110d81f3d4de79d2ee23a50a22d4c9&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;ee0d20c1d386dec7d9984a5df391a4b0401591392200fb3fa3827b6aea1a856c&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -19959,7 +19959,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         textTop: scroll?.scrollTop || 0, textLeft: scroll?.scrollLeft || 0,
         pageOffset: page ? Math.max(0, viewport.getBoundingClientRect().top - page.getBoundingClientRect().top) : 0,
         pdfLeft: viewport?.scrollLeft || 0,
-        id: this.currentObjectId, tab: this.activeTab, slot: this.activePreviewSlot,
+        id: this.currentObjectId, objectKey: this.currentItem.fields?.object_key || null,
+        tab: this.activeTab, slot: this.activePreviewSlot,
         summary: this.reader && !this.fileSummary.hidden,
         comparison: this.comparison.capture(),
         digest: this._contentDigest(this.currentItem),
@@ -20016,7 +20017,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     async readingUnchanged(target, position) {
-      return (target.objectId || target.id) === position.id && await position.digest === await this._contentDigest(target);
+      const sameFile = (target.objectId || target.id) === position.id ||
+        Boolean(position.objectKey && target.fields?.object_key === position.objectKey);
+      return sameFile && await position.digest === await this._contentDigest(target);
     }
 
     _rememberPosition(position) {
@@ -21498,7 +21501,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const wasReading = this.evidence.isOpen();
       const previousChain = previousPage
         ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
-          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
+          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind,
+              object_key: previousNode.fields?.object_key || null }] : [])] : [];
       const request = new AbortController();
       this.fsRequest = request;
       this.fsBusy = true;
@@ -21577,7 +21581,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
         if (target && ((!refresh && file && (!cursor || wasReading)) || (refresh && wasReading))) {
-          const restoring = reading && target.objectId === reading.id;
+          const restoring = reading && (target.objectId === reading.id ||
+            Boolean(reading.objectKey && target.fields?.object_key === reading.objectKey));
           const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
           if (request.signal.aborted) return;
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
@@ -21644,7 +21649,9 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
             if (signal.aborted) return;
             generation = page.generation;
             cursor = page.cursor;
-            const next = page.entries.find(node => node.id === chain[index]?.id);
+            const expected = chain[index];
+            const next = page.entries.find(node => node.id === expected?.id ||
+              (expected?.object_key && node.node_kind !== 'directory' && node.fields?.object_key === expected.object_key));
             if (next?.node_kind === 'directory') {
               directory = next.id;
               index++;

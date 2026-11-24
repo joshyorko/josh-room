@@ -149,7 +149,8 @@
       const wasReading = this.evidence.isOpen();
       const previousChain = previousPage
         ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
-          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
+          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind,
+              object_key: previousNode.fields?.object_key || null }] : [])] : [];
       const request = new AbortController();
       this.fsRequest = request;
       this.fsBusy = true;
@@ -228,7 +229,8 @@
           this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
         }
         if (target && ((!refresh && file && (!cursor || wasReading)) || (refresh && wasReading))) {
-          const restoring = reading && target.objectId === reading.id;
+          const restoring = reading && (target.objectId === reading.id ||
+            Boolean(reading.objectKey && target.fields?.object_key === reading.objectKey));
           const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
           if (request.signal.aborted) return;
           this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
@@ -295,7 +297,9 @@
             if (signal.aborted) return;
             generation = page.generation;
             cursor = page.cursor;
-            const next = page.entries.find(node => node.id === chain[index]?.id);
+            const expected = chain[index];
+            const next = page.entries.find(node => node.id === expected?.id ||
+              (expected?.object_key && node.node_kind !== 'directory' && node.fields?.object_key === expected.object_key));
             if (next?.node_kind === 'directory') {
               directory = next.id;
               index++;
