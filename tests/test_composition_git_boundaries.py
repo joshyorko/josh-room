@@ -1,0 +1,86 @@
+"""Standalone Git manifests are payload, not active repository boundaries."""
+
+import shutil
+import subprocess
+
+import pytest
+
+from josh_room.composition import validate_child_git
+from josh_room.composition_lifecycle import (
+    CompositionAdmissionError,
+    _child_view,
+    capture_plan,
+)
+from josh_room.config import DimensionConfig
+
+
+def test_catalog_git_root_explains_why_review_cannot_open(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "child").mkdir()
+    dimension = DimensionConfig(
+        "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
+        "synthetic-bucket", "synthetic-profile", connection_id="synthetic",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    with pytest.raises(CompositionAdmissionError, match="Save it as one Room") as failure:
+        capture_plan(tmp_path, dimension, "1" * 32, "parent",
+                     [{"path": "child", "outcome": "child"}], root_files_only=True)
+    assert failure.value.result["error_code"] == "composition-root-git-history"
+    assert str(tmp_path) not in str(failure.value)
+
+
+def test_standalone_gitmodules_can_be_planned_and_staged_as_ordinary_content(tmp_path):
+    source = tmp_path / "source"
+    child = source / "child"
+    child.mkdir(parents=True)
+    content = '[submodule "example"]\n path = example\n'
+    (child / ".gitmodules").write_text(content)
+    (child / "payload.txt").write_text("ordinary copied source")
+    dimension = DimensionConfig(
+        "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
+        "synthetic-bucket", "synthetic-profile", connection_id="synthetic",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    preview = capture_plan(source, dimension, "1" * 32, "parent",
+                           [{"path": "child", "outcome": "child"}], root_files_only=True)
+    target = tmp_path / "staged"
+    _child_view(source, "child", target, preview["request"])
+    assert (target / ".gitmodules").read_text() == content
+    assert (target / "payload.txt").read_text() == "ordinary copied source"
+
+
+@pytest.mark.parametrize("gitfile", [False, True])
+def test_gitmodules_with_active_git_metadata_is_still_refused(tmp_path, gitfile):
+    (tmp_path / ".gitmodules").write_text("synthetic manifest")
+    if gitfile:
+        (tmp_path / ".git").write_text("gitdir: elsewhere")
+    else:
+        (tmp_path / ".git").mkdir()
+    with pytest.raises(ValueError, match="submodules"):
+        validate_child_git(tmp_path, [".gitmodules"], "full-repository")
+
+
+def test_gitfile_without_gitmodules_is_still_refused(tmp_path):
+    (tmp_path / ".git").write_text("gitdir: elsewhere")
+    with pytest.raises(ValueError, match="gitfiles"):
+        validate_child_git(tmp_path, [".git"], "full-repository")
+
+
+def test_active_submodule_manifest_refusal_has_a_safe_actionable_code(tmp_path):
+    if not shutil.which("git"):
+        pytest.skip("requires Git for a real repository boundary")
+    source = tmp_path / "source"
+    child = source / "child"
+    child.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(child)], check=True)
+    (child / ".gitmodules").write_text("synthetic active repository manifest")
+    dimension = DimensionConfig(
+        "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
+        "synthetic-bucket", "synthetic-profile", connection_id="synthetic",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    with pytest.raises(CompositionAdmissionError, match="submodules") as failure:
+        capture_plan(source, dimension, "1" * 32, "parent",
+                     [{"path": "child", "outcome": "child"}], root_files_only=True)
+    assert failure.value.result["error_code"] == "composition-child-git-unsupported"
+    assert str(tmp_path) not in str(failure.value)

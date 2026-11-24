@@ -52,30 +52,72 @@ function reviewedDestination(dimension, binding) {
       throw new Error("The reviewed Catalog destination endpoint changed. Select the Dimension again.");
     }
   }
-  return `${dimension.display_name || id} (${binding.dimension_id}) · ${binding.provider} · ${binding.connection_id} · ${physical}`;
+  const provider = { minio: "MinIO", s3: "S3", r2: "Cloudflare R2" }[binding.provider] || binding.provider;
+  return {
+    label: dimension.display_name || id,
+    description: provider,
+    detail: physical.slice(binding.provider.length + 1),
+    connection: binding.connection_id,
+    dimension: binding.dimension_id,
+  };
 }
 
-async function catalogSettings(vscode, root, children, chooseComponents) {
-  const rows = children.map(child => ({ path: child, outcome: "child" }));
-  let parent = [];
+function reviewCatalog(vscode, root, destination, children) {
+  const heading = label => ({ label, kind: vscode.QuickPickItemKind.Separator });
+  const parent = {
+    label: "$(root-folder) Catalog parent",
+    description: "Eligible root files and child Room links",
+    detail: "Checked folders include nested content. Unchecked folders stay local.",
+    alwaysShow: true,
+  };
+  const picker = vscode.window.createQuickPick();
+  picker.title = `Review Catalog · ${path.basename(root) || root} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
+  picker.placeholder = "Review the plan, then choose Save catalog, Advanced settings, or Cancel";
+  picker.matchOnDescription = true;
+  picker.matchOnDetail = true;
+  picker.ignoreFocusOut = true;
+  picker.items = [
+    heading("Destination"), { label: destination.label, description: destination.description, detail: destination.detail },
+    { label: "Connection", description: destination.connection },
+    { label: "Dimension", description: destination.dimension },
+    heading("Capture"), parent,
+    heading("Actions"),
+    { label: "$(check) Save catalog", action: "Save catalog" },
+    { label: "$(settings-gear) Advanced settings", action: "Advanced settings" },
+    { label: "$(close) Cancel", action: "Cancel" },
+    heading("Child Rooms"), ...children,
+  ];
+  return new Promise(resolve => {
+    let action;
+    picker.onDidAccept(() => {
+      const selected = picker.selectedItems[0];
+      if (!selected?.action) return;
+      action = selected.action;
+      picker.hide();
+    });
+    picker.onDidHide(() => {
+      picker.dispose();
+      resolve(action);
+    });
+    picker.show();
+    picker.activeItems = [parent];
+  });
+}
+
+async function catalogSettings(vscode, root, assignments, chooseComponents) {
+  const rows = assignments.map(row => ({ ...row }));
   for (;;) {
     const action = await vscode.window.showQuickPick([
-      { id: "continue", label: "Continue to destination" },
+      { id: "review", label: "Return to review" },
       { id: "git", label: "Change Git settings" },
       { id: "components", label: "Customize optional components" },
-      { id: "parent", label: "Choose files for the catalog itself", description: parent.map(row => row.path).join(", ") },
-    ], { title: `Save ${rows.length} selected folders as Rooms`, placeHolder: "Each folder uses its Git capture policy. Optional components are off by default." });
+    ], { title: "Catalog child settings", placeHolder: "Each checked folder is a whole child Room. Optional components are off by default." });
     if (!action) return undefined;
-    if (action.id === "continue") return [{ path: ".", outcome: "local-only" }, ...rows, ...parent];
-    if (action.id === "parent") {
-      const owned = await vscode.window.showOpenDialog({ title: "Include in parent", defaultUri: vscode.Uri.file(root),
-        canSelectFolders: true, canSelectFiles: true, canSelectMany: true });
-      if (owned) parent = owned.map(item => ({ path: relativeSource(root, item.fsPath), outcome: "parent" }));
-      continue;
-    }
+    if (action.id === "review") return rows;
+    if (!rows.length) continue;
     const scope = rows.length === 1 ? [{ row: rows[0] }] : await vscode.window.showQuickPick(
       rows.map(row => ({ label: row.path, row, picked: true })),
-      { canPickMany: true, title: "Apply settings to folders", placeHolder: "All selected by default. Uncheck folders to override a subset." });
+      { canPickMany: true, title: "Apply settings to folders", placeHolder: "Choose which child folders receive this setting." });
     if (!scope?.length) continue;
     if (action.id === "git") {
       const mode = await vscode.window.showQuickPick([
@@ -104,38 +146,73 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
   const root = source[0].fsPath;
   const children = await selectChildren(root);
   if (!children?.length) return "cancelled";
-  const assignments = await catalogSettings(vscode, root, children, chooseComponents);
-  if (!assignments) return "cancelled";
+  let assignments = children.map(path => ({ path, outcome: "child" }));
   const configured = await dimensions(root);
   const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Where should this catalog be saved?" });
   if (!choice) return "cancelled";
   const namespace = crypto.randomUUID().replaceAll("-", "");
   const parentRoom = `catalog-${namespace}`;
-  const selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
-  const preview = await plan(selection);
-  if (preview === undefined) return "cancelled";
-  const destination = reviewedDestination(choice.dimension, preview.request?.destination_binding);
-  const childSummary = assignments.filter(row => row.outcome === "child").map(row => {
-    const evidence = preview.request?.child_evidence?.[row.path];
-    return `${row.path} — ${describeMode(evidence?.capture_mode)}. ${describeComponents(evidence, row.component_options)}`;
-  });
-  const parentSummary = assignments.filter(row => row.outcome === "parent").map(row => `Parent content: ${row.path}`);
-  const approved = await vscode.window.showWarningMessage("Save this catalog?", {
-    modal: true,
-    detail: `Destination: ${destination}\n${children.length} folders will be saved as independent Rooms. Other files stay on this device and are unprotected.\n\n${[...childSummary, ...parentSummary].join("\n")}`,
-  }, "Save catalog");
-  if (approved !== "Save catalog") return "cancelled";
-  const result = await save(selection, preview.approval_sha256);
-  const copy = "Copy recovery receipt";
-  if (await vscode.window.showInformationMessage(`Catalog saved with ${children.length} child Room${children.length === 1 ? "" : "s"}.`, copy) === copy) {
-    await vscode.env.clipboard.writeText(JSON.stringify({
-      dimension_id: preview.request.destination_binding.dimension_id,
-      namespace: result.namespace,
-      parent_room_id: result.parent_room_id,
-      parent_snapshot_id: result.parent_snapshot_id,
-    }, null, 2));
+  let selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
+  for (;;) {
+    let preview;
+    try {
+      preview = await plan(selection);
+    } catch (error) {
+      const failure = error.result;
+      const filesOnly = failure?.error_code === "composition-child-git-files-only";
+      if (!filesOnly && failure?.error_code !== "composition-child-room-metadata") throw error;
+      const child = assignments.find(row => crypto.createHash("sha256").update(row.path).digest("hex") === failure.child_path_sha256);
+      if (!child || (filesOnly && child.capture_mode === "source-only")) throw error;
+      const action = filesOnly ? "Review files only" : "Leave folder local";
+      const detail = filesOnly
+        ? "This folder's Git history cannot be captured independently. Review a new plan that includes its files without Git history?"
+        : "This folder contains reserved Room metadata. Review a new plan that leaves this folder on this device?";
+      if (await vscode.window.showWarningMessage(child.path, { modal: true, detail }, action) !== action) return "cancelled";
+      assignments = filesOnly
+        ? assignments.map(row => row === child ? { ...row, capture_mode: "source-only" } : row)
+        : assignments.filter(row => row !== child);
+      if (!assignments.length) return "cancelled";
+      selection = { ...selection, assignments };
+      continue;
+    }
+    if (preview === undefined) return "cancelled";
+    const destination = reviewedDestination(choice.dimension, preview.request?.destination_binding);
+    const evidenceByChild = preview.request.child_evidence;
+    if (Object.keys(evidenceByChild || {}).length !== assignments.length) {
+      throw new Error("The controller returned different Catalog child folders. Review the selection again.");
+    }
+    const childSummary = assignments.map(row => {
+      const evidence = Object.hasOwn(evidenceByChild, row.path) ? evidenceByChild[row.path] : undefined;
+      const mode = describeMode(evidence?.capture_mode);
+      const git = mode === "Files and Git history" ? "Files + Git if present" : "Files only";
+      const components = describeComponents(evidence, row.component_options);
+      return {
+        label: `$(folder) ${row.path.replaceAll("$(", "\\$(")}`,
+        description: components === "Workspace only" ? `${git}  ·  Workspace only` : git,
+        ...(components === "Workspace only" ? {} : { detail: components }),
+      };
+    });
+    const approved = await reviewCatalog(vscode, root, destination, childSummary);
+    if (approved === "Advanced settings") {
+      const edited = await catalogSettings(vscode, root, assignments, chooseComponents);
+      if (!edited) return "cancelled";
+      assignments = edited;
+      selection = { ...selection, assignments };
+      continue;
+    }
+    if (approved !== "Save catalog") return "cancelled";
+    const result = await save(selection, preview.approval_sha256);
+    const copy = "Copy recovery receipt";
+    if (await vscode.window.showInformationMessage(`Catalog saved with ${assignments.length} child Room${assignments.length === 1 ? "" : "s"}.`, copy) === copy) {
+      await vscode.env.clipboard.writeText(JSON.stringify({
+        dimension_id: preview.request.destination_binding.dimension_id,
+        namespace: result.namespace,
+        parent_room_id: result.parent_room_id,
+        parent_snapshot_id: result.parent_snapshot_id,
+      }, null, 2));
+    }
+    return result;
   }
-  return result;
 }
 
 async function chooseChild(vscode, marker, listChildren, refresh) {

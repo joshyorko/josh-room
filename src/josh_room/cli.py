@@ -500,7 +500,9 @@ def build_parser() -> argparse.ArgumentParser:
                                    metavar=('CHILD', 'OPTIONS_JSON'), help='component selection and explicit inputs for one child')
             operation.add_argument('--child-source-only', action='append', default=[], metavar='CHILD',
                                    help='exclude Git history for this selected child; otherwise use its capture policy')
-            operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice, no implicit default')
+            operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice outside root-files-only mode')
+            operation.add_argument('--root-files-only', action='store_true',
+                                   help='save policy-eligible root files with the Catalog parent; assignments select child directories only')
         if action == 'save':
             operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
             operation.add_argument('--ack-local-only', action='store_true')
@@ -1914,7 +1916,11 @@ def dispatch(args, instance: Path) -> dict:
                 dimension, material, session = resolve_capture_destination(dimension, material,
                     expected_domain=args.expected_domain)
                 try:
-                    preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
+                    if args.root_files_only:
+                        preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room,
+                                               assignments, root_files_only=True)
+                    else:
+                        preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
                 except (OSError, RuntimeError):
                     raise CompositionAdmissionError('composition-input-unavailable',
                         'Catalog preview could not verify the selected workspace or components') from None
@@ -1928,6 +1934,9 @@ def dispatch(args, instance: Path) -> dict:
                 with provider_runtime(instance, dimension, material, args.namespace, authority_session=session,
                                       authority_only=args.composition_command == 'parent-children') as (authority, factory, private):
                     if args.composition_command == 'save':
+                        if args.root_files_only:
+                            return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
+                                                    args.approve, authority, factory, private, root_files_only=True)
                         return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
                                                 args.approve, authority, factory, private)
                     if args.composition_command == 'parent-children':

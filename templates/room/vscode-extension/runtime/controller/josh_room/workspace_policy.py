@@ -18,6 +18,10 @@ _MAX_RULE_LENGTH = 1024
 _MAX_PATTERN_SEGMENTS = 128
 
 
+class WorkspaceIgnoreRuleLimitError(ValueError):
+    pass
+
+
 def _parts(pattern: str, *, rule: str = "capture pattern") -> tuple[str, ...]:
     if (
         not isinstance(pattern, str)
@@ -162,7 +166,7 @@ def _user_patterns(contents: bytes | None) -> tuple[tuple[str, ...], ...]:
         if rule.startswith("!"):
             raise ValueError("workspace ignore rules cannot reinclude paths")
         if len(patterns) >= _MAX_RULES:
-            raise ValueError("workspace ignore file has too many rules")
+            raise WorkspaceIgnoreRuleLimitError("workspace ignore file has too many rules")
         patterns.append(_parts(rule, rule="workspace ignore rule"))
     return tuple(patterns)
 

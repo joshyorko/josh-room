@@ -2245,19 +2245,13 @@ async function prepareCatalogDestination(root, dimension) {
 
 async function saveCatalogRoom() {
   assertWorkspaceTrusted("save a Catalog Room");
-  const argsFor = (selection, command) => ["composition", command, "--workspace", selection.root,
+  const argsFor = (selection, command) => ["composition", command, "--root-files-only", "--workspace", selection.root,
     "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
     "--parent-room", selection.parentRoom, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
       ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : []),
       ...(row.component_options ? ["--child-components", row.path, JSON.stringify(row.component_options)] : [])])];
   return require("./catalog-actions").saveCatalog(vscode, {
-    selectChildren: async root => {
-      let paths;
-      await executeJoshRoom(["composition", "inventory", "--workspace", root], root, undefined, undefined, undefined, {
-        inventoryHandler: async request => { paths = await require("./catalog-selection").selectCatalogChildren(vscode, request); },
-      });
-      return paths;
-    },
+    selectChildren: root => require("./catalog-selection").selectCatalogChildren(vscode, root),
     chooseComponents: async sources => {
       const selected = await require("./component-picker").pickComponents(vscode, sources[0],
         { request: { components: { rcc_environment: "omit", homebrew_recovery: "omit", hauler_content: "omit" } } },

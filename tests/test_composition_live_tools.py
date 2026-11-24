@@ -260,6 +260,45 @@ def test_actual_child_parent_save_and_whole_child_hydration(runtime, monkeypatch
         )
 
 
+def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runtime):
+    """Use real Restic/age with SQLite S3 transport; this is not live-provider evidence."""
+    r = runtime
+    (r.source / "a/grandchild").mkdir()
+    (r.source / "a/grandchild/deep.txt").write_text("whole child payload\n")
+    assignments = [
+        {"path": "a", "outcome": "child"},
+        {"path": "b", "outcome": "child"},
+    ]
+    preview = capture_plan(
+        r.source, r.dimension, NAMESPACE, "parent", assignments,
+        root_files_only=True,
+    )
+    assert preview["request"]["root_files_only"] is True
+    assert preview["request"]["assignments"] == assignments
+    saved = save_composition(
+        r.source, r.dimension, NAMESPACE, "parent", assignments,
+        preview["approval_sha256"], r.authority, r.factory, r.private,
+        root_files_only=True,
+    )
+    target = r.tmp / "root-files-only-entered"
+    parent = hydrate_composition(
+        r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
+        target, r.authority, r.factory, r.private,
+    )
+    assert parent["marker_verified"]
+    assert (target / "notes.txt").read_text() == "parent note\n"
+    assert not any((target / path).exists() for path in ("a", "b", "local"))
+
+    child = hydrate_composition(
+        r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
+        target, r.authority, r.factory, r.private, child_path="a",
+    )
+    assert child["unit"] == "whole-child"
+    assert (target / "a/grandchild/deep.txt").read_text() == "whole child payload\n"
+    assert not (target / "b").exists()
+    assert not (target / "local").exists()
+
+
 def test_git_only_child_update_and_historical_cold_hydration(runtime):
     from josh_room.composition_updates import refresh_parent, save_child
     from scripts.git_recovery_acceptance import (

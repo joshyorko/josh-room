@@ -22,7 +22,7 @@ exports.run = async () => {
   const source = ready.native_sources?.[command] || path.join(base, "provider-source");
   assert.equal(path.dirname(fs.realpathSync(source)), base);
   assert.equal(fs.existsSync(path.join(source, ".josh-room.json")), false);
-  const gitPath = "projects/a";
+  const nestedGitPath = "projects/a";
   const installed = vscode.extensions.getExtension("joshyorko.josh-room");
   assert.ok(installed);
   assert.equal(path.dirname(fs.realpathSync(installed.extensionPath)), fs.realpathSync(process.env.JOSH_ROOM_ACCEPTANCE_EXTENSIONS || path.join(scratch, "extensions")));
@@ -65,6 +65,7 @@ exports.run = async () => {
   const syntheticDialogs = api => ({ QuickPickItemKind: api.QuickPickItemKind, ProgressLocation: api.ProgressLocation, window: {
     withProgress: api.window.withProgress,
     showQuickPick: api.window.showQuickPick, showWarningMessage: api.window.showWarningMessage,
+    createQuickPick: api.window.createQuickPick,
     showInputBox: options => {
       if (/encryption domain/i.test(options.title || "")) {
         manualDomainPrompt = true;
@@ -105,67 +106,91 @@ exports.run = async () => {
   try {
     const result = vscode.commands.executeCommand(command);
     if (command === "joshRoom.new") await renderer.choose("Configure Catalog Room");
-    await renderer.choose("Select All on This Page (2)");
-    await renderer.choose("Clear All");
-    await until(async () => (await renderer.widget())?.rows.some(row => row.includes("Continue with 0 selected")), "cleared child selection");
-    await renderer.choose("Select All on This Page (2)");
-    await renderer.choose("Continue with 2 selected");
-    if (handoffPath) {
-      await renderer.choose("Customize optional components");
-      await until(async () => (await renderer.widget())?.text.includes("Apply settings to folders"), "component scope");
+    const selection = await until(async () => {
+      const widget = await renderer.widget();
+      return widget?.text.includes("Choose Catalog child Rooms") && widget;
+    }, "native immediate-folder picker");
+    assert.deepEqual(selection.rows.filter(row => ["projects", "b"].includes(row.trim())).map(row => row.trim()).sort(), ["b", "projects"]);
+    for (const name of ["projects", "b"]) {
       assert.equal(await renderer.evaluate(`(() => {
-        const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.trim() === "b");
+        const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.trim() === ${JSON.stringify(name)});
         const box = row?.querySelector("[role=checkbox]");
-        if (!box || box.getAttribute("aria-checked") !== "true") return false;
+        if (!box || box.getAttribute("aria-checked") !== "false") return false;
         box.click(); return true;
       })()`), true);
-      await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
-      await until(async () => (await renderer.widget())?.rows.some(row => row.includes("RCC exact environment")), "component picker");
-      for (const label of ["RCC exact environment", "Homebrew recovery export", "OCI images / additional Hauler content"]) {
+    }
+    await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+    await renderer.choose("Synthetic Composition");
+    const approvalText = async () => {
+      const widget = await renderer.widget();
+      return widget?.text.includes("Review Catalog") && widget.text;
+    };
+    const reviewAction = async label => {
+      await renderer.text(label);
+      await renderer.choose(label);
+    };
+    if (!cancel && (handoffPath || command === "joshRoom.new")) {
+      const firstReview = await until(approvalText, "initial Catalog review", 300000);
+      assert.match(firstReview, /Eligible root files and child Room links/);
+      await reviewAction("Advanced settings");
+      if (handoffPath) {
+        await renderer.choose("Customize optional components");
+        await until(async () => (await renderer.widget())?.text.includes("Apply settings to folders"), "component scope");
         assert.equal(await renderer.evaluate(`(() => {
-          const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.includes(${JSON.stringify(label)}));
+          const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.trim() === "projects");
           const box = row?.querySelector("[role=checkbox]");
-          if (!box) return false;
-          if (box.getAttribute("aria-checked") !== "true") box.click();
+          if (!box || box.getAttribute("aria-checked") !== "true") return false;
+          box.click(); return true;
+        })()`), true);
+        await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+        await until(async () => (await renderer.widget())?.rows.some(row => row.includes("RCC exact environment")), "component picker");
+        for (const label of ["RCC exact environment", "Homebrew recovery export", "OCI images / additional Hauler content"]) {
+          assert.equal(await renderer.evaluate(`(() => {
+            const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.includes(${JSON.stringify(label)}));
+            const box = row?.querySelector("[role=checkbox]");
+            if (!box) return false;
+            if (box.getAttribute("aria-checked") !== "true") box.click();
+            return true;
+          })()`), true);
+        }
+        await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+        await renderer.choose("Select Brewfile-only recipe directory");
+        await renderer.choose("Select additional Hauler file");
+        await until(async () => (await renderer.widget())?.text.includes("Hauler file name"), "attachment name");
+        await renderer.text("synthetic-file");
+        await renderer.key("Enter", "Enter", 13);
+      }
+      if (command === "joshRoom.new") {
+        await renderer.choose("Change Git settings");
+        await until(async () => (await renderer.widget())?.text.includes("Apply settings to folders"), "Git override scope");
+        assert.equal(await renderer.evaluate(`(() => {
+          const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.trim() === "b");
+          const box = row?.querySelector("[role=checkbox]");
+          if (!box || box.getAttribute("aria-checked") !== "true") return false;
+          box.click();
           return true;
         })()`), true);
+        await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+        await renderer.choose("Files only");
       }
-      await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
-      await renderer.choose("Select Brewfile-only recipe directory");
-      await renderer.choose("Select additional Hauler file");
-      await until(async () => (await renderer.widget())?.text.includes("Hauler file name"), "attachment name");
-      await renderer.text("synthetic-file");
-      await renderer.key("Enter", "Enter", 13);
+      await renderer.choose("Return to review");
     }
-    if (command === "joshRoom.new") {
-      await renderer.choose("Change Git settings");
-      await until(async () => (await renderer.widget())?.text.includes("Apply settings to folders"), "Git override scope");
-      assert.equal(await renderer.evaluate(`(() => {
-        const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.trim() === "projects/a");
-        const box = row?.querySelector("[role=checkbox]");
-        if (!box || box.getAttribute("aria-checked") !== "true") return false;
-        box.click();
-        return true;
-      })()`), true);
-      await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
-      await renderer.choose("Files only");
-    }
-    await renderer.choose("Continue to destination");
-    await renderer.choose("Synthetic Composition");
-    const approvalText = () => renderer.evaluate("document.querySelector('.monaco-dialog-box')?.innerText");
     const approval = await until(async () => {
       assert.equal(manualDomainPrompt, false, "Catalog creation requested a manual encryption domain");
-      const text = await approvalText();
-      return text?.includes("Save this catalog?") && text;
+      return approvalText();
     }, "visible approval", 300000);
     assert.match(approval, /Synthetic Composition/);
     assert.match(approval, /minio/i);
+    assert.match(approval, /Catalog parent/);
     const names = ["rcc_environment", "homebrew_recovery", "hauler_content"];
     if (handoffPath) {
       for (const name of ["RCC environment", "Homebrew recovery", "OCI / Hauler content"]) assert.ok(approval.includes(name + " (capture)"), name);
     }
-    assert.match(approval, /projects\/a[^\n]*Files and Git history/i);
-    assert.match(approval, command === "joshRoom.new" ? /b[^\n]*Files only[^\n]*Workspace only/i : /b[^\n]*Files and Git history[^\n]*Workspace only/);
+    assert.match(approval, /projects\s*Files \+ Git if present/i);
+    assert.match(approval, command === "joshRoom.new" ? /b\s*Files only\s*·\s*Workspace only/i : /b\s*Files \+ Git if present\s*·\s*Workspace only/);
+    assert.match(approval, /Eligible root files and child Room links/i);
+    assert.match(approval, /Unchecked folders stay local/i);
+    assert.doesNotMatch(approval, /Other files stay on this device and are unprotected/i);
     assert.doesNotMatch(approval, /namespace:|[a-f0-9]{32}/i);
     if (cancel) {
       assert.match(reviewedNamespace, /^[a-f0-9]{32}$/);
@@ -178,38 +203,33 @@ exports.run = async () => {
       fs.writeFileSync(path.join(scratch, "installed-cancel.json"), JSON.stringify({ command, save_calls: saveCalls, namespace_absent: true }));
       return;
     }
-    assert.equal(await renderer.evaluate(`(() => {
-      const button = [...document.querySelectorAll('.monaco-dialog-box .monaco-button')].find(b => b.textContent.trim() === 'Save catalog');
-      if (!button) return false;
-      button.click();
-      return true;
-    })()`), true);
+    await reviewAction("Save catalog");
     await until(async () => renderer.evaluate(`[...document.querySelectorAll('.notification-list-item')].some(n=>n.innerText.includes("Catalog saved with 2 child Rooms."))`), "published catalog", 240000);
     await vscode.commands.executeCommand("notifications.clearAll");
     const saved = await result;
     assert.equal(saved.ok, true);
-    assert.deepEqual(saved.children.map(row => row.path).sort(), ["b", gitPath]);
+    assert.deepEqual(saved.children.map(row => row.path).sort(), ["b", "projects"]);
     const sibling = saved.children.find(row => row.path === "b");
     assert.deepEqual(sibling.components, []);
     assert.equal(sibling.capture_mode, command === "joshRoom.new" ? "source-only" : "full-repository");
     if (handoffPath) {
-      const child = saved.children.find(row => row.path === gitPath);
+      const child = saved.children.find(row => row.path === "projects");
       assert.deepEqual(child.components.toSorted(), names.toSorted());
     }
     const common = ["--namespace", saved.namespace, "--parent-room", "catalog-" + saved.namespace,
       "--dimension", "composition-fixture", "--parent-snapshot", saved.parent_snapshot_id];
     const target = path.join(base, "native-cold-" + saved.namespace);
     cli("composition", "restore-parent", ...common, "--destination", target);
-    for (const child of [gitPath, "b"]) assert.equal(fs.existsSync(path.join(target, child)), false);
-    const entered = cli("composition", "enter-child", ...common, "--workspace", target, "--child-path", gitPath);
+    for (const child of ["projects", "b"]) assert.equal(fs.existsSync(path.join(target, child)), false);
+    const entered = cli("composition", "enter-child", ...common, "--workspace", target, "--child-path", "projects");
     assert.equal(entered.marker_verified, true);
     const domain = cli("encryption", "status", "--dimension", "composition-fixture").encryption_domain_id;
     assert.equal(verifiedDomain, domain);
-    for (const folder of [target, path.join(target, gitPath)]) {
+    for (const folder of [target, path.join(target, "projects")]) {
       const marker = JSON.parse(fs.readFileSync(path.join(folder, ".josh-room.json")));
       assert.equal(marker.encryption_domain_id, domain);
     }
-    const git = (root, ...values) => execFileSync("git", ["-C", path.join(root, gitPath), ...values], {
+    const git = (root, ...values) => execFileSync("git", ["-C", path.join(root, nestedGitPath), ...values], {
       encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
     for (const probe of [["fsck", "--full"], ["show-ref"], ["rev-parse", "HEAD"], ["ls-files", "--stage"], ["stash", "list"], ["status", "--porcelain=v1"]]) {
       assert.equal(git(target, ...probe), git(source, ...probe));
@@ -220,7 +240,7 @@ exports.run = async () => {
       command, empty_encryption_cache_verified: Boolean(ready.receipt.uncached_domain_verified),
       uncached_dimension: Boolean(ready.receipt.uncached_domain_verified),
       verified_plan_and_restored_descriptor_domains: true, manual_domain_input: false, runtime: "packaged-controller-existing-Python", file_chooser: "synthetic paths",
-      bulk_selection_count: saved.children.length, sibling_capture_mode: sibling.capture_mode, select_all_then_clear_then_select_all: true, receipt_ids_hidden_in_review: true,
+      checked_immediate_folder_count: saved.children.length, native_folder_checkboxes: true, sibling_capture_mode: sibling.capture_mode, root_files_only_reviewed: true, receipt_ids_hidden_in_review: true,
       visible_full_repository_approval: true, provider: ready.receipt.provider, parent_pin: saved.parent_snapshot_id,
       child_pin: entered.snapshot_id, git_verified: true, sibling_absent: true,
       selected_components: handoffPath ? names : [],
