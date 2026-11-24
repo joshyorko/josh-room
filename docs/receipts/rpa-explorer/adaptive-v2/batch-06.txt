@@ -1,0 +1,52 @@
+Explorer
+workspace
+deep
+folders
+nonportable:name
+projects
+Outline
+Timeline
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Open Settings
+Ctrl
++
+,
+Chat
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Choose how you want to use Copilot.
+Sign in to use GitHub Copilot models, or add a model with your own API key.
+Add Models
+Sign In
+Chat with Copilot
+Agent
+Models
+Copilot
+ Josh Room
+ 0 
+ 0
+ 0
+Layout: us
+Info: Finding Catalog child folders: 2 folders indexed
+Choose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.
+Apply settings to folders
+2 Results
+2 Selected
+OK
+a
+b

@@ -1,0 +1,430 @@
+{
+  "schema_version": 1,
+  "mission": {
+    "schema_version": 1,
+    "id": "installed-room-adaptive-v1",
+    "target": "task-owned-code-server",
+    "budgets": {
+      "seconds": 900,
+      "actions": 100,
+      "ui_calls": 240,
+      "batches": 24,
+      "model_calls": 0,
+      "evidence_bytes": 16777216,
+      "repetitions": 2,
+      "output_bytes": 40000
+    },
+    "commands": [
+      "joshRoom.new",
+      "joshRoom.checkWorkspace",
+      "joshRoom.addStorage",
+      "joshRoom.splitWorkspace",
+      "joshRoom.saveCatalog",
+      "joshRoom.enterChild",
+      "joshRoom.refresh",
+      "joshRoom.showLogs"
+    ]
+  },
+  "counts": {
+    "output_bytes": 6072,
+    "batches": 4,
+    "actions": 22,
+    "ui_calls": 28,
+    "evidence_bytes": 299873
+  },
+  "elapsed_seconds": 106.04,
+  "decisions": [
+    {
+      "after_batch": 1,
+      "reason": "The approved review shows one full-Git child a and the isolated MinIO Dimension. Save, then capture the fresh public receipt and restore its immutable parent point.",
+      "classification": "reviewed-save-and-exact-receipt"
+    },
+    {
+      "after_batch": 3,
+      "reason": "The installed picker shows child a with the same snapshot pin as the managed parent-children receipt. Select it and verify the physical payload.",
+      "classification": "observed-immutable-child"
+    }
+  ],
+  "batches": [
+    {
+      "request": {
+        "schema_version": 1,
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "actions": [
+          {
+            "kind": "command",
+            "command": "joshRoom.saveCatalog"
+          },
+          {
+            "kind": "folder",
+            "path": "/pilot/workspace"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Catalog children"
+          },
+          {
+            "kind": "fixture",
+            "operation": "enroll"
+          },
+          {
+            "kind": "choose",
+            "label": "a"
+          },
+          {
+            "kind": "choose",
+            "label": "Continue with 1 selected"
+          },
+          {
+            "kind": "choose",
+            "label": "Continue to destination"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Where should this catalog be saved?"
+          },
+          {
+            "kind": "choose",
+            "label": "Synthetic Catalog Pilot"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Save this catalog?"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 1,
+        "state": {
+          "title": "",
+          "placeholder": "",
+          "rows": [],
+          "checked": [],
+          "notices": [
+            "Open in Browser\nYour application running on port 19400 is available. See all forwarded ports"
+          ],
+          "dialog": "Cancel\nSave catalog\nSave this catalog?\nDestination: Synthetic Catalog Pilot (pilot-synthetic) \u00b7 minio \u00b7 pilot-synthetic-connection \u00b7 minio:http://127.0.0.1:19400:pilot-synthetic\n1 folders will be saved as independent Rooms. Other files stay on this device and are unprotected.\n\na \u2014 Files and Git history. Workspace only"
+        },
+        "receipts": [
+          {
+            "path": "batch-01.txt",
+            "sha256": "a1ad5ee8a9167d54ae826c0dc7ffb330e2329290d8c0502955613112b2bd2fcc",
+            "bytes": 1069
+          },
+          {
+            "path": "batch-01.png",
+            "sha256": "190847ac80c09e54ac550dc615fdb9a7e3f555d7ccbb1853df6952907c528b9a",
+            "bytes": 86897
+          }
+        ],
+        "fixture_receipts": [
+          {
+            "ok": true,
+            "provider": "loopback-minio",
+            "keyring": "private-native-secret-service",
+            "encryption_domain_id": "3d52f05b-7448-4561-83bc-9c908e81e985"
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "9f00fe1f47e70e278bf07d861028f8c7c4a6a7a3ac7594a108d22ff49e5cb0d5",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 549,
+          "batches": 1,
+          "actions": 10,
+          "ui_calls": 13,
+          "evidence_bytes": 87966
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "9f00fe1f47e70e278bf07d861028f8c7c4a6a7a3ac7594a108d22ff49e5cb0d5",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "actions": [
+          {
+            "kind": "decision",
+            "classification": "reviewed-save-and-exact-receipt",
+            "reason": "The approved review shows one full-Git child a and the isolated MinIO Dimension. Save, then capture the fresh public receipt and restore its immutable parent point."
+          },
+          {
+            "kind": "button",
+            "label": "Save catalog"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Catalog saved with 1 child Room."
+          },
+          {
+            "kind": "copy_recovery_receipt"
+          },
+          {
+            "kind": "fixture",
+            "operation": "cold_restore"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 2,
+        "state": {
+          "title": "",
+          "placeholder": "",
+          "rows": [],
+          "checked": [],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-02.txt",
+            "sha256": "5d92acdc52e76c35950761b81ebe2c51df8d8269750440fb2af3eb9fd0089703",
+            "bytes": 607
+          },
+          {
+            "path": "batch-02.png",
+            "sha256": "6071d29ee2792ab13cca0f03d5f905696ce5405e85a530e0b6bdaa5cae61195b",
+            "bytes": 62700
+          }
+        ],
+        "fixture_receipts": [
+          {
+            "ui_recovery_receipt": {
+              "dimension_id": "pilot-synthetic",
+              "namespace": "16a748d1cbaa46f3981ada106ff440f7",
+              "parent_room_id": "catalog-16a748d1cbaa46f3981ada106ff440f7",
+              "parent_snapshot_id": "jat-9675bc9a3cb65dd5a566f632fce6bc33"
+            }
+          },
+          {
+            "ok": true,
+            "parent_snapshot": "jat-9675bc9a3cb65dd5a566f632fce6bc33",
+            "namespace": "16a748d1cbaa46f3981ada106ff440f7",
+            "parent_room": "catalog-16a748d1cbaa46f3981ada106ff440f7",
+            "child_snapshot": "jat-4c8492087abf5f689901dd27e166cf3b",
+            "child_path": "a",
+            "cold_children_absent": true,
+            "fixture_source_sha256": "b0043b95eba7837f677de0cecf7495fb86ded1b352276f7efd6bb2d3011068a0",
+            "boundary": "normal managed CLI cold parent restore; child awaits installed UI"
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "2660584f007995bb7496beab4f8aa09ff5ee8c07636bfcc023372d49460e8b81",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 1930,
+          "batches": 2,
+          "actions": 15,
+          "ui_calls": 20,
+          "evidence_bytes": 151491
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "2660584f007995bb7496beab4f8aa09ff5ee8c07636bfcc023372d49460e8b81",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "actions": [
+          {
+            "kind": "open_cold_parent"
+          },
+          {
+            "kind": "command",
+            "command": "joshRoom.enterChild"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Enter child Room"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 3,
+        "state": {
+          "title": "Enter child Room",
+          "placeholder": "",
+          "rows": [
+            "aPinned to jat-4c8492087abf5f689901dd27e166cf3b"
+          ],
+          "checked": [
+            {
+              "label": "Toggle all checkboxes",
+              "checked": "false"
+            }
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-03.txt",
+            "sha256": "b9c61cc8b522743e940a527ff9d656abac13298dcb97ca3a449b2c9f6b62b73f",
+            "bytes": 772
+          },
+          {
+            "path": "batch-03.png",
+            "sha256": "2dc117ecf006b6806cdc86ed3fe146fb1f245d72578d2632c4f810826dc6027d",
+            "bytes": 75403
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "659484e2a019545a7ee4fea8bd8a6837c4c7b6251b5c1519ddc8273087cc8335",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 3398,
+          "batches": 3,
+          "actions": 18,
+          "ui_calls": 25,
+          "evidence_bytes": 227666
+        }
+      }
+    },
+    {
+      "request": {
+        "schema_version": 1,
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "659484e2a019545a7ee4fea8bd8a6837c4c7b6251b5c1519ddc8273087cc8335",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "actions": [
+          {
+            "kind": "decision",
+            "classification": "observed-immutable-child",
+            "reason": "The installed picker shows child a with the same snapshot pin as the managed parent-children receipt. Select it and verify the physical payload."
+          },
+          {
+            "kind": "choose",
+            "label": "a"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Child Room verified at exact recovery point"
+          },
+          {
+            "kind": "fixture",
+            "operation": "verify_child"
+          }
+        ]
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 4,
+        "state": {
+          "title": "",
+          "placeholder": "",
+          "rows": [],
+          "checked": [],
+          "notices": [
+            "Child Room verified at exact recovery point jat-4c8492087abf5f689901dd27e166cf3b."
+          ],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-04.txt",
+            "sha256": "b47a40b211a40e8a3de22a3579c28b218d9cb9452792d0e550a66454e9b23ca5",
+            "bytes": 807
+          },
+          {
+            "path": "batch-04.png",
+            "sha256": "bc4cd7dcfdeaf28c7b331c80f07b4d0dc89777a9d1e8934afa0f51d07ceeec40",
+            "bytes": 71400
+          }
+        ],
+        "fixture_receipts": [
+          {
+            "ok": true,
+            "parent_snapshot": "jat-9675bc9a3cb65dd5a566f632fce6bc33",
+            "namespace": "16a748d1cbaa46f3981ada106ff440f7",
+            "parent_room": "catalog-16a748d1cbaa46f3981ada106ff440f7",
+            "child_snapshot": "jat-4c8492087abf5f689901dd27e166cf3b",
+            "child_path": "a",
+            "cold_children_absent": true,
+            "fixture_source_sha256": "b0043b95eba7837f677de0cecf7495fb86ded1b352276f7efd6bb2d3011068a0",
+            "boundary": "normal managed CLI cold parent restore; child awaits installed UI",
+            "child_pin_verified": true,
+            "child_bytes_verified": true,
+            "git_identity_verified": true,
+            "source_readme_and_git_unchanged": true,
+            "readme_sha256": "e8b79b5f826b4393cd8a24996442efd1b2a39329afefdc2835ad3fcbe8c321f4",
+            "sibling_absent": true
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-tkhei0bc",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "0674512e302ee7897f9669efe1c8b794ee42b2cfb39dd2b853f9bd36dbee8c45",
+          "attempt_set": [
+            "codex-room-explorer-tkhei0bc"
+          ]
+        },
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 4291,
+          "batches": 4,
+          "actions": 22,
+          "ui_calls": 28,
+          "evidence_bytes": 299873
+        }
+      }
+    }
+  ],
+  "errors": []
+}

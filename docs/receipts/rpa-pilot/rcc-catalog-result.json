@@ -1,0 +1,15 @@
+{
+  "phase": "catalog",
+  "image": "codercom/code-server@sha256:fc708b18f6c613b5a9d00f1d1801e58376d3df9c5b5de77f5c02d67b711f99c9",
+  "cleanup": {
+    "container_removed": true,
+    "listener_closed": true,
+    "scratch_removed": true
+  },
+  "verdict": "FAIL",
+  "vsix_sha256": "663e943cca9b353815fe4ebf9e8f4d2b401ea1bc2b0a16d01127a6a4ed56ef22",
+  "editor": "4.146.0 9cc1033c190703416bbd5ec95d8f7db9f3edb63d with Code 1.146.0",
+  "installed": "joshyorko.josh-room@1.0.2",
+  "installed_files_verified": 165,
+  "error": "PRODUCT_FAILURE: catalog-select-all-overlap"
+}

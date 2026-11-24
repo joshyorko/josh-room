@@ -278,3 +278,14 @@ prove immutable RCC packaging, wire transfer counts, other providers, or
 production acceptance. The Windows receipt separately proves its native
 readonly text diff and provider/custody/UI chain at the named source. Integrated
 runtime qualification remains separate; v1.0.0 stays on owner hold.
+
+## Bounded installed-extension exploration
+
+For the separate Linux RCC/Robocorp Browser pilot, follow
+[the project-local verification skill](../.agents/skills/verify-rpa-explorer/SKILL.md)
+and [its robot recipe](../scripts/rpa_explorer/README.md). It installs an exact
+VSIX in a disposable browser-hosted Node workspace and separates adaptive
+observation-driven batches, deterministic regression controls and fresh
+reproduction. Candidate-specific results and remaining gaps belong to the
+retained run receipts. This pilot does not replace native-platform, provider,
+managed-runtime or release gates, or qualify separate Catalog implementation fixes.

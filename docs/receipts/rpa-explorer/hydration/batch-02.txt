@@ -1,0 +1,46 @@
+workspace
+Explorer
+workspace
+a
+b
+Outline
+Timeline
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Go to File
+Ctrl
++
+P
+Chat
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Choose how you want to use Copilot.
+Sign in to use GitHub Copilot models, or add a model with your own API key.
+Add Models
+Sign In
+Chat with Copilot
+Agent
+Models
+Copilot
+ main
+ Josh Room
+ 0 
+ 0
+ 1
+Layout: us
+Info: Catalog saved with 1 child Room.
+Choose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.

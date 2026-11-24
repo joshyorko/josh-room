@@ -1,0 +1,48 @@
+Explorer
+parent
+.josh-room-composition.json
+.josh-room.json
+.josh-roomignore
+Outline
+Timeline
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Go to File
+Ctrl
++
+P
+Chat
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Choose how you want to use Copilot.
+Sign in to use GitHub Copilot models, or add a model with your own API key.
+Add Models
+Sign In
+Chat with Copilot
+Agent
+Models
+Copilot
+ Reading saved child Rooms 100%
+ 0 
+ 0
+ 0
+Layout: us
+Info: Reading saved child Rooms…: Complete · 100% · elapsed 00:01
+Choose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.
+Enter child Room
+1 Results
+aPinned to jat-4c8492087abf5f689901dd27e166cf3b

@@ -1,0 +1,67 @@
+{
+  "driver": "Playwright fallback (not code mode)",
+  "phase": "catalog",
+  "budget": {
+    "seconds": 600,
+    "actions": 60
+  },
+  "events": [
+    {
+      "phase": "browser",
+      "seconds": 2.06,
+      "version": "158.0.8127.36"
+    },
+    {
+      "phase": "workbench",
+      "seconds": 2.16,
+      "text": "Explorer\nworkspace\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nStart Debugging\nF5\nChat\nAgent\nModels\nCopilot\nDefault permissions\nLayout: us",
+      "actions": 1
+    },
+    {
+      "phase": "command",
+      "seconds": 3.14,
+      "title": "Josh: Save Catalog Room"
+    },
+    {
+      "phase": "catalog-source-dialog",
+      "seconds": 3.23,
+      "text": "workspace\nExplorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nStart Debugging\nF5\nChat\nAgent\nModels\nCopilot\nDefault permissions\n 0 \n 0\n 0\nLayout: us\n5 Results\nJosh: Save Catalog Room\nJosh: Refresh Catalog Child Pins\nsimilar commands\nJosh: Save Child Room\nJosh: Save Current Room\nJosh: Save Folder As Room",
+      "actions": 4
+    },
+    {
+      "phase": "catalog-suggestions",
+      "seconds": 23.6,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nStart Debugging\nF5\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nInfo: Finding Catalog child folders: 80 folders indexed\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nCatalog children \u2014 0 selected \u00b7 Suggested repositories\n5 Results\nSelect All on This Page (0)\nClear All0 selected across all pages\nBrowse all folders\nSearch folders\nContinue with 0 selected",
+      "actions": 5
+    },
+    {
+      "phase": "catalog-all-folders",
+      "seconds": 23.72,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nStart Debugging\nF5\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nInfo: Finding Catalog child folders: 80 folders indexed\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nCatalog children \u2014 0 selected \u00b7 All indexed folders\n38 Results\nSelect All on This Page (32)\nClear All0 selected across all pages\ndeepOwnership unknown; available for explicit manual choice\ndeep/level-00Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06/level-07Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06/level-07/level-08Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06/level-07/level-08/level-09Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06/level-07/level-08/level-09/level-10Ownership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06/level-07/level-08/level-09/level-10/level-11Ownership unknown; available for explicit manual choice",
+      "actions": 7
+    },
+    {
+      "phase": "catalog-select-all",
+      "seconds": 24.19,
+      "text": "workspace\nExplorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nStart Debugging\nF5\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nWarning: Select either deep/level-00 or its enclosing folder. The previous selection was kept.\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nSelect either deep/level-00 or its enclosing folder. The previous selection was kept.",
+      "actions": 9
+    },
+    {
+      "phase": "command",
+      "seconds": 24.51,
+      "title": "Josh: Enter Child Room"
+    },
+    {
+      "phase": "hydration-precondition",
+      "seconds": 24.6,
+      "text": "workspace\nExplorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nStart Debugging\nF5\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nError: Open a restored Catalog parent first.\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\n3 Results\nJosh: Enter Child Room\nJosh: Enter Room\nsimilar commands\nJosh: Save Child Room\nOpen a restored Catalog parent first.",
+      "actions": 14
+    },
+    {
+      "phase": "browser-cleanup",
+      "seconds": 24.6
+    }
+  ],
+  "verdict": "PASS",
+  "actions": 14
+}

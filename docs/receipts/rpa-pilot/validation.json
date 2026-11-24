@@ -1,0 +1,10 @@
+{
+  "python_syntax": "PASS",
+  "retained_json_parsing": "PASS",
+  "targeted_credential_and_private_path_patterns": "PASS - no matches",
+  "dedicated_secret_scanner": "SKIPPED - unavailable",
+  "rcc_discovery_exit": 0,
+  "rcc_catalog_exit": 10,
+  "catalog_verdict": "CONFIRMED PRODUCT FAILURE",
+  "product_files_changed": false
+}

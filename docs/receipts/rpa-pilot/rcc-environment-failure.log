@@ -1,0 +1,228 @@
+Note! For now, resolved effective environment configuration file is "<checkout>/scripts/rpa_pilot/conda.yaml".
+Warning: Holotree blueprint "31d66139a99ff1fa" is not publicly cacheable. Use `rcc robot diagnostics` to find out more.
+####  Progress: 00/15  v18.19.11     0.017s  Context: "kdlocpanda" <kdlocpanda@dakota-nvidia> [linux_amd64/Dudley OS (dakota-nvidia) [id=bluefin-dakota; id-like=org.gnome.os; version=20261106; variant=bluefin-nvidia; image=dudley-os:dakota-nvidia]].
+####  Progress: 01/15  v18.19.11     0.000s  Fresh [private mode] holotree environment 22ce1fa9-9e86-3de1-3f8a-0b8172eba4d1. (parent/pid: 1675709/1675710)
+Warning: Holotree blueprint "31d66139a99ff1fa" is not publicly cacheable. Use `rcc robot diagnostics` to find out more.
+####  Progress: 02/15  v18.19.11     0.000s  Holotree blueprint is "31d66139a99ff1fa" [linux_amd64 with 19 workers on 20 CPUs from "31d66139a99ff1fa"].
+FINAL unified conda environment descriptor:
+---
+channels:
+- conda-forge
+dependencies:
+- python=3.12.12
+- pip=25.3
+- pip:
+  - -r requirements.txt
+---
+####  Progress: 03/15  v18.19.11     0.000s  Fill hololib from RCC_REMOTE_ORIGIN skipped. RCC_REMOTE_ORIGIN was not defined.
+####  Progress: 04/15  v18.19.11     0.000s  Cleanup holotree stage for fresh install.
+####  Progress: 05/15  v18.19.11     0.027s  Build environment into holotree stage "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t".
+####  Progress: 06/15  v18.19.11     0.000s  Restore partial environment into holotree stage "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t".
+####  Progress: 07/15  v18.19.11     0.455s  Skipping micromamba phase, layer exists.
+####  Progress: 08/15  v18.19.11     0.450s  Running pip install phase. (pip v25.3) [layer: 31d66139a99ff1fa]
+Warning: ERROR: Could not open requirements file: [Errno 2] No such file or directory: '/tmp/requirements.txt' [plan analyzer]  @1s
+Process 1675754: exit status 1, command: <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3 [-m pip install --isolated --no-color --disable-pip-version-check --prefer-binary --cache-dir <task>/rcc-home/pipcache --find-links <task>/rcc-home/wheels --requirement /tmp/require_6b05b8e9.txt] [v18.19.11/1675710]
+Fatal [Pip [1/1]]: exit status 1
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@  From rcc "v18.19.11" (controller: "user") point of view, "pip install" was FAILURE, reason: "exit status 1". See details above.  @@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+---  installation plan "284edec96d2db0fd" 2026-11-24T11:18:50-05:00 [force: false, fresh: true| rcc v18.19.11]  ---
+
+---  plan blueprint @0.000s  ---
+
+channels:
+- conda-forge
+dependencies:
+- python=3.12.12
+- pip=25.3
+- pip:
+  - -r requirements.txt
+
+
+---  micromamba plan skipped, layer exists ---
+
+
+---  pip plan @0.000s  ---
+
+Command ["<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3" "-m" "pip" "install" "--isolated" "--no-color" "--disable-pip-version-check" "--prefer-binary" "--cache-dir" "<task>/rcc-home/pipcache" "--find-links" "<task>/rcc-home/wheels" "--requirement" "/tmp/require_6b05b8e9.txt"] at "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t":
+ERROR: Could not open requirements file: [Errno 2] No such file or directory: '/tmp/requirements.txt'
+
+[N] Retry! First try failed ... now retrying with debug and force options!
+[D] Rename/remove "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t" using "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t.259DC452" as random name.
+[D] Setting up new conda environment using /tmp/conda_6b05b8e9.yaml to folder <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t
+[D] PID #1675778 is "<task>/rcc-home/micromamba/v2.10.0/micromamba --repodata-ttl 90000 --version".
+[D] PID #1675778 finished: exit status 0.
+[N] ####  Progress: 07/15  v18.19.11     0.717s  Running micromamba phase. (micromamba v2.10.0) [layer: 3b392c928ef65a02]
+[D] ===  micromamba create phase ===
+[D] PID #1675780 is "<task>/rcc-home/micromamba/v2.10.0/micromamba create --always-copy --no-env --safety-checks enabled --extra-safety-checks --retry-clean-cache --strict-channel-priority --repodata-ttl 0 -y -f /tmp/conda_6b05b8e9.yaml -p <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t --verbose --no-rc".
+[D] PID #1675780 finished: exit status 0.
+[D] Using <task>/rcc-home/micromamba/v2.10.0/micromamba as command <task>/rcc-home/micromamba/v2.10.0/micromamba.
+[D] PID #1675849 is "<task>/rcc-home/micromamba/v2.10.0/micromamba list --json".
+[D] PID #1675849 finished: exit status 0.
+[D] Golden EE file at: <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/golden-ee.yaml
+[D] Holotree new workload: 2/6506
+
+[D] Holotree recording took: 0.173s
+[D] PID #1675855 is "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3 -m pip --version".
+[D] PID #1675855 finished: exit status 0.
+[N] ####  Progress: 08/15  v18.19.11     2.936s  Running pip install phase. (pip v25.3) [layer: 31d66139a99ff1fa]
+[D] Updating new environment at <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t with pip requirements from /tmp/require_6b05b8e9.txt (size: 19)
+[D] ===  pip install phase ===
+[D] Using <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3 as command <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3.
+[D] PID #1675861 is "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3 -m pip install --isolated --no-color --disable-pip-version-check --prefer-binary --cache-dir <task>/rcc-home/pipcache --find-links <task>/rcc-home/wheels --requirement /tmp/require_6b05b8e9.txt --verbose".
+[N] Warning: ERROR: Could not open requirements file: [Errno 2] No such file or directory: '/tmp/requirements.txt' [plan analyzer]  @1s
+[N] Process 1675861: exit status 1, command: <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3 [-m pip install --isolated --no-color --disable-pip-version-check --prefer-binary --cache-dir <task>/rcc-home/pipcache --find-links <task>/rcc-home/wheels --requirement /tmp/require_6b05b8e9.txt --verbose] [v18.19.11/1675710]
+Fatal [Pip [1/1]]: exit status 1
+[N] @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+[N] @@@  From rcc "v18.19.11" (controller: "user") point of view, "pip install" was FAILURE, reason: "exit status 1". See details above.  @@@
+[N] @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+[N] ---  installation plan "284edec96d2db0fd" 2026-11-24T11:18:51-05:00 [force: true, fresh: true| rcc v18.19.11]  ---
+
+---  plan blueprint @0.000s  ---
+
+channels:
+- conda-forge
+dependencies:
+- python=3.12.12
+- pip=25.3
+- pip:
+  - -r requirements.txt
+
+
+---  micromamba plan @0.005s  ---
+
+info     libmamba Searching index cache file for repo 'conda-forge/linux-64'
+info     libmamba Valid cache found  for 'conda-forge/linux-64': 0
+info     libmamba Searching index cache file for repo 'conda-forge/noarch'
+info     libmamba Valid cache found  for 'conda-forge/noarch': 0
+info     libmamba Using OpenSSL backend
+info     libmamba Checking for CA certificates in the same prefix as the executable installation: "<task>/rcc-home/micromamba/ssl/cert.pem"
+info     libmamba Checking for CA certificates at the root prefix: "<task>/rcc-home/ssl/cert.pem"
+info     libmamba Using system CA certificates at: /etc/ssl/certs/ca-certificates.crt
+Using Cached Shard Index for conda-forge/linux-64                                                   ✔ Done
+Using Cached Shard Index for conda-forge/noarch                                                     ✔ Done
+Fetching and Parsing Packages' Shards                                                           ⧖ Starting
+Fetching and Parsing Packages' Shards                                                     ✔ Done (0.1 sec)
+info     libmamba Loaded subdir with shards: conda-forge/linux-64
+info     libmamba Loading site packages
+
+Resolving Environment                                                                           ⧖ Starting
+Resolving Environment                                                                     ✔ Done (0.1 sec)
+
+Transaction
+
+  Prefix: <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t
+
+  Updating specs:
+
+   - python=3.12.12
+   - pip=25.3
+
+
+  Package                Version  Build                 Channel           Size
+────────────────────────────────────────────────────────────────────────────────
+  Install:
+────────────────────────────────────────────────────────────────────────────────
+
+  + _openmp_mutex            4.5  20_gnu                conda-forge     Cached
+  + bzip2                  1.0.8  hda65f42_10           conda-forge     Cached
+  + ca-certificates   2026.11.20  hbd8a1cb_0            conda-forge     Cached
+  + ld_impl_linux-64      2.46.1  default_hbd61a6d_103  conda-forge     Cached
+  + libexpat               2.9.0  hd2095e1_0            conda-forge     Cached
+  + libffi                 3.5.2  h3435931_0            conda-forge     Cached
+  + libgcc                16.2.0  ha9f2e26_7            conda-forge     Cached
+  + libgomp               16.2.0  he0feb66_7            conda-forge     Cached
+  + liblzma                5.8.3  hb03c661_1            conda-forge     Cached
+  + libnsl                 2.0.1  hb9d3cd8_1            conda-forge     Cached
+  + libsqlite             3.54.1  h0737f62_101          conda-forge     Cached
+  + libuuid               2.42.4  hcfc3c73_1            conda-forge     Cached
+  + libxcrypt             4.4.38  h280c20c_0            conda-forge     Cached
+  + libzlib                1.3.2  h25fd6f3_3            conda-forge     Cached
+  + ncurses                  6.6  hdb14827_1            conda-forge     Cached
+  + openssl                3.6.5  h781a0a9_0            conda-forge     Cached
+  + packaging               26.3  pyhc364b38_0          conda-forge     Cached
+  + pip                     25.3  pyh8b19718_0          conda-forge     Cached
+  + python               3.12.12  hd63d673_2_cpython    conda-forge     Cached
+  + readline                 8.3  hd6e31c0_1            conda-forge     Cached
+  + setuptools            84.2.1  pyhe730653_0          conda-forge     Cached
+  + tk                    8.6.13  noxft_h1df4ec4_4      conda-forge     Cached
+  + tzdata                 2026e  h5d301ff_0            conda-forge     Cached
+  + wheel                 0.48.0  pyhd8ed1ab_0          conda-forge     Cached
+  + zstd                   1.5.7  hb78ec9c_7            conda-forge     Cached
+
+  Summary:
+
+  Install: 25 packages
+
+  Total download: 0 B
+
+────────────────────────────────────────────────────────────────────────────────
+
+
+warning  libmamba Security Warning: This transaction includes executing package scripts (pre/post-link/unlink) if present. These scripts can contain arbitrary code. Please ensure you trust the package sources.
+info     libmamba Cleaned 0 .mamba_trash files. 0 remaining.
+
+Transaction starting
+Linking libzlib-1.3.2-h25fd6f3_3
+Linking libgomp-16.2.0-he0feb66_7
+Linking zstd-1.5.7-hb78ec9c_7
+Linking _openmp_mutex-4.5-20_gnu
+Linking ld_impl_linux-64-2.46.1-default_hbd61a6d_103
+Linking libgcc-16.2.0-ha9f2e26_7
+Linking libffi-3.5.2-h3435931_0
+Linking bzip2-1.0.8-hda65f42_10
+Linking libnsl-2.0.1-hb9d3cd8_1
+Linking libexpat-2.9.0-hd2095e1_0
+Linking libuuid-2.42.4-hcfc3c73_1
+Linking libsqlite-3.54.1-h0737f62_101
+Linking libxcrypt-4.4.38-h280c20c_0
+Linking liblzma-5.8.3-hb03c661_1
+Linking ncurses-6.6-hdb14827_1
+Linking tk-8.6.13-noxft_h1df4ec4_4
+Linking readline-8.3-hd6e31c0_1
+Linking tzdata-2026e-h5d301ff_0
+Linking ca-certificates-2026.11.20-hbd8a1cb_0
+Linking openssl-3.6.5-h781a0a9_0
+Linking python-3.12.12-hd63d673_2_cpython
+Linking packaging-26.3-pyhc364b38_0
+info     libmamba Running wrapped python compilation command <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3.12 -Wi -u <task>/rcc-home/temp/e30afe7cf37227cd/mambaf3db1bmxd6d
+info     libmamba Compiling 22 files to pyc
+Linking setuptools-84.2.1-pyhe730653_0
+info     libmamba Compiling 229 files to pyc
+Linking wheel-0.48.0-pyhd8ed1ab_0
+info     libmamba Compiling 15 files to pyc
+Linking pip-25.3-pyh8b19718_0
+info     libmamba Compiling 398 files to pyc
+info     libmamba Waiting for pyc compilation to finish
+
+Transaction finished
+
+info     libmamba Opening history file: "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/conda-meta/history"
+
+To activate this environment, use:
+
+    micromamba activate <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t
+
+Or to execute a single command in this environment, use:
+
+    micromamba run -p <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t mycommand
+
+
+---  micromamba layer complete [on layered holotree]  ---
+
+
+---  pip plan @2.485s  ---
+
+Command ["<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/bin/python3" "-m" "pip" "install" "--isolated" "--no-color" "--disable-pip-version-check" "--prefer-binary" "--cache-dir" "<task>/rcc-home/pipcache" "--find-links" "<task>/rcc-home/wheels" "--requirement" "/tmp/require_6b05b8e9.txt" "--verbose"] at "<task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t":
+Using pip 25.3 from <task>/rcc-home/holotree/h2a6fe41_493f813dad24d3t/lib/python3.12/site-packages/pip (python 3.12)
+ERROR: Could not open requirements file: [Errno 2] No such file or directory: '/tmp/requirements.txt'
+
+[N] ####  Progress: 15/15  v18.19.11     0.705s  Fresh holotree done [with 19 workers on 20 CPUs].
+[N] @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+[N] @@@  From rcc "v18.19.11" (controller: "user") point of view, "environment creation" was FAILURE, reason: "Failed to create environment, reason Could not create environment..". See details above.  @@@
+[N] @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+[D] Marked "<task>/rcc-home/temp/e30afe7cf37227cd" for recycling.
+[N] Failed to create environment, reason Could not create environment..
+[N] [rcc] exit status will be: 6!
+[D] wait telemetry to complete
+[D] telemetry sending completed

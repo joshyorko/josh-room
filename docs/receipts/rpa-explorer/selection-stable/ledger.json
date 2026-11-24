@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "mission": {
+    "schema_version": 1,
+    "id": "installed-room-adaptive-v1",
+    "target": "task-owned-code-server",
+    "budgets": {
+      "seconds": 900,
+      "actions": 100,
+      "ui_calls": 240,
+      "batches": 24,
+      "model_calls": 0,
+      "evidence_bytes": 16777216,
+      "repetitions": 2,
+      "output_bytes": 40000
+    },
+    "commands": [
+      "joshRoom.new",
+      "joshRoom.checkWorkspace",
+      "joshRoom.addStorage",
+      "joshRoom.splitWorkspace",
+      "joshRoom.saveCatalog",
+      "joshRoom.enterChild",
+      "joshRoom.refresh",
+      "joshRoom.showLogs"
+    ]
+  },
+  "counts": {
+    "output_bytes": 1829,
+    "batches": 1,
+    "actions": 7,
+    "ui_calls": 12,
+    "evidence_bytes": 86453
+  },
+  "elapsed_seconds": 29.01,
+  "decisions": [],
+  "batches": [
+    {
+      "request": {
+        "schema_version": 1,
+        "actions": [
+          {
+            "kind": "command",
+            "command": "joshRoom.saveCatalog"
+          },
+          {
+            "kind": "folder",
+            "path": "/pilot/workspace/projects"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Catalog children"
+          },
+          {
+            "kind": "choose",
+            "label": "Browse all folders"
+          },
+          {
+            "kind": "choose",
+            "label": "Select All on This Page (2)"
+          },
+          {
+            "kind": "choose",
+            "label": "Continue with 2 selected"
+          },
+          {
+            "kind": "assert_text",
+            "text": "Save 2 selected folders as Rooms"
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-p02271tx",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "attempt_set": [
+            "codex-room-explorer-p02271tx"
+          ]
+        }
+      },
+      "result": {
+        "schema_version": 1,
+        "batch": 1,
+        "state": {
+          "title": "Save 2 selected folders as Rooms",
+          "placeholder": "Each folder uses its Git capture policy. Optional components are off by default.",
+          "rows": [
+            "Continue to destination",
+            "Change Git settings",
+            "Customize optional components",
+            "Choose files for the catalog itself"
+          ],
+          "checked": [
+            {
+              "label": "Toggle all checkboxes",
+              "checked": "false"
+            }
+          ],
+          "notices": [],
+          "dialog": ""
+        },
+        "receipts": [
+          {
+            "path": "batch-01.txt",
+            "sha256": "2944f5febe8027554bb24dcae2804bb0655b7e4c90e7c5459f8185403f649226",
+            "bytes": 806
+          },
+          {
+            "path": "batch-01.png",
+            "sha256": "ed5e4059ec9d9fd78261eadddc08c2ca67d015aa069ccd470a47e8b6bde0c432",
+            "bytes": 85647
+          }
+        ],
+        "binding": {
+          "session_id": "codex-room-explorer-p02271tx",
+          "generation": 1,
+          "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+          "observation_sha256": "340dc26a94fd8704f4569c0611c13bdb72a1320828db418761815cf11317c1d6",
+          "attempt_set": [
+            "codex-room-explorer-p02271tx"
+          ]
+        },
+        "ok": true,
+        "error": null,
+        "counts": {
+          "output_bytes": 549,
+          "batches": 1,
+          "actions": 7,
+          "ui_calls": 12,
+          "evidence_bytes": 86453
+        }
+      }
+    }
+  ],
+  "errors": []
+}

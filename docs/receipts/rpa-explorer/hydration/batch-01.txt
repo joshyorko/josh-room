@@ -1,0 +1,55 @@
+workspace
+Explorer
+workspace
+a
+b
+Outline
+Timeline
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Go to File
+Ctrl
++
+P
+Chat
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Choose how you want to use Copilot.
+Sign in to use GitHub Copilot models, or add a model with your own API key.
+Add Models
+Sign In
+Chat with Copilot
+Agent
+Models
+Copilot
+ main
+ Checking Catalog Room 100%
+ 0 
+ 0
+ 1
+Layout: us
+Info: Checking Catalog Room…: Complete · 100% · elapsed 00:02
+Choose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.
+Open in Browser
+Your application running on port 19400 is available. See all forwarded ports
+Cancel
+Save catalog
+Save this catalog?
+Destination: Synthetic Catalog Pilot (pilot-synthetic) · minio · pilot-synthetic-connection · minio:http://127.0.0.1:19400:pilot-synthetic
+1 folders will be saved as independent Rooms. Other files stay on this device and are unprotected.
+
+a — Files and Git history. Workspace only

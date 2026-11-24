@@ -1,0 +1,2 @@
+# Preserve browser observation bytes and their recorded hashes.
+*/batch-*.txt whitespace=-blank-at-eol -text

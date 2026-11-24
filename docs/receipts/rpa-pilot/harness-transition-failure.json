@@ -1,0 +1,83 @@
+{
+  "driver": "Playwright fallback (not code mode)",
+  "phase": "discovery",
+  "budget": {
+    "seconds": 600,
+    "actions": 60
+  },
+  "events": [
+    {
+      "phase": "browser",
+      "seconds": 1.9,
+      "version": "158.0.8127.36"
+    },
+    {
+      "phase": "workbench",
+      "seconds": 1.99,
+      "text": "workspace\nExplorer\nworkspace\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nOpen Settings\nCtrl\n+\n,\nChat\nAgent\nModels\nCopilot\nDefault permissions\nLayout: us",
+      "actions": 1
+    },
+    {
+      "phase": "command",
+      "seconds": 2.33,
+      "title": "Josh: New Room"
+    },
+    {
+      "phase": "new-room",
+      "seconds": 2.81,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nGo to File\nCtrl\n+\nP\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nNew Room\n2 Results\nSave one Room\nConfigure Catalog Room",
+      "actions": 4
+    },
+    {
+      "phase": "command",
+      "seconds": 3.16,
+      "title": "Josh: Connect Storage"
+    },
+    {
+      "phase": "storage-choices",
+      "seconds": 3.21,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nGo to File\nCtrl\n+\nP\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nJosh: Add Storage\n3 Results\nCloudflare R2\nMinIO\nAmazon S3 / S3-compatible",
+      "actions": 8
+    },
+    {
+      "phase": "command",
+      "seconds": 3.53,
+      "title": "Josh: Split Workspace into Rooms (Preview Only)"
+    },
+    {
+      "phase": "split-folder-dialog",
+      "seconds": 3.57,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nGo to File\nCtrl\n+\nP\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nJosh: Split Workspace into Rooms (Preview Only)\n5 Results\nPreview this folder\n..\ndeep\nfolders\nnonportable:name\nprojects",
+      "actions": 12
+    },
+    {
+      "phase": "split-index",
+      "seconds": 6.18,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nGo to File\nCtrl\n+\nP\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nInfo: Discovering directories (preview only): 80 directories observed; scanning\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nSplit preview: partial coverage; 82 indexed\n55 Results\ndeepmanual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06manual-directory\nOwnership unknown; available for explicit manual choice",
+      "actions": 13
+    },
+    {
+      "phase": "split-suggestions",
+      "seconds": 6.29,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nGo to File\nCtrl\n+\nP\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nChat with Copilot\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nInfo: Discovering directories (preview only): 80 directories observed; scanning\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nSplit preview: partial coverage; 82 indexed\n4 Results\nSearch all indexed directories\nBrowse all directories\nEnter exact relative path\nReview 0 explicit choices (preview only)",
+      "actions": 15
+    },
+    {
+      "phase": "failure",
+      "seconds": 21.58,
+      "error": "Locator.wait_for: Timeout 15000ms exceeded.\nCall log:\n  - waiting for locator(\".quick-input-list .monaco-list-row\").filter(has_text=\"Next page\").first to be visible\n"
+    },
+    {
+      "phase": "failure",
+      "seconds": 21.63,
+      "text": "Explorer\nworkspace\ndeep\nfolders\nnonportable:name\nprojects\nOutline\nTimeline\nOpen Chat\nCtrl\n+\nAlt\n+\nI\nShow All Commands\nCtrl\n+\nShift\n+\nP\nGo to File\nCtrl\n+\nP\nChat\nBuild with Agent\n\nAI responses may be inaccurate\n\nGenerate Agent Instructions to onboard AI onto your codebase.\n\nChoose how you want to use Copilot.\nSign in to use GitHub Copilot models, or add a model with your own API key.\nAdd Models\nSign In\nNext\u00a0page\nAgent\nModels\nCopilot\n Josh Room\n 0 \n 0\n 0\nLayout: us\nInfo: Discovering directories (preview only): 80 directories observed; scanning\nChoose how you want to use Copilot.. Sign in to use GitHub Copilot models, or add a model with your own API key.\nSplit preview: partial coverage; 82 indexed\n55 Results\ndeepmanual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05manual-directory\nOwnership unknown; available for explicit manual choice\ndeep/level-00/level-01/level-02/level-03/level-04/level-05/level-06manual-directory\nOwnership unknown; available for explicit manual choice",
+      "actions": 18
+    },
+    {
+      "phase": "browser-cleanup",
+      "seconds": 21.63
+    }
+  ],
+  "verdict": "FAIL",
+  "actions": 18
+}

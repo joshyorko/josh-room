@@ -1,0 +1,8 @@
+{
+  "evidence_sha256": "f50b4477b944fcf402d988b4feda52bb4ea5286fa406e19bd4a17f8c0907f111",
+  "source_attempt_set": [
+    "codex-room-explorer-tkhei0bc"
+  ],
+  "candidate_sha256": "60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8",
+  "fresh_target_rebound_explicitly": true
+}

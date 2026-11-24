@@ -1,0 +1,29 @@
+<task>/rcc-home/holotree/2a6fe41_5a1fac3_9fcd2534/lib/python3.12/site-packages/robocorp/tasks/cli.py:65: Warning: Usage of the native system certificate stores can’t be enabled, ensure you have the `robocorp-truststore` dependency installed in the environment and that you're using Python 3.10.12 and pip 23.2.1 at minimum.
+  _inject_truststore()
+
+Collecting task catalog_select_all from: <checkout>/scripts/rpa_pilot/tasks.py
+========================= Running: catalog_select_all ==========================
+catalog_select_all status: FAIL
+
+PRODUCT_FAILURE: catalog-select-all-overlap
+================= Full Traceback (running catalog_select_all) ==================
+Traceback (most recent call last):
+  File "<task>/rcc-home/holotree/2a6fe41_5a1fac3_9fcd2534/lib/python3.12/site-packages/robocorp/tasks/_commands.py", line 453, in run
+    result = task.run(**kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "<task>/rcc-home/holotree/2a6fe41_5a1fac3_9fcd2534/lib/python3.12/site-packages/robocorp/tasks/_task.py", line 57, in run
+    return self.method(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "<checkout>/scripts/rpa_pilot/tasks.py", line 20, in catalog_select_all
+    scenario("catalog")
+  File "<checkout>/scripts/rpa_pilot/tasks.py", line 13, in scenario
+    run(os.environ["PILOT_VSIX"], get_output_dir() / "pilot", phase,
+  File "<checkout>/scripts/rpa_pilot/run.py", line 99, in run
+    result["walk"] = walk(f"http://127.0.0.1:{port}/?folder=/pilot/workspace", output / "ui", chrome, phase)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<checkout>/scripts/rpa_pilot/walk.py", line 108, in walk
+    raise AssertionError("PRODUCT_FAILURE: catalog-select-all-overlap")
+AssertionError: PRODUCT_FAILURE: catalog-select-all-overlap
+
+================================================================================
+Log (html): <task>/rcc-catalog/log.html

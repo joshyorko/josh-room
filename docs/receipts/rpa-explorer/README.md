@@ -1,0 +1,21 @@
+# Installed Josh Room Catalog recovery pilot
+
+Candidate `1.0.2` at source `87c51089c2dccf6b03663544a761fee714541299`, VSIX SHA-256 `60ba99237bba805811667d8547d16fb10cf60378db9ab92466f5a3c4b40bdff8`. The disposable code-server target verified all 165 installed files. RCC 18.19.11, Robocorp Browser 2.4.0, Code 1.146.0, Node 24.22.1, and Chrome 158.0.8127.36. The [target receipt](hydration/target.json) records the exact editor image and cleanup.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Observation-driven selection and Git settings | PASS. The explorer chose the Git settings follow-up after the installed settings menu appeared. The prototype preceded receiver fencing. | [Ledger](adaptive-v2/ledger.json), [observed menu](adaptive-v2/batch-05.txt), [follow-up](adaptive-v2/batch-06.txt) |
+| Deterministic Catalog selection on the corrected folder adapter | PASS. The run reached settings with both synthetic siblings selected. An earlier adapter run timed out with the folder chooser still open. | [Ledger](selection-stable/ledger.json) |
+| Known overlapping Select All control | FAIL as expected on this candidate. The UI rejected its own enclosing-folder selection. | [Ledger](known-control/ledger.json) |
+| Installed Save, public receipt, cold restore and native child entry | PASS. The native review approved one full-Git child. The fixture used the public receipt to restore the exact parent through managed CLI into an absent destination, confirmed children were absent, then drove the installed Enter Child command against the manifest pin. | [Ledger](hydration/ledger.json), [public receipt](hydration/ui-recovery-receipt.json), [cold parent](hydration/cold-receipt.json), [physical checks](hydration/hydration-receipt.json) |
+| Fresh reproduction | PASS. Replay verified the original observation hashes and candidate binding, installed into a new target, and verified its own new parent and child pins with the same physical assertions. | [Admission](hydration-replay/reproduction.json), [terminal ledger](hydration-replay/ledger.json), [physical checks](hydration-replay/hydration-receipt.json), [exit status](hydration-replay/finalized-artifacts.json) |
+| Product pin guard and receiver controls | PASS. The actual product guard admitted two exact pins across 48 combinations and both mutations failed. The bounded receiver model and real Python checks have their own receipts. | [Product guard](product-pin-check.json), [VSIX source binding](product-source-binding.json), [receiver checks](../../../scripts/rpa_explorer/verification/evidence/summary.json) |
+| Delayed clipboard adapter control | PASS for the browser fixture. Installed receipt capture is separately evidenced above. | [Control](clipboard-control.json) |
+
+The physical checks compare the restored README SHA-256, Git HEAD/index/status, `git fsck`, and child marker pin. They also compare the source README and Git state and check that sibling `b` stays absent. The source was synthetic. The provider was disposable MinIO with a private keyring.
+
+The selection prototype recorded 7 batches, 17 actions, 24 charged UI calls, 4,776 observation bytes and 548,216 evidence bytes. The fenced hydration run and replay each recorded 4 batches, 22 actions, 28 charged UI calls and 6,072 observation bytes. The evidence budget charges were 299,873 and 299,037 bytes respectively. Both removed their containers, listeners and target scratch and exited zero. The ledger counts operations routed through the UI adapter. Each run made zero in-robot model calls. No token savings were measured.
+
+Earlier attempts separated clipboard timing and selector faults from Save, which succeeded. One cold restore failed because the fixture omitted the containing directory. The corrected fixture creates the containing directory and requires the actual restore destination to be absent. Only the four observations under `hydration/` retain every hashed DOM and screenshot input needed for replay. Earlier run folders contain selected excerpts.
+
+The test covers one installed Linux browser-hosted editor and this exact candidate. Native parent discovery, cancellation write audits, interruption recovery, other providers and platforms, and Catalog PR #243 remain unverified here. The original first-run evidence remains in [rpa-pilot](../rpa-pilot/README.md).
