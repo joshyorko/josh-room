@@ -114,9 +114,9 @@ their Git capture settings and optional content. Choose **Save catalog** to
 approve, or **Cancel** to leave without saving.
 **Advanced settings** is available from that review for the existing child Git
 and optional component settings. Returning from settings always creates a new
-plan and requires a new confirmation. If a child has incomplete Git history or
-unsupported Git index entries, choose **Review files only** to keep its files
-without Git history. A folder blocked by reserved Room metadata can be left
+plan and requires a new confirmation. If a child has incomplete Git history,
+unsupported Git index entries, or an unverified Git repository format, choose
+**Review files only** to keep its files without Git history. A folder blocked by reserved Room metadata can be left
 local. Both choices require a fresh review before Save. The review shows what
 will be saved in the parent and child Rooms and what will stay on this device.
 The original files stay on disk. Choose **Copy recovery

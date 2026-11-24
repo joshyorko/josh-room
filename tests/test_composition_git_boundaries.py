@@ -1,5 +1,6 @@
 """Standalone Git manifests are payload, not active repository boundaries."""
 
+import hashlib
 import shutil
 import subprocess
 
@@ -84,3 +85,38 @@ def test_active_submodule_manifest_refusal_has_a_safe_actionable_code(tmp_path):
                      [{"path": "child", "outcome": "child"}], root_files_only=True)
     assert failure.value.result["error_code"] == "composition-child-git-unsupported"
     assert str(tmp_path) not in str(failure.value)
+
+
+def test_unverified_git_extension_offers_files_only_for_that_child(tmp_path):
+    if not shutil.which("git"):
+        pytest.skip("requires Git for a real repository boundary")
+    source = tmp_path / "source"
+    child = source / "child"
+    child.mkdir(parents=True)
+    (source / "other").mkdir()
+    (child / "payload.txt").write_text("synthetic source content")
+    subprocess.run(["git", "init", "-q", str(child)], check=True)
+    subprocess.run(["git", "-C", str(child), "config", "extensions.worktreeConfig", "true"], check=True)
+    dimension = DimensionConfig(
+        "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
+        "synthetic-bucket", "synthetic-profile", connection_id="synthetic",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    assignments = [{"path": name, "outcome": "child"} for name in ("child", "other")]
+    with pytest.raises(CompositionAdmissionError) as failure:
+        capture_plan(source, dimension, "1" * 32, "parent", assignments, root_files_only=True)
+    assert failure.value.result == {
+        "error_code": "composition-child-git-files-only",
+        "child_path_sha256": hashlib.sha256(b"child").hexdigest(),
+    }
+
+    assignments[0]["capture_mode"] = "source-only"
+    preview = capture_plan(source, dimension, "1" * 32, "parent", assignments, root_files_only=True)
+    evidence = preview["request"]["child_evidence"]
+    assert {name: row["capture_mode"] for name, row in evidence.items()} == {
+        "child": "source-only", "other": "full-repository",
+    }
+    target = tmp_path / "staged"
+    _child_view(source, "child", target, preview["request"])
+    assert (target / "payload.txt").read_text() == "synthetic source content"
+    assert not (target / ".git").exists()

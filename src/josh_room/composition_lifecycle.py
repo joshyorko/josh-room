@@ -267,6 +267,7 @@ def _child_inventory(source, child, root_policy, selection):
         if str(error) in {
             "Catalog capture requires complete Git history; partial and shallow clones are unsupported",
             "Catalog capture requires complete Git history; partial clones are unsupported",
+            "Catalog capture cannot verify this Git repository extension",
             "Catalog children with submodule gitlinks or sparse directory indexes are unsupported",
         }:
             raise CompositionAdmissionError("composition-child-git-files-only", str(error), child=child) from None
