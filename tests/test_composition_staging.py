@@ -420,6 +420,33 @@ def test_root_files_only_stages_root_files_and_whole_selected_child(tmp_path):
     assert not (child / "root.txt").exists()
 
 
+def test_catalog_deselection_leaves_nonportable_directory_local(tmp_path):
+    from josh_room.composition_lifecycle import _parent_view
+
+    source, dimension, _, _ = fixture(tmp_path)
+    (source / "nonportable:name").mkdir()
+    (source / "nonportable:name/local.txt").write_text("local only")
+    assignments = [{"path": "child", "outcome": "child"}]
+    with pytest.raises(ValueError, match="invalid composition child path"):
+        capture_plan(source, dimension, "1" * 32, "parent",
+                     [*assignments, {"path": "nonportable:name", "outcome": "child"}],
+                     root_files_only=True)
+
+    preview = capture_plan(source, dimension, "1" * 32, "parent", assignments, root_files_only=True)
+    assert list(preview["request"]["child_evidence"]) == ["child"]
+    parent = tmp_path / "parent-view"
+    _parent_view(source, parent, assignments, {"children": [{"path": "child"}]}, preview["request"])
+    child = tmp_path / "child-view"
+    _child_view(source, "child", child, preview["request"])
+    assert not (parent / "nonportable:name").exists()
+    assert (source / "nonportable:name/local.txt").read_text() == "local only"
+    assert (child / "sub/file.txt").read_text() == "approved synthetic bytes"
+
+    (source / "nonportable:file").write_text("unsafe root payload")
+    with pytest.raises(ValueError, match="workspace path cannot be restored safely"):
+        capture_plan(source, dimension, "1" * 32, "parent", assignments, root_files_only=True)
+
+
 def test_root_files_only_handles_more_than_64_candidates_with_one_child(tmp_path):
     source = tmp_path / "many"
     source.mkdir()

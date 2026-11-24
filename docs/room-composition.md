@@ -101,7 +101,8 @@ its deeper contents. The child capture scans those contents normally after
 admission, so the shallow picker does not make child captures shallow.
 
 Eligible regular files directly in the source root are saved with the Catalog
-parent. Every unchecked directory stays local. The extension uses
+parent. Every unchecked directory stays local, including directories with
+names that cannot be restored across platforms. The extension uses
 `--root-files-only` for both `composition capture-plan` and `composition save`,
 and passes assignments only for checked immediate child directories. The flag
 defines the root-file/child boundary for that operation; CLI calls without the
