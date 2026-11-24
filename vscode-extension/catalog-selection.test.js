@@ -1,71 +1,92 @@
 "use strict";
+
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
 const { selectCatalogChildren } = require("./catalog-selection");
 
-const candidate = (path, code = "git-boundary") => ({
-  id: path, path, evidence_code: code,
-  kind: code === "git-boundary" ? "git-directory-unverified" : "folder", selectable: true,
-});
-
-async function pick(pages, actions) {
-  const warnings = [];
-  const requests = [];
-  const titles = [];
-  const vscode = { ProgressLocation: { Notification: 1 }, window: {
-    withProgress: (_, body) => body({ report() {} }, { isCancellationRequested: false }),
-    showQuickPick: async (rows, options) => {
-      titles.push(options.title);
-      assert.ok(actions.length, "unexpected extra picker");
-      const label = actions.shift();
-      if (label === null) return;
-      const row = rows.find(row => row.label === label);
-      assert.ok(row, `missing picker row ${label}`);
-      return row;
-    },
-    showWarningMessage: async warning => warnings.push(warning),
-    showInputBox: async () => "projects",
-  } };
-  const result = await selectCatalogChildren(vscode, async request => {
-    requests.push(request);
-    if (request.action === "lookup") return { status: "complete", id: request.id, selected: request.id };
-    if (request.action === "page") {
-      assert.equal(request.limit, 32);
-      const index = Number(request.after || 0);
-      return { status: "complete", candidates: pages[index], next: index < pages.length - 1 ? String(index + 1) : null };
-    }
-    return { status: "complete", directories_indexed: 100 };
-  });
-  return { result, warnings, requests, titles };
+async function sourceTree(setup) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "josh-room-catalog-"));
+  await setup(root);
+  return { root, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
-test("Select All covers the visible eligible page, preserving manual overrides across pages", async () => {
-  const pages = [[candidate("a"), candidate("b"), candidate("hidden", "policy-excluded"),
-    candidate("repo/internal", "cohesive-repository")], [candidate("c")]];
-  const { result, requests, titles } = await pick(pages, ["Select All on This Page (2)", "b", "Next page",
-    "Select All on This Page (1)", "Clear All", "First page", "a", "Continue with 1 selected"]);
-  assert.deepEqual(result, ["a"]);
-  assert.deepEqual(requests.filter(request => request.action === "lookup"), [{ action: "lookup", id: "a" }]);
-  assert.ok(titles.some(title => title.includes("2 selected")));
-  assert.equal(titles.at(-2).includes("0 selected"), true);
+test("native checkbox picker lists only immediate directories and returns checked names", async () => {
+  const tree = await sourceTree(async root => {
+    await fs.mkdir(path.join(root, "service", "nested"), { recursive: true });
+    await fs.mkdir(path.join(root, "notes"));
+    await fs.writeFile(path.join(root, "root.txt"), "root");
+  });
+  try {
+    let shown;
+    const vscode = { window: {
+      showQuickPick: async (items, options) => {
+        shown = { items, options };
+        return [items.find(item => item.label === "service")];
+      },
+    } };
+    assert.deepEqual(await selectCatalogChildren(vscode, tree.root), ["service"]);
+    assert.deepEqual(shown.items.map(item => item.label), ["notes", "service"]);
+    assert.equal(shown.options.canPickMany, true);
+    assert.equal(shown.items.some(item => Object.hasOwn(item, "picked")), false);
+    assert.equal(shown.items.some(item => item.label.includes("nested")), false);
+  } finally {
+    await tree.cleanup();
+  }
 });
 
-test("bulk selection refuses overflow atomically and cancellation produces no selection", async () => {
-  const rows = Array.from({ length: 33 }, (_, n) => candidate(`repo-${n}`));
-  const pages = [rows.slice(0, 32), rows.slice(32)];
-  const actions = ["Select All on This Page (32)", "Next page", "Select All on This Page (1)"];
-  const { warnings, result, requests } = await pick(pages, [...actions, "Continue with 32 selected"]);
-  assert.match(warnings[0], /33.*at most 32/);
-  assert.deepEqual(result, pages[0].map(row => row.path));
-  assert.equal(requests.filter(request => request.action === "lookup").length, 32);
-  assert.equal((await pick(pages, [...actions, null])).result, undefined);
+test("empty directory list reports no selectable children without opening a picker", async () => {
+  const tree = await sourceTree(async root => fs.writeFile(path.join(root, "root.txt"), "root"));
+  try {
+    let message;
+    const vscode = { window: {
+      showQuickPick: async () => assert.fail("empty source should not open a picker"),
+      showInformationMessage: async value => { message = value; },
+    } };
+    assert.equal(await selectCatalogChildren(vscode, tree.root), undefined);
+    assert.match(message, /no immediate folders/i);
+  } finally {
+    await tree.cleanup();
+  }
 });
 
-test("nested selections require an explicit choice and empty selections cannot continue", async () => {
-  const { result, warnings } = await pick([[candidate("group", "manual-directory"), candidate("group/repo")]],
-    ["Browse all folders", "Continue with 0 selected", "group/repo", "group", "Select All on This Page (2)", "Continue with 1 selected"]);
-  assert.deepEqual(result, ["group/repo"]);
-  assert.match(warnings[0], /at least one/);
-  assert.match(warnings[1], /enclosing folder/);
-  assert.match(warnings[2], /enclosing folder/);
+test("picker cancellation returns undefined", async () => {
+  const tree = await sourceTree(root => fs.mkdir(path.join(root, "service")));
+  try {
+    const vscode = { window: { showQuickPick: async () => undefined } };
+    assert.equal(await selectCatalogChildren(vscode, tree.root), undefined);
+  } finally {
+    await tree.cleanup();
+  }
+});
+
+test("more than 32 checked folders is rejected without truncating the selection", async () => {
+  const tree = await sourceTree(async root => {
+    await Promise.all(Array.from({ length: 33 }, (_, index) => fs.mkdir(path.join(root, `child-${index}`))));
+  });
+  try {
+    let warning;
+    const vscode = { window: {
+      showQuickPick: async items => items,
+      showWarningMessage: async value => { warning = value; },
+    } };
+    assert.equal(await selectCatalogChildren(vscode, tree.root), undefined);
+    assert.match(warning, /select at most 32/i);
+  } finally {
+    await tree.cleanup();
+  }
+});
+
+test("32 of 33 immediate folders can be checked", async () => {
+  const tree = await sourceTree(async root => {
+    await Promise.all(Array.from({ length: 33 }, (_, index) => fs.mkdir(path.join(root, `child-${index}`))));
+  });
+  try {
+    const vscode = { window: { showQuickPick: async items => items.slice(0, 32) } };
+    assert.equal((await selectCatalogChildren(vscode, tree.root)).length, 32);
+  } finally {
+    await tree.cleanup();
+  }
 });

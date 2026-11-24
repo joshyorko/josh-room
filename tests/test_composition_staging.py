@@ -1,5 +1,6 @@
 """Fast negative admission tests; never contact providers or read live data."""
 
+import os
 from dataclasses import replace
 
 import pytest
@@ -215,7 +216,8 @@ def test_capture_refuses_unexpected_actual_parent_before_descriptor_publication(
                  dimension, dimension.encryption_domain_id, claim=lambda: None)
 
 
-def test_rebased_rule_language_matches_parent_at_nested_child_boundaries():
+@pytest.mark.parametrize("compact", [False, True])
+def test_rebased_rule_language_matches_parent_at_nested_child_boundaries(compact):
     from itertools import product
 
     from josh_room.composition_lifecycle import _inherited_exclusions
@@ -227,9 +229,30 @@ def test_rebased_rule_language_matches_parent_at_nested_child_boundaries():
         parent = CapturePolicy('0' * 64, (_parts(rule),), None, 'source-only')
         if parent.is_excluded(child):
             continue
-        derived = CapturePolicy('0' * 64, tuple(_parts(p) for p in _inherited_exclusions(parent, child)), None, 'source-only')
+        derived = CapturePolicy('0' * 64, tuple(_parts(p) for p in _inherited_exclusions(parent, child, compact=compact)), None, 'source-only')
         for path in paths:
             assert derived.is_excluded(path) == parent.is_excluded(child + '/' + path), (rule, child, path)
+
+
+def test_catalog_can_stage_child_with_many_valid_inherited_ignores(tmp_path):
+    from josh_room.workspace_policy import load_capture_policy
+
+    source, dimension, _, _ = fixture(tmp_path)
+    (source / '.josh-roomignore').write_text(
+        '\n'.join(f'**/excluded-{n:03}/**' for n in range(97)) + '\n**/child/private/**\n'
+    )
+    (source / 'child/sub/excluded-096').mkdir()
+    (source / 'child/sub/excluded-096/unwanted.txt').write_text('synthetic excluded content')
+    assignments = [{'path': 'child', 'outcome': 'child'}]
+    preview = capture_plan(source, dimension, '1' * 32, 'parent', assignments, root_files_only=True)
+    target = tmp_path / 'child-view'
+    _child_view(source, 'child', target, preview['request'])
+    policy = load_capture_policy(target)
+    assert policy.is_excluded('sub/excluded-096/future.txt')
+    assert policy.is_excluded('private/future.txt')
+    assert not policy.is_excluded('sub/private/future.txt')
+    assert not (target / 'sub/excluded-096').exists()
+    assert (target / 'sub/file.txt').read_text() == 'approved synthetic bytes'
 
 
 @pytest.mark.parametrize('present', [False, True])
@@ -361,3 +384,211 @@ def test_direct_save_refuses_different_binding_before_creating_envelope(tmp_path
         save_composition(source, dimension, authority.namespace, "parent", assignments,
                          preview["approval_sha256"], authority,
                          lambda *_: pytest.fail("opened Restic"), tmp_path)
+
+
+def test_root_files_only_stages_root_files_and_whole_selected_child(tmp_path):
+    from josh_room.composition_lifecycle import _parent_view
+
+    source = tmp_path / "catalog-source"
+    (source / "selected/grandchild").mkdir(parents=True)
+    (source / "selected/grandchild/payload.txt").write_text("child payload")
+    (source / "root.txt").write_text("parent payload")
+    (source / "excluded.txt").write_text("excluded payload")
+    (source / "local/unselected.txt").parent.mkdir()
+    (source / "local/unselected.txt").write_text("local payload")
+    (source / ".josh-roomignore").write_text("excluded.txt\n")
+    dimension = fixture(tmp_path)[1]
+    assignments = [{"path": "selected", "outcome": "child"}]
+
+    preview = capture_plan(
+        source, dimension, "2" * 32, "parent", assignments, root_files_only=True
+    )
+    assert preview["request"]["root_files_only"] is True
+    assert preview["request"]["assignments"] == assignments
+    assert preview["local_only_acknowledgement_required"] is True
+
+    parent = tmp_path / "parent-view"
+    manifest = {"children": [{"path": "selected"}]}
+    _parent_view(source, parent, assignments, manifest, preview["request"])
+    assert (parent / "root.txt").read_text() == "parent payload"
+    assert not (parent / "excluded.txt").exists()
+    assert not (parent / "local").exists()
+    assert not (parent / "selected").exists()
+    child = tmp_path / "child-view"
+    _child_view(source, "selected", child, preview["request"])
+    assert (child / "grandchild/payload.txt").read_text() == "child payload"
+    assert not (child / "root.txt").exists()
+
+
+def test_root_files_only_handles_more_than_64_candidates_with_one_child(tmp_path):
+    source = tmp_path / "many"
+    source.mkdir()
+    for index in range(70):
+        (source / f"candidate-{index:02}").mkdir()
+    dimension = fixture(tmp_path)[1]
+
+    preview = capture_plan(
+        source, dimension, "3" * 32, "parent",
+        [{"path": "candidate-00", "outcome": "child"}],
+        root_files_only=True,
+    )
+    assert preview["child_count"] == 1
+    assert preview["request"]["assignments"] == [
+        {"path": "candidate-00", "outcome": "child"}
+    ]
+
+
+def test_root_files_only_accepts_32_children_and_rejects_33(tmp_path):
+    source = tmp_path / "limits"
+    source.mkdir()
+    for index in range(33):
+        (source / f"child-{index:02}").mkdir()
+    dimension = fixture(tmp_path)[1]
+    assignments = [
+        {"path": f"child-{index:02}", "outcome": "child"}
+        for index in range(32)
+    ]
+
+    assert capture_plan(
+        source, dimension, "4" * 32, "parent", assignments,
+        root_files_only=True,
+    )["child_count"] == 32
+    with pytest.raises(ValueError, match="invalid capture assignments"):
+        capture_plan(
+            source, dimension, "4" * 32, "parent", assignments + [
+                {"path": "child-32", "outcome": "child"}
+            ], root_files_only=True,
+        )
+
+
+def test_root_files_only_binds_mode_into_stale_approval(tmp_path):
+    from types import SimpleNamespace
+
+    from josh_room.composition_lifecycle import save_composition
+
+    source, dimension, _assignments, _ = fixture(tmp_path)
+    assignments = [{"path": "child", "outcome": "child"}]
+    legacy = capture_plan(source, dimension, "5" * 32, "parent", assignments)
+    assert "root_files_only" not in legacy["request"]
+    authority = SimpleNamespace(
+        namespace="5" * 32,
+        binding=legacy["request"]["destination_binding"],
+        read=lambda: pytest.fail("stale mode opened the namespace"),
+    )
+    with pytest.raises(ValueError, match="approval is stale"):
+        save_composition(
+            source, dimension, authority.namespace, "parent", assignments,
+            legacy["approval_sha256"], authority,
+            lambda *_: pytest.fail("stale mode opened Restic"), tmp_path,
+            root_files_only=True,
+        )
+
+
+def test_catalog_admission_checks_same_device_mount_identity(tmp_path, monkeypatch):
+    from josh_room import composition_lifecycle
+
+    source = tmp_path / "mounts"
+    (source / "child").mkdir(parents=True)
+    root_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        monkeypatch.setattr(
+            composition_lifecycle, "_mount_id",
+            lambda fd: 11 if fd == root_fd else 12,
+        )
+        with pytest.raises(ValueError, match="mount boundary"), composition_lifecycle._catalog_admission(root_fd, ["child"]):
+            pytest.fail("same-device bind mount was admitted")
+    finally:
+        os.close(root_fd)
+
+
+def test_root_files_only_keeps_unchecked_and_late_directories_local(tmp_path):
+    from josh_room.composition_lifecycle import _parent_view
+
+    source = tmp_path / "late"
+    (source / "selected").mkdir(parents=True)
+    (source / "formerly-file").write_text("old file")
+    dimension = fixture(tmp_path)[1]
+    assignments = [{"path": "selected", "outcome": "child"}]
+    preview = capture_plan(
+        source, dimension, "6" * 32, "parent", assignments,
+        root_files_only=True,
+    )
+    (source / "formerly-file").unlink()
+    (source / "formerly-file/nested").mkdir(parents=True)
+    (source / "formerly-file/nested/secret.txt").write_text("local only")
+
+    with pytest.raises(ValueError, match="changed"):
+        _parent_view(
+            source, tmp_path / "late-parent", assignments,
+            {"children": [{"path": "selected"}]}, preview["request"],
+        )
+
+    fresh = capture_plan(
+        source, dimension, "7" * 32, "parent", assignments,
+        root_files_only=True,
+    )
+    parent = tmp_path / "fresh-parent"
+    _parent_view(
+        source, parent, assignments,
+        {"children": [{"path": "selected"}]}, fresh["request"],
+    )
+    assert not (parent / "formerly-file").exists()
+    (source / ".josh-room-split.json").write_text("late guard")
+    with pytest.raises(ValueError, match="composed Save"):
+        _parent_view(
+            source, tmp_path / "guarded-parent", assignments,
+            {"children": [{"path": "selected"}]}, fresh["request"],
+        )
+
+
+def test_root_files_only_rejects_immediate_case_aliases_and_selected_symlinks(tmp_path):
+    source = tmp_path / "aliases"
+    (source / "Selected").mkdir(parents=True)
+    (source / "selected").mkdir()
+    dimension = fixture(tmp_path)[1]
+    with pytest.raises(ValueError, match="aliases|conflict"):
+        capture_plan(
+            source, dimension, "8" * 32, "parent",
+            [{"path": "Selected", "outcome": "child"}],
+            root_files_only=True,
+        )
+
+    (source / "Selected").rmdir()
+    (source / "selected").rmdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (source / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises((OSError, ValueError)):
+        capture_plan(
+            source, dimension, "8" * 32, "parent",
+            [{"path": "linked", "outcome": "child"}],
+            root_files_only=True,
+        )
+
+
+def test_capture_plan_cli_routes_explicit_root_files_only_mode(tmp_path, monkeypatch):
+    from josh_room import cli, composition_lifecycle
+
+    source = tmp_path / "cli-source"
+    (source / "selected").mkdir(parents=True)
+    dimension = fixture(tmp_path)[1]
+    observed = []
+    expected = {"ok": True, "approval_sha256": "a" * 64}
+
+    def plan(*args, **kwargs):
+        observed.append(kwargs.get("root_files_only", False))
+        return expected
+
+    monkeypatch.setattr(cli, "_effective_dimension", lambda _args: dimension)
+    monkeypatch.setattr(composition_lifecycle, "resolve_capture_destination",
+                        lambda dimension, material, **kwargs: (dimension, material, None))
+    monkeypatch.setattr(composition_lifecycle, "capture_plan", plan)
+    args = cli.build_parser().parse_args([
+        "composition", "capture-plan", "--dimension", "dimension",
+        "--namespace", "9" * 32, "--parent-room", "parent",
+        "--workspace", str(source), "--assign", "selected=child",
+        "--root-files-only",
+    ])
+    assert cli.dispatch(args, tmp_path / "instance") == expected
+    assert observed == [True]
+    assert args.root_files_only is True

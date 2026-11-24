@@ -85,7 +85,8 @@ def validate_child_git(root: Path, paths, mode: str) -> None:
                 raise ValueError("bare Catalog children are unsupported; save the repository as one ordinary Room")
         if parts[-1] == ".git" and os.path.lexists((root / path).parent / ".gitmodules"):
             raise ValueError("Catalog child submodules are unsupported; save the repository as one ordinary Room")
-        if parts[-1] == ".gitmodules" or (parts[-1] == ".git" and not (root / path).is_dir()):
+        if ((parts[-1] == ".gitmodules" and os.path.lexists((root / path).parent / ".git"))
+                or (parts[-1] == ".git" and not (root / path).is_dir())):
             raise ValueError("Catalog child submodules and gitfiles are unsupported; save the repository as one ordinary Room")
         if parts[-1] == ".git":
             validate_child_index(root / path, object_format(root / path), child_root=path == ".git")

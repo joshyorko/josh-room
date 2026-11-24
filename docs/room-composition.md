@@ -94,14 +94,32 @@ activation/terminal hydration, or selected-file restore is added.
 Native commands are `Josh: Save Catalog Room`, `Josh: Enter Child Room`,
 `Josh: Save Child Room`, and `Josh: Refresh Catalog Child Pins`.
 Choose **Configure Catalog Room** from New Room, then select a source folder.
-**Select All on This Page** adds the eligible displayed folders. **Clear All**
-clears selections across pages. The picker shows the current count. Choose up
-to 32 independent folders. Overlapping selections must be corrected.
+The native checkbox picker reads and lists only that folder's immediate
+directories; it does not recursively discover child candidates. Check up to 32
+folders. Each checked directory becomes one independent child Room containing
+its deeper contents. The child capture scans those contents normally after
+admission, so the shallow picker does not make child captures shallow.
 
-Continue with each folder's existing Git policy and workspace files, or apply
-Git and component settings to all selected folders or a subset. Add parent-owned
-files separately. Review the storage destination, child contents, parent contents
-and local-only remainder before confirming. The original files stay on disk. Choose **Copy recovery receipt** in the Save confirmation and keep the receipt for cold parent restore.
+Eligible regular files directly in the source root are saved with the Catalog
+parent. Every unchecked directory stays local. The extension uses
+`--root-files-only` for both `composition capture-plan` and `composition save`,
+and passes assignments only for checked immediate child directories. The flag
+defines the root-file/child boundary for that operation; CLI calls without the
+flag retain their existing explicit subtree-assignment behavior.
+
+After folder selection, choose the destination. **Review Catalog** shows the
+destination, the Catalog parent, and a scrollable list of child folders with
+their Git capture settings and optional content. Choose **Save catalog** to
+approve, or **Cancel** to leave without saving.
+**Advanced settings** is available from that review for the existing child Git
+and optional component settings. Returning from settings always creates a new
+plan and requires a new confirmation. If a child has incomplete Git history or
+unsupported Git index entries, choose **Review files only** to keep its files
+without Git history. A folder blocked by reserved Room metadata can be left
+local. Both choices require a fresh review before Save. The review shows what
+will be saved in the parent and child Rooms and what will stay on this device.
+The original files stay on disk. Choose **Copy recovery
+receipt** in the Save confirmation and keep the receipt for cold parent restore.
 
 In a restored Catalog parent, **Enter Child Room** lets you choose a saved child.
 **Refresh Catalog Child Pins** lets you choose a child and a particular saved
@@ -450,3 +468,5 @@ the exact authenticated baseline through publication, including for fresh/no-op
 operations. Policy changes require reconciliation, which remains unsupported.
 
 A full Git child requires Git to inspect its index. Catalog capture refuses an index that tracks the generated child policy, guard, or marker at its root, even when the working copy of that file is missing. Sparse directory indexes, split indexes requiring an external base, and submodule gitlinks are unsupported. Save such a repository as one ordinary Room. The same checks apply before a subsequent child Save.
+A standalone `.gitmodules` file without sibling Git metadata is ordinary source
+content and does not make a copied folder a submodule repository.

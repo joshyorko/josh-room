@@ -8230,6 +8230,7 @@ for (const [command, provider, readiness, expected] of [
   ["joshRoom.saveCatalog", "r2", "expired", "cancelled"],
 ]) test(`registered ${command} checks only its selected ${provider} destination (${readiness})`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-"));
+  fs.mkdirSync(path.join(root, "a"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const fixture = createVscodeMock(root);
   const { vscode } = fixture;
@@ -8239,17 +8240,7 @@ for (const [command, provider, readiness, expected] of [
   const operations = [];
   const harness = createSpawnHarness(({ args, options, child }) => {
     const result = body => ({ stdout: JSON.stringify({ ok: true, ...body }) });
-    if (args[1] === "inventory") {
-      const candidate = { id: "first", path: "a", selectable: true, kind: "git-directory-unverified", evidence_code: "git-boundary" };
-      child.stdin.write = line => {
-        const action = JSON.parse(line).action;
-        const value = { ok: true, status: "complete", directories_indexed: 1,
-          ...(action === "lookup" ? { id: candidate.id, selected: candidate.path } : { candidates: [candidate] }) };
-        setImmediate(() => child.stdout.emit("data", Buffer.from(JSON.stringify(value) + "\n")));
-      };
-      child.stdin.end = () => setImmediate(() => child.closeWith(result({})));
-      return { autoClose: false };
-    }
+    assert.notEqual(args[1], "inventory", "Catalog selection must not recursively index the source");
     if (args[0] === "dimensions") {
       assert.deepEqual(args, ["dimensions", "list", "--json"]);
       return result({ dimensions: [dimension] });
@@ -8265,6 +8256,7 @@ for (const [command, provider, readiness, expected] of [
         encryption_domain_id: ["domain-mismatch", "ready"].includes(readiness) ? domain : undefined, key_generation: 1 });
     }
     assert.equal(args[0], "composition");
+    assert.ok(args.includes("--root-files-only"));
     operations.push(args[1]);
     assert.ok(!args.includes("--expected-domain"));
     assert.equal(Boolean(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL), provider === "minio");
@@ -8283,9 +8275,26 @@ for (const [command, provider, readiness, expected] of [
       ? JSON.stringify({ identity: "synthetic-identity" }) : undefined } });
   vscode.window.showInputBox = () => assert.fail("manual UUID requested");
   if (command === "joshRoom.new") fixture.quickPickResponses.push({ id: "catalog" });
-  fixture.quickPickResponses.push({ action: "all" }, { action: "continue" }, { id: "continue" }, { dimension });
-  fixture.openDialogResponses.push([{ fsPath: root }], [{ fsPath: path.join(root, "a") }]);
-  if (expected === "saved") fixture.warningResponses.push("Save catalog");
+  fixture.quickPickResponses.push([{ label: "a" }], { dimension });
+  fixture.openDialogResponses.push([{ fsPath: root }]);
+  if (expected === "saved") {
+    vscode.QuickPickItemKind = { Separator: -1 };
+    vscode.window.createQuickPick = () => {
+      let accept, hide;
+      return {
+        onDidAccept(callback) { accept = callback; },
+        onDidHide(callback) { hide = callback; },
+        show() {
+          queueMicrotask(() => {
+            this.selectedItems = this.items.filter(item => item.action === "Save catalog");
+            accept();
+          });
+        },
+        hide() { hide(); },
+        dispose() {},
+      };
+    };
+  }
   const response = await fixture.commandCallbacks.get(command)();
   assert.equal(response?.status || response, expected, JSON.stringify(fixture.errorCalls));
   assert.deepEqual(operations, expected === "saved" ? ["capture-plan", "save"] : []);
