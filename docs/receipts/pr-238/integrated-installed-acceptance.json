@@ -1,0 +1,200 @@
+{
+  "tested_product_sha": "0fad569596c5cfe178a8e511c8a10ea50b0b6422",
+  "base_main_sha": "f20298e599429600211694e6b9a0cffa842a81ab",
+  "vsix_sha256": "b650bed4cfc9f8f0a406f891ef75c042cfbb27e92e973cb8341e672be1837273",
+  "served_viewer_template_sha256": "0d2445cba743183e1340f4c2acb5d7666b47c0e670d524be4340d0a47e87b12b",
+  "controller_artifact": "sha256:4f5f2dcd727b26ee6cef6ffd20b9ec030d08da15685c062f1fa4ed2b7ec45d96",
+  "controller_mode": "managed",
+  "minio_binary_release": "RELEASE.2025-09-07T16-13-09Z",
+  "minio_binary_sha256": "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f",
+  "environment": {
+    "platform": "linux-x64",
+    "vscode": "1.147.0",
+    "chrome": "Google Chrome 158.0.8127.36",
+    "rcc": "v18.19.11",
+    "restic": "restic 0.20.0 compiled with go1.27.4 on linux/amd64",
+    "age": "v1.3.2",
+    "secret_service": "isolated Linux Secret Service (oo7-daemon on private D-Bus socket)",
+    "display": "isolated Xvfb (-nolisten tcp)",
+    "rendering": "Headless Chrome with SwiftShader software WebGL",
+    "handoff": "Registered joshRoom.explore3D launched the installed managed RCC controller and authenticated comparison broker; only vscode.env.openExternal was intercepted to pass the real loopback URL via stdin to headless Chrome, followed by registered joshRoom.stopRoomView."
+  },
+  "commands": [
+    "joshRoom.explore3D",
+    "joshRoom.stopRoomView"
+  ],
+  "http_security": {
+    "root": 200,
+    "state": 200,
+    "unauthenticated": 403,
+    "post": 405,
+    "filesystem": true,
+    "comparison": true
+  },
+  "pinned_fixture": {
+    "encryption_domain_id": "b9cc7db2-f8f3-47c9-a571-a897bf73bbeb",
+    "point_a": {
+      "snapshot_id": "c73beaae6f274ad8b0dad2db660bcc14",
+      "created_at": "2026-11-24T09:37:41.330447Z",
+      "ciphertext_sha256": "ae401034c7b02e9cbfa4ac20412a87ec50448f92098508828e20a2d44c1183c5",
+      "workspace_snapshot_id": "e5096abd08f12bf5cecaeeb2a9fc876df22a0666b481f46d50d038348c99a482",
+      "tree_id": "1c8c88c9b460ec15820a7c6a85dbd886183ba9f9975bb18b6346f789d7757097",
+      "settings_bytes": 34,
+      "settings_sha256": "92e0397f2afd1e1f1403695f23d80ee1243a75838b203a85923a911a9f9202c5"
+    },
+    "point_b": {
+      "snapshot_id": "dba8399297254ae6bee60b0d3f1fbcef",
+      "created_at": "2026-11-24T09:37:45.788114Z",
+      "ciphertext_sha256": "8816fdfd5f381aa6970c65d8ee8015f2a716abf563025d8b434dbc829c38a153",
+      "workspace_snapshot_id": "150ff7f63ac7d0e1e039f55a397244645341de56add6a43d2476f1f06be5ed2c",
+      "tree_id": "149ee2b24ce087a98554cfc6fdd22d845093b2a739f297f7d86886f2199ebc5a",
+      "settings_bytes": 34,
+      "settings_sha256": "ca52bb5292947617773895cc0308f5fbc078f0346dcc0fcff3d0861047728e2e"
+    },
+    "live_initial": {
+      "settings_bytes": 34,
+      "settings_sha256": "ef4500ee2ff37f6f124f9237a597a474c3818c6ccff8d9e22b6f600ceb996205"
+    }
+  },
+  "scenarios": {
+    "step1_navigate_read_compare": {
+      "ok": true,
+      "canvas_picks": [
+        "/src",
+        "/src/app",
+        "/src/app/settings.py"
+      ],
+      "grid_entries_on_page": 48,
+      "point_options_count": 2,
+      "point_a": {
+        "snapshot": "c73beaae6f274ad8b0dad2db660bcc14",
+        "saved_sha256": "92e0397f2afd1e1f1403695f23d80ee1243a75838b203a85923a911a9f9202c5",
+        "live_sha256": "ef4500ee2ff37f6f124f9237a597a474c3818c6ccff8d9e22b6f600ceb996205",
+        "tree_id": "1c8c88c9b460ec15820a7c6a85dbd886183ba9f9975bb18b6346f789d7757097",
+        "workspace_snapshot_id": "e5096abd08f12bf5cecaeeb2a9fc876df22a0666b481f46d50d038348c99a482"
+      },
+      "point_b": {
+        "snapshot": "dba8399297254ae6bee60b0d3f1fbcef",
+        "saved_sha256": "ca52bb5292947617773895cc0308f5fbc078f0346dcc0fcff3d0861047728e2e",
+        "live_sha256": "ef4500ee2ff37f6f124f9237a597a474c3818c6ccff8d9e22b6f600ceb996205",
+        "tree_id": "149ee2b24ce087a98554cfc6fdd22d845093b2a739f297f7d86886f2199ebc5a",
+        "workspace_snapshot_id": "150ff7f63ac7d0e1e039f55a397244645341de56add6a43d2476f1f06be5ed2c"
+      }
+    },
+    "step2_sibling_in_place_edit": {
+      "ok": true,
+      "parent_mtime_ns_unchanged": true,
+      "parent_ctime_ns_unchanged": true,
+      "sibling_inode_unchanged": true,
+      "sibling_bytes_before": 8,
+      "sibling_bytes_after": 25000,
+      "sibling_height_before": 0.62,
+      "sibling_height_after": 4.35,
+      "grid_bytes_after": "25000 B",
+      "selected_and_spotlight_preserved": true,
+      "point_b_and_diff_preserved": true,
+      "manual_camera_preserved": true,
+      "search_reconciled_ordinal_preserved": true,
+      "pagination_cursor_preserved": true,
+      "unchanged_poll_extra_renders": [
+        0,
+        0
+      ]
+    },
+    "step3_selected_file_continuity_and_replace": {
+      "ok": true,
+      "parent_mtime_ns_unchanged_on_edit": true,
+      "parent_ctime_ns_unchanged_on_edit": true,
+      "inode_unchanged_on_edit": true,
+      "old_revision_handle_http_status": 409,
+      "object_key_stable_across_in_place_edit": true,
+      "deferred_prompt_button": "Open current version",
+      "recompared_point_a": {
+        "snapshot": "c73beaae6f274ad8b0dad2db660bcc14",
+        "saved_sha256": "92e0397f2afd1e1f1403695f23d80ee1243a75838b203a85923a911a9f9202c5",
+        "live_sha256": "ca9acf77c6688a5b87daba9d313ca6353ab3617faa5527d1e01ab095c66f3508"
+      },
+      "recompared_point_b": {
+        "snapshot": "dba8399297254ae6bee60b0d3f1fbcef",
+        "saved_sha256": "ca52bb5292947617773895cc0308f5fbc078f0346dcc0fcff3d0861047728e2e",
+        "live_sha256": "ca9acf77c6688a5b87daba9d313ca6353ab3617faa5527d1e01ab095c66f3508"
+      },
+      "unlink_replace_fallback_path": "/src/app",
+      "unlink_replace_new_object_key": true,
+      "unlink_replace_inspector_closed": true
+    },
+    "step4_sql_and_download": {
+      "ok": true,
+      "meta_scope": "live-native-directory-page",
+      "src_app_node_count": 51,
+      "src_app_coverage": "partial",
+      "src_app_entries_on_page": 48,
+      "selected_preview_in_sql": true,
+      "attachment_metadata_only_row": [
+        "evidence.pdf",
+        "application/pdf",
+        33
+      ],
+      "attachment_blobs_count": 0,
+      "downloaded_sqlite_bytes": 106496,
+      "downloaded_sqlite_sha256": "bb7b70d3ac2626323473cbaf0dc7aa0633d08f02257bef2e8b43ac75df994075",
+      "nav_to_docs_cleared_results_and_reset_ack": true,
+      "docs_sql_paths": [
+        "/",
+        "/docs",
+        "/docs/notes.txt"
+      ],
+      "sqlite3_verification": {
+        "meta_scope": "live-native-directory-page",
+        "sensitivity": "internal",
+        "node_count": 51,
+        "app_coverage": "partial",
+        "app_entries_on_page": 48,
+        "preview_rows": 1,
+        "attachment_rows": [
+          {
+            "name": "evidence.pdf",
+            "media_type": "application/pdf",
+            "size": 33,
+            "has_bytes": false
+          }
+        ],
+        "attachment_blobs_count": 0
+      }
+    },
+    "step5_stop_and_immutability": {
+      "ok": true,
+      "listener_closed_after_stop": true,
+      "minio_saved_object_write_calls": 0,
+      "minio_transient_restic_lock_ops": 56,
+      "bucket_object_count": 14,
+      "bucket_inventory_unchanged": true,
+      "snapshot_history_unchanged": true,
+      "non_edited_workspace_files_unchanged": 55,
+      "deliberate_external_live_edits": [
+        "src/app/settings.py",
+        "src/app/sibling.py"
+      ]
+    }
+  },
+  "browser_hygiene": {
+    "console_errors": [],
+    "csp_violations": [],
+    "external_requests": []
+  },
+  "screenshots": {
+    "sibling_edit_comparison": {
+      "file": "pr238-sibling-edit-compare.png",
+      "sha256": "a93be72a29dee104f96a904a196cdd17314589a7aec80d646ce4d8cd01cf5952"
+    },
+    "sql_console": {
+      "file": "pr238-sql-console.png",
+      "sha256": "844db83f2c280231211680f587bd2d0e51841fe30de0cb52424be7cba12a8d44"
+    }
+  },
+  "limits": [
+    "Same-host Linux x64 only; OS default-browser launcher was intercepted via vscode.env.openExternal to hand the real loopback URL via stdin to headless Chrome.",
+    "3D WebGL rendered with Chrome SwiftShader software WebGL under Xvfb; hardware GPU, live R2, and redundant local Windows/macOS runs were outside this targeted pass.",
+    "Deliberate external live-file edits (src/app/sibling.py and src/app/settings.py) were performed outside the viewer to test live polling and recovery; all other workspace files and all MinIO bucket objects were verified unchanged."
+  ]
+}
