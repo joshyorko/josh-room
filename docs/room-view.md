@@ -239,11 +239,25 @@ one grandchild, the parent and a neighboring branch. Grid, tree, inspector,
 and export retain their own scope. Opening a sampled object runs the usual
 identity-bound listing or selected preview. Offline views use embedded data.
 
+On each live poll, `/fs/metadata` rechecks up to 48 admitted child IDs per
+request against their displayed parent and generation. An in-place edit to a
+sibling updates the displayed page even when the directory timestamp stays
+the same. Polling reads metadata only and leaves the pagination cursor in place.
+
 `/fs/inspect` returns metadata for an issued ID. `/fs/preview` reads the
 selected object under the current workspace binding and policy. Binary previews
 use `/fs/attachment` with the admitted name and digest. The server rejects
 arbitrary paths. These routes operate only on the live native workspace.
 File sizes are reported in bytes. Block heights use a bounded visual scale.
+
+In native live sessions, SQL queries and **Download .sqlite** use the current
+directory page, its ancestors and the selected file. A partial page includes
+only its admitted rows. The directory's `fields_json` records coverage and
+the number of entries shown. The `previews` table includes the selected
+file's available preview metadata and text. Attachment rows contain metadata
+only. Moving to a different page or observing a change clears previous query
+results. Sensitive SQLite downloads require acknowledgement for the current
+observation. In the `meta` table, the `scope` key records `live-native-directory-page`.
 
 ### Find a Room file and compare its saved version
 

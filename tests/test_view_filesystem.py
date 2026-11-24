@@ -224,7 +224,8 @@ def test_scene_sample_preserves_interactive_handles_and_continuations(tmp_path, 
     # An interactive continuation retains authority even across a changed sampled file.
     (tmp_path / "first" / first["entries"][0]["label"]).write_text("changed")
     refreshed = adapter.listing(top["first"]["id"], gen, sample=True)
-    assert refreshed["entries"][0]["id"] == selected
+    assert refreshed["entries"][0]["id"] != selected
+    assert refreshed["entries"][0]["fields"]["object_key"] == first["entries"][0]["fields"]["object_key"]
     assert refreshed["entries"][0]["fields"]["file_bytes"] == len("changed")
     assert adapter.listing(active, gen, start["cursor"])["entries"]
     # The interactive page evicted this selection. Its sampled copy cannot revive it.
@@ -288,3 +289,107 @@ def test_scene_never_classifies_generation_revocation_as_local(tmp_path, change)
     with pytest.raises(ViewValidationError) as stale:
         adapter.listing(top["branch"]["id"], gen, sample=True)
     assert stale.value.code == "filesystem-stale"
+
+
+def test_displayed_metadata_across_pages_keeps_independent_content_observation(tmp_path, monkeypatch):
+    for i in range(54):
+        (tmp_path / f"row-{i:02}.txt").write_text("a")
+    provider = RoomWorkspaceProvider(tmp_path)
+    adapter = provider.open_filesystem()
+    batches = list(pages(adapter))
+    assert len(batches) == 2
+    gen = batches[0]["generation"]
+    old_first = batches[0]["entries"][0]["id"]
+    old_last = batches[-1]["entries"][-1]["id"]
+    selected = batches[0]["entries"][1]["id"]
+    (tmp_path / "row-00.txt").write_text("first edited row")
+    (tmp_path / "row-53.txt").write_text("second page edit")
+
+    def reject_content(*_):
+        pytest.fail("metadata revalidation must not read file content")
+    with monkeypatch.context() as patch:
+        patch.setattr(provider, "_read_regular_file_bytes", reject_content)
+        refreshed = [adapter.metadata("root", gen, [n["id"] for n in p["entries"]]) for p in batches]
+    first = refreshed[0]["entries"][0]
+    last = refreshed[-1]["entries"][-1]
+    assert (first["fields"]["file_bytes"], last["fields"]["file_bytes"]) == (16, 16)
+    assert first["id"] != old_first and last["id"] != old_last
+    assert adapter.inspect(selected, gen)["node"]["id"] == selected
+    assert adapter.preview(first["id"], gen)["node"]["previews"][0]["body"] == "first edited row"
+    assert adapter.metadata("root", gen, [last["id"]])["entries"] == [last]
+    _, listed = entries(adapter, "root", gen)
+    assert listed["row-00.txt"]["id"] == first["id"]
+    assert first["fields"]["object_key"] == batches[0]["entries"][0]["fields"]["object_key"]
+    sampled = adapter.listing("root", gen, sample=True)
+    assert sampled["entries"][0]["id"] == first["id"]
+    with pytest.raises(ViewValidationError) as failure:
+        adapter.preview(old_first, gen)
+    assert failure.value.code == "filesystem-stale"
+
+
+def test_displayed_metadata_rejects_wrong_parent_invalid_batch_and_new_alias(tmp_path):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "child.txt").touch()
+    adapter = RoomWorkspaceProvider(tmp_path).open_filesystem()
+    gen, top = entries(adapter)
+    directory = top["folder"]["id"]
+    _, children = entries(adapter, directory, gen)
+    child = children["child.txt"]["id"]
+    for target, requested, code in (
+        ("root", [child], "filesystem-unknown"),
+        (directory, ["forged"], "filesystem-unknown"),
+        (directory, [child, child], "invalid-query"),
+        (directory, [str(i) for i in range(49)], "invalid-query"),
+    ):
+        with pytest.raises(ViewValidationError) as failure:
+            adapter.metadata(target, gen, requested)
+        assert failure.value.code == code
+    (folder / "CHILD.txt").touch()
+    with pytest.raises(ViewValidationError) as failure:
+        adapter.metadata(directory, gen, [child])
+    assert failure.value.code == "filesystem-stale"
+
+
+def test_displayed_metadata_file_continuity_requires_unchanged_directory(tmp_path):
+    folder = tmp_path / "subfolder"
+    folder.mkdir()
+    file = folder / "readme.txt"
+    file.write_text("first")
+    adapter = RoomWorkspaceProvider(tmp_path).open_filesystem()
+    gen, root = entries(adapter)
+    folder_id = root["subfolder"]["id"]
+    _, first = entries(adapter, folder_id, gen)
+    file.write_text("second")
+    _, second = entries(adapter, folder_id, gen)
+    assert second["readme.txt"]["id"] != first["readme.txt"]["id"]
+    assert second["readme.txt"]["fields"]["object_key"] == first["readme.txt"]["fields"]["object_key"]
+    # Replacing a pathname can recycle its inode. The parent stamp changed.
+    file.unlink()
+    file.write_text("new file")
+    gen, root = entries(adapter)
+    _, replacement = entries(adapter, root["subfolder"]["id"], gen)
+    assert replacement["readme.txt"]["fields"]["object_key"] != second["readme.txt"]["fields"]["object_key"]
+
+
+def test_displayed_metadata_refreshes_changed_child_directory_handle_without_reviving_old_grandchildren(tmp_path):
+    child_dir = tmp_path / "subdir"
+    child_dir.mkdir()
+    old_file = child_dir / "old.txt"
+    old_file.write_text("old")
+    adapter = RoomWorkspaceProvider(tmp_path).open_filesystem()
+    gen, top = entries(adapter)
+    subdir_id = top["subdir"]["id"]
+    _, before = entries(adapter, subdir_id, gen)
+    old_child_id = before["old.txt"]["id"]
+    # Mutating inside subdir changes subdir's stat while keeping root's stat unchanged.
+    (child_dir / "added.txt").write_text("new")
+    refreshed = adapter.metadata("root", gen, [subdir_id])["entries"]
+    assert len(refreshed) == 1 and refreshed[0]["id"] == subdir_id
+    # Opening the refreshed child directory succeeds in the same generation.
+    _, after = entries(adapter, subdir_id, gen)
+    assert set(after) == {"old.txt", "added.txt"}
+    # A handle captured under the old subdir stamp remains stale.
+    with pytest.raises(ViewValidationError) as failure:
+        adapter.inspect(old_child_id, gen)
+    assert failure.value.code == "filesystem-stale"

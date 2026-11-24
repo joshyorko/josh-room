@@ -97,12 +97,13 @@
         const resp = await fetch(`/state.json${query}`, { cache: 'no-store', headers });
         if (!resp.ok) throw new Error(`Failed to fetch /state.json (HTTP ${resp.status})`);
         const payload = await resp.json();
-        const liveDb = global.RoomViewData.hydrateLiveSqlite(SQL, payload.descriptor, payload.state, payload.sensitivity);
+        const liveDb = payload.server?.filesystem === true ? null :
+          global.RoomViewData.hydrateLiveSqlite(SQL, payload.descriptor, payload.state, payload.sensitivity);
         dataLayer = new global.RoomViewData.RoomViewDataLayer({
           mode: 'live',
           sqlModule: SQL,
           db: liveDb,
-          rawSqliteBytes: liveDb.export(),
+          rawSqliteBytes: liveDb?.export(),
           liveConfig,
           initialPayload: payload,
         });

@@ -1049,6 +1049,8 @@ body {
 /* SQL Console */
 .sql-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
 .sql-header h2 { margin: 0 0 4px; font-size: 16px; }
+.sql-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+#sql-download-consent:not([hidden]) { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .sql-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 #sql-input {
   width: 100%;

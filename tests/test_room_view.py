@@ -564,6 +564,16 @@ def test_scoped_filesystem_transport_boundary(tmp_path):
         assert _raw_http(server.port, "GET", "/fs/other?id=root", headers=headers)[0] == 404
         listing = json.loads(_raw_http(server.port, "GET", route, headers=headers)[2])
         generation = listing["generation"]
+        metadata = f"/fs/metadata?id=root&generation={generation}"
+        child = listing["entries"][0]["id"]
+        assert _raw_http(server.port, "GET", metadata)[0] == 403
+        for suffix in ("&children=..%2Fhello", f"&children={child},{child}"):
+            assert _raw_http(server.port, "GET", metadata + suffix, headers=headers)[0] == 400
+        assert _raw_http(server.port, "GET", metadata + "&children=forged", headers=headers)[0] == 404
+        (tmp_path / "hello.txt").write_text("changed body")
+        status, _, body = _raw_http(server.port, "GET", metadata + f"&children={child}", headers=headers)
+        node, = json.loads(body)["entries"]
+        assert status == 200 and node["fields"]["file_bytes"] == 12 and not node["previews"]
         assert _raw_http(server.port, "GET", f"/fs/inspect?id=forged&generation={generation}", headers=headers)[0] == 404
         status, _, body = _raw_http(server.port, "GET", "/fs/list?id=root&generation=forged", headers=headers)
         assert status == 409 and b"hello.txt" not in body

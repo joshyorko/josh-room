@@ -206,3 +206,22 @@ test('search sums cumulative omission counts once per directory, including parti
   assert.equal(walk.examined, 3);
   assert.equal(walk.omitted, 7);
 });
+
+test('a metadata refresh updates retained match handles without changing their scope or ordinal', () => {
+  const before = file('source.py');
+  const after = {...before, id: 'revision-2', metric: 100};
+  const hit = {node: before, fullPath: '/src/source.py', ancestors: [root, src], ordinal: 4};
+  const queued = {...hit, ordinal: 5};
+  const search = Object.create(global.RoomViewFilesystemSearch.prototype);
+  let highlight;
+  Object.assign(search, {
+    displayed: [hit], active: null, walk: {start: src.id, matches: [queued]},
+    onMatches: ids => { highlight = ids; },
+  });
+  search.reconcileMetadata(new Map([[before.id, after]]));
+  assert.equal(search.displayed[0].node, after);
+  assert.equal(search.displayed[0].ordinal, 4);
+  assert.equal(search.walk.start, src.id);
+  assert.equal(queued.node, after);
+  assert.deepEqual(highlight, [after.id]);
+});

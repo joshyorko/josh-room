@@ -256,6 +256,7 @@ class _SnapshotProviderAdapter:
 _FS_PARAMS = {
     "/fs/list": {"id", "generation", "cursor", "sample"},
     "/fs/inspect": {"id", "generation"},
+    "/fs/metadata": {"id", "generation", "children"},
     "/fs/points": {"id", "generation"},
     "/fs/compare": {"id", "generation", "point"},
     "/fs/preview": {"id", "generation"},
@@ -302,6 +303,10 @@ def _filesystem_result(adapter, path: str, query: dict[str, list[str]], policy: 
             result = adapter.listing(object_id, generation, sample=True)
         else:
             result = adapter.listing(object_id, generation, cursor)
+    elif path == "/fs/metadata":
+        children = ([validate_safe_label(child, "child id") for child in values["children"].split(",")]
+                    if "children" in values else [])
+        result = adapter.metadata(object_id, generation, children)
     elif path == "/fs/inspect":
         result = adapter.inspect(object_id, generation)
     else:

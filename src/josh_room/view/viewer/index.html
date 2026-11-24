@@ -141,9 +141,10 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
     <div class="sql-header">
       <div>
         <h2>Read-Only SQL Console</h2>
-        <p class="muted-text">Runs locally in WebAssembly (sql.js) over the embedded <code>room-view-v1</code> SQLite database (<code>nodes</code>, <code>previews</code>, <code>links</code>, <code>items</code>, <code>attachments</code>). Zero network calls.</p>
+        <p class="muted-text" id="sql-scope">Runs locally in WebAssembly (sql.js) over the embedded <code>room-view-v1</code> SQLite database (<code>nodes</code>, <code>previews</code>, <code>links</code>, <code>items</code>, <code>attachments</code>). Zero network calls.</p>
       </div>
       <div class="sql-actions">
+        <label id="sql-download-consent" hidden><input id="sql-download-ack" type="checkbox"> I will keep this sensitive SQLite file on approved storage.</label>
         <button id="btn-download-sqlite" class="hud-btn hud-btn-accent" type="button">Download .sqlite</button>
       </div>
     </div>
