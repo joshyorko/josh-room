@@ -29,6 +29,7 @@
       this.descriptor = descriptor;
       this.state = state;
       this.layout = layout;
+      const restoreFocus = this.rootEl.contains(document.activeElement);
       this.rootEl.textContent = '';
       this.nodeElements.clear();
       this.modelById.clear();
@@ -39,13 +40,16 @@
         const isRoot = dirNode.id === 'root';
         const label = isRoot
           ? `/ (${descriptor.title || 'Room View'})`
-          : `${dirNode.label} (${dirNode.counts ? dirNode.counts.total : 0})`;
+          : global.RoomViewLayout.isWorkspace(descriptor)
+            ? `${dirNode.label} (${dirNode.fields?.coverage || 'observed entries only'})`
+            : `${dirNode.label} (${dirNode.counts ? dirNode.counts.total : 0})`;
         const model = {
           id: dirNode.id,
           label,
           path: dirNode.path,
           parentId,
           children: [],
+          lazy: dirNode.fields?.coverage === 'not-examined' && !dirNode.dirChildren.length && !dirNode.leafChildren.length,
           nodeType: dirNode.nodeType,
         };
         this.modelById.set(model.id, model);
@@ -61,8 +65,8 @@
           const ranked = global.RoomViewLayout.sortItemsByInterest(leaves, descriptor);
           const pedLayout = layout.nodeById.get(dirNode.id);
           const aggregated = pedLayout ? Boolean(pedLayout.aggregated) : (ranked.length > 16);
-          const visible = aggregated ? ranked.slice(0, 11) : ranked;
-          const hidden = aggregated ? ranked.slice(11) : [];
+          const visible = aggregated ? ranked.filter(leaf => layout.itemNodeById.has(leaf.objectId)) : ranked;
+          const hidden = aggregated ? ranked.filter(leaf => !layout.itemNodeById.has(leaf.objectId)) : [];
 
           visible.forEach((leaf, idx) => {
             const entry = global.RoomViewLayout.getLegendEntry(descriptor, leaf.kind);
@@ -118,8 +122,8 @@
       const rootModel = buildModel(layout.treeRoot, null);
 
       const renderNode = (model, container, setsize, posinset) => {
-        const hasKids = model.children && model.children.length > 0;
-        const isExpanded = this.expanded.has(model.id);
+        const hasKids = model.lazy || model.children.length > 0;
+        const isExpanded = !model.lazy && this.expanded.has(model.id);
 
         const itemWrap = document.createElement('div');
         itemWrap.setAttribute('role', 'treeitem');
@@ -185,9 +189,24 @@
       };
 
       renderNode(rootModel, this.rootEl, 1, 1);
+      if (!this.nodeElements.has(this.focusedId)) {
+        let fallback = this.modelById.get(this.focusedId);
+        while (fallback && !this.nodeElements.has(fallback.id)) fallback = this.modelById.get(fallback.parentId);
+        this.focusedId = fallback?.id || 'root';
+        this.nodeElements.get(this.focusedId).tabIndex = 0;
+      }
+      if (restoreFocus) this.nodeElements.get(this.focusedId)?.focus({ preventScroll: true });
     }
 
     toggleExpand(nodeId) {
+      if (this.modelById.get(nodeId)?.lazy) {
+        this.callbacks.onSelectNode?.(nodeId);
+        return;
+      }
+      if (this.callbacks.onToggle && this.modelById.get(nodeId)?.nodeType !== 'more') {
+        this.callbacks.onToggle(nodeId, !this.expanded.has(nodeId));
+        return;
+      }
       if (this.expanded.has(nodeId)) this.expanded.delete(nodeId);
       else this.expanded.add(nodeId);
       this.build(this.descriptor, this.state, this.layout);
@@ -210,7 +229,7 @@
       if (announcement) this.announce(announcement);
     }
 
-    selectAndFocus(nodeId, { emit = true, domFocus = false } = {}) {
+    selectAndFocus(nodeId, { emit = true, domFocus = this.rootEl.contains(document.activeElement) } = {}) {
       if (!this.modelById.has(nodeId)) return;
       this.selectedId = nodeId;
       this.focusedId = nodeId;
@@ -242,19 +261,18 @@
       } else if (direction === 'end') {
         this.selectAndFocus(this.flatOrder[this.flatOrder.length - 1], { emit: true });
       } else if (direction === 'right' && curModel) {
+        if (curModel.lazy) return this.toggleExpand(curModel.id);
         if (curModel.children && curModel.children.length) {
           if (!this.expanded.has(curModel.id)) {
-            this.expanded.add(curModel.id);
-            this.build(this.descriptor, this.state, this.layout);
+            this.toggleExpand(curModel.id);
+            return;
           }
           const firstChild = curModel.children[0];
           if (firstChild) this.selectAndFocus(firstChild.id, { emit: true });
         }
       } else if (direction === 'left' && curModel) {
         if (this.expanded.has(curModel.id) && curModel.children.length) {
-          this.expanded.delete(curModel.id);
-          this.build(this.descriptor, this.state, this.layout);
-          this.selectAndFocus(curModel.id, { emit: true });
+          this.toggleExpand(curModel.id);
         } else if (curModel.parentId) {
           this.selectAndFocus(curModel.parentId, { emit: true });
         }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import secrets
 import sys
 import threading
@@ -16,6 +17,8 @@ from typing import Self
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .contract import (
+    Attachment,
+    NodeState,
     StaleStatus,
     ViewDescriptor,
     ViewState,
@@ -23,6 +26,7 @@ from .contract import (
     ViewValidationError,
     validate_attachment_name,
     validate_safe_label,
+    validate_sha256,
 )
 from .exporter import (
     DEFAULT_MAX_SIZE_BYTES,
@@ -32,12 +36,14 @@ from .exporter import (
     inject_before_last_body,
     load_viewer_template,
 )
+from .room_provider import RoomWorkspaceProvider
 from .sanitizer import (
     DEFAULT_SANITIZATION_POLICY,
     SanitizationPolicy,
     SensitivityAssessment,
     resolve_sensitivity,
     sanitize_descriptor,
+    sanitize_node,
     sanitize_state,
 )
 
@@ -70,7 +76,10 @@ class ViewCollector:
         interval_seconds: float = 5.0,
         workspace: Path | None = None,
         policy: SanitizationPolicy = DEFAULT_SANITIZATION_POLICY,
+        scoped_live: bool = False,
     ) -> None:
+        self._scoped_live = scoped_live and isinstance(provider, RoomWorkspaceProvider)
+        self._observe = provider.overview if self._scoped_live else provider.state
         self._provider = provider
         self._interval = max(0.25, float(interval_seconds))
         self._workspace = workspace
@@ -120,7 +129,7 @@ class ViewCollector:
         if not callable(extra_sanitizer):
             extra_sanitizer = None
         try:
-            raw_state = self._provider.state()
+            raw_state = self._observe()
             sanitized = sanitize_state(
                 self._descriptor,
                 raw_state,
@@ -187,6 +196,7 @@ class ViewCollector:
                 "sensitivity": self._sensitivity.to_dict(),
                 "server": {
                     "mode": "live",
+                    **({"filesystem": True} if self._scoped_live else {}),
                     "poll_interval_s": self._interval,
                 },
             }
@@ -223,6 +233,8 @@ class _SnapshotProviderAdapter:
 
     def state(self) -> ViewState:
         self.assert_binding()
+        if self._collector._scoped_live:
+            return self._collector.provider.state()
         return self._state
 
     def verify_binding(self) -> None:
@@ -241,6 +253,76 @@ class _SnapshotProviderAdapter:
         return result
 
 
+_FS_PARAMS = {
+    "/fs/list": {"id", "generation", "cursor", "sample"},
+    "/fs/inspect": {"id", "generation"},
+    "/fs/points": {"id", "generation"},
+    "/fs/compare": {"id", "generation", "point"},
+    "/fs/preview": {"id", "generation"},
+    "/fs/attachment": {"id", "generation", "name", "digest"},
+}
+_FS_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_FS_MAX_BYTES = 1024 * 1024
+
+
+def _filesystem_result(adapter, path: str, query: dict[str, list[str]], policy: SanitizationPolicy, comparison=None):
+    """Accept only opaque capabilities; apply the same node sanitizer used for exports."""
+    values = {key: items[0] for key, items in query.items() if key != "token"}
+    if values.keys() - _FS_PARAMS[path] or any(len(items) != 1 for items in query.values()):
+        raise ViewValidationError("invalid-query", "invalid filesystem parameters")
+    object_id = validate_safe_label(values.get("id"), "object id")
+    generation = values.get("generation")
+    cursor = values.get("cursor")
+    bootstrap = path == "/fs/list" and object_id == "root" and cursor is None
+    if generation is None and not bootstrap:
+        raise ViewValidationError("invalid-query", "generation is required")
+    if any(not _FS_TOKEN.fullmatch(value) for value in (generation, cursor) if value is not None):
+        raise ViewValidationError("invalid-query", "invalid generation or cursor")
+    if path in {"/fs/points", "/fs/compare"}:
+        if comparison is None:
+            raise ViewValidationError("comparison-unsupported", "saved comparison requires native launch")
+        point = values.get("point")
+        if path == "/fs/compare" and not re.fullmatch(r"[0-9a-f]{32}", point or ""):
+            raise ViewValidationError("invalid-query", "invalid saved point")
+        return json.dumps(comparison.query(adapter, object_id, generation, point), separators=(",", ":")).encode()
+    if path == "/fs/attachment":
+        name = validate_attachment_name(values.get("name"))
+        digest = validate_sha256(values.get("digest"))
+        attachment = adapter.attachment(object_id, generation, name, digest)
+        if (attachment is None or attachment.sha256 != digest or attachment.name != name
+                or attachment.media_type not in {"application/pdf", "image/png", "image/webp", "image/jpeg"}):
+            raise ViewValidationError("filesystem-unknown", "attachment unavailable")
+        if attachment.size > _FS_MAX_BYTES:
+            raise ViewValidationError("response-too-large", "attachment too large")
+        return attachment
+    if path == "/fs/list":
+        if "sample" in values:
+            if values["sample"] != "1" or generation is None or cursor is not None:
+                raise ViewValidationError("invalid-query", "invalid directory sample")
+            result = adapter.listing(object_id, generation, sample=True)
+        else:
+            result = adapter.listing(object_id, generation, cursor)
+    elif path == "/fs/inspect":
+        result = adapter.inspect(object_id, generation)
+    else:
+        result = adapter.preview(object_id, generation)
+
+    def clean(raw):
+        return sanitize_node(NodeState.from_dict(raw), policy).to_dict()
+
+    payload = dict(result)
+    for key in ("directory", "node"):
+        if key in result:
+            payload[key] = clean(result[key])
+    for key in ("entries", "ancestors"):
+        if key in result:
+            payload[key] = [clean(node) for node in result[key]]
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > _FS_MAX_BYTES:
+        raise ViewValidationError("response-too-large", "directory page too large")
+    return encoded
+
+
 class RoomViewServer:
     """Stdlib ThreadingHTTPServer bound strictly to 127.0.0.1 with read-only GET routes."""
 
@@ -252,6 +334,7 @@ class RoomViewServer:
         interval_seconds: float = 5.0,
         workspace: Path | None = None,
         require_token: bool = False,
+        comparison_socket: Path | None = None,
         max_export_bytes: int = DEFAULT_MAX_SIZE_BYTES,
         template_path: Path | None = None,
         policy: SanitizationPolicy = DEFAULT_SANITIZATION_POLICY,
@@ -261,12 +344,19 @@ class RoomViewServer:
             interval_seconds=interval_seconds,
             workspace=workspace,
             policy=policy,
+            scoped_live=True,
         )
         self._workspace = workspace
         self._max_export_bytes = max_export_bytes
         self._template_path = template_path
         self._policy = policy
         self._token = secrets.token_urlsafe(24) if require_token else None
+        self._comparison = None
+        if comparison_socket is not None:
+            if not require_token or not isinstance(provider, RoomWorkspaceProvider):
+                raise ValueError("Saved comparison requires a native token-protected viewer")
+            from .saved_comparison import SavedComparison
+            self._comparison = SavedComparison(comparison_socket, policy)
         self._base_template = load_viewer_template(template_path)
 
         owner = self
@@ -283,6 +373,10 @@ class RoomViewServer:
                 return {f"127.0.0.1:{actual_port}", f"localhost:{actual_port}"}
 
             def _check_host(self) -> bool:
+                if len(self.headers.get_all("Host", [])) != 1:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden-host-header"},
+                                    head_only=self.command == "HEAD")
+                    return False
                 host = (self.headers.get("Host") or "").strip().lower()
                 forwarded_loopback = False
                 if owner._token:
@@ -310,7 +404,7 @@ class RoomViewServer:
                 header_tok = (self.headers.get("X-Josh-Room-View-Token") or "").strip()
                 query_tok = (query.get("token", [""])[0] or "").strip()
                 candidate = header_tok or query_tok
-                if not candidate or not hmac.compare_digest(candidate, owner._token):
+                if not candidate.isascii() or not hmac.compare_digest(candidate, owner._token):
                     self._send_json(
                         HTTPStatus.FORBIDDEN,
                         {"ok": False, "error": "invalid-session-token"},
@@ -342,7 +436,7 @@ class RoomViewServer:
                 self.send_response(status)
                 self._base_headers(content_type, len(body), extra=extra_headers)
                 self.end_headers()
-                if not head_only:
+                if not head_only and self.command != "HEAD":
                     self.wfile.write(body)
 
             def _send_json(
@@ -383,14 +477,82 @@ class RoomViewServer:
             def do_GET(self) -> None:
                 self._handle_get(head_only=False)
 
+            def _filesystem(self, path: str, query: dict[str, list[str]], *, head_only: bool) -> None:
+                def error(status: HTTPStatus, code: str) -> None:
+                    self._send_json(status, {"ok": False, "error": code}, head_only=head_only)
+
+                if owner._filesystem is None or path not in _FS_PARAMS:
+                    error(HTTPStatus.NOT_FOUND, "not-found")
+                    return
+                sample = path == "/fs/list" and "sample" in query
+                # One foreground request may wait for the current bounded operation.
+                # While it waits, incoming scene samples yield immediately.
+                acquired = False
+                if owner._fs_admission.acquire(blocking=False):
+                    try:
+                        acquired = owner._fs_lock.acquire(timeout=0 if sample else 0.5)
+                    finally:
+                        owner._fs_admission.release()
+                if not acquired:
+                    error(HTTPStatus.TOO_MANY_REQUESTS, "filesystem-busy")
+                    return
+                try:
+                    try:
+                        if owner._filesystem is None:
+                            raise ViewValidationError("filesystem-stale", "session closed")
+                        result = _filesystem_result(owner._filesystem, path, query, owner._policy, owner._comparison)
+                        owner.collector.provider.verify_binding()
+                    finally:
+                        owner._fs_lock.release()
+                except ViewValidationError as exc:
+                    public_errors = {
+                        "filesystem-stale": HTTPStatus.CONFLICT,
+                        "filesystem-scene-entry-stale": HTTPStatus.CONFLICT,
+                        "workspace-binding-changed": HTTPStatus.CONFLICT,
+                        "filesystem-unknown": HTTPStatus.NOT_FOUND,
+                        "response-too-large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                        "comparison-unsupported": HTTPStatus.UNPROCESSABLE_ENTITY,
+                        "comparison-unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+                        "comparison-stale": HTTPStatus.CONFLICT,
+                        "comparison-busy": HTTPStatus.TOO_MANY_REQUESTS,
+                    }
+                    error(public_errors.get(exc.code, HTTPStatus.BAD_REQUEST),
+                          exc.code if exc.code in public_errors else "invalid-filesystem-query")
+                    return
+                except Exception:  # noqa: BLE001 - never expose filesystem exception text over HTTP
+                    error(HTTPStatus.SERVICE_UNAVAILABLE, "filesystem-unavailable")
+                    return
+                if isinstance(result, Attachment):
+                    self._send_bytes(HTTPStatus.OK, result.data, result.media_type,
+                                     extra_headers={"Content-Disposition": f'inline; filename="{result.name}"',
+                                                    "Content-Security-Policy": "sandbox"},
+                                     head_only=head_only)
+                else:
+                    self._send_bytes(HTTPStatus.OK, result, "application/json; charset=utf-8", head_only=head_only)
+
             def _handle_get(self, *, head_only: bool) -> None:
                 if not self._check_host():
                     return
-                parsed = urlsplit(self.path)
-                query = parse_qs(parsed.query)
+                origin = self.headers.get_all("Origin", [])
+                if origin and origin != [f"http://{self.headers['Host']}"]:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden-origin"}, head_only=head_only)
+                    return
+                try:
+                    parsed = urlsplit(self.path)
+                    query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=12)
+                except ValueError:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid-query"}, head_only=head_only)
+                    return
                 if not self._check_token(query):
                     return
                 path = parsed.path
+
+                if path.startswith("/fs/"):
+                    if len(self.path) > 2048 or self.headers.get("Sec-Fetch-Site") == "cross-site":
+                        self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden-request"}, head_only=head_only)
+                        return
+                    self._filesystem(path, query, head_only=head_only)
+                    return
 
                 if path in {"/", "/index.html"}:
                     live_cfg = {
@@ -416,90 +578,28 @@ class RoomViewServer:
                     return
 
                 if path == "/state.json":
+                    payload = owner.collector.current_payload()
+                    if owner._comparison is not None:
+                        payload["server"]["comparison"] = True
                     self._send_json(
                         HTTPStatus.OK,
-                        owner.collector.current_payload(),
+                        payload,
                         head_only=head_only,
                     )
                     return
 
-                if path == "/export-preview.json":
-                    include_att = query.get("no_attachments", ["0"])[0] not in {"1", "true"}
-                    snapshot_provider = _SnapshotProviderAdapter(owner.collector)
-                    try:
-                        artifact = build_offline_export(
-                            snapshot_provider,
-                            include_attachments=include_att,
-                            max_size_bytes=None,
-                            sensitivity_ack=True,
-                            workspace=owner._workspace,
-                            template_path=owner._template_path,
-                            policy=owner._policy,
-                        )
-                        snapshot_provider.assert_binding()
-                    except (ValueError, OSError):
-                        self._send_json(
-                            HTTPStatus.INTERNAL_SERVER_ERROR,
-                            {"ok": False, "error": "export-preview-failed"},
-                            head_only=head_only,
-                        )
+                if path in {"/export.html", "/export-preview.json"}:
+                    if not owner._export_lock.acquire(blocking=False):
+                        self._send_json(HTTPStatus.TOO_MANY_REQUESTS, {"ok": False, "error": "export-busy"}, head_only=head_only)
                         return
-                    self._send_json(
-                        HTTPStatus.OK,
-                        {
-                            "ok": True,
-                            "sensitivity": artifact.sensitivity.to_dict(),
-                            "accounting": artifact.accounting,
-                            "max_size_bytes": owner._max_export_bytes,
-                            "exceeds_max_size": len(artifact.html_bytes) > owner._max_export_bytes,
-                        },
-                        head_only=head_only,
-                    )
+                    try:
+                        self._export(path, query, head_only=head_only)
+                    finally:
+                        owner._export_lock.release()
                     return
 
-                if path == "/export.html":
-                    include_att = query.get("no_attachments", ["0"])[0] not in {"1", "true"}
-                    ack = query.get("ack", ["0"])[0] in {"1", "true", "yes"}
-                    snapshot_provider = _SnapshotProviderAdapter(owner.collector)
-                    try:
-                        artifact = build_offline_export(
-                            snapshot_provider,
-                            include_attachments=include_att,
-                            max_size_bytes=owner._max_export_bytes,
-                            sensitivity_ack=ack,
-                            workspace=owner._workspace,
-                            template_path=owner._template_path,
-                            policy=owner._policy,
-                        )
-                        snapshot_provider.assert_binding()
-                    except (SensitivityAckRequiredError, ExportSizeLimitError) as error:
-                        try:
-                            snapshot_provider.assert_binding()
-                        except (ValueError, OSError):
-                            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "export-failed"}, head_only=head_only)
-                            return
-                        status = HTTPStatus.CONFLICT if isinstance(error, SensitivityAckRequiredError) else HTTPStatus.REQUEST_ENTITY_TOO_LARGE
-                        self._send_json(status, error.result, head_only=head_only)
-                        return
-                    except (ValueError, OSError):
-                        self._send_json(
-                            HTTPStatus.INTERNAL_SERVER_ERROR,
-                            {"ok": False, "error": "export-failed"},
-                            head_only=head_only,
-                        )
-                        return
-                    disposition = (
-                        'attachment; filename="room-view-snapshot.html"'
-                        if "download" in query
-                        else 'inline; filename="room-view-snapshot.html"'
-                    )
-                    self._send_bytes(
-                        HTTPStatus.OK,
-                        artifact.html_bytes,
-                        "text/html; charset=utf-8",
-                        extra_headers={"Content-Disposition": disposition},
-                        head_only=head_only,
-                    )
+                if owner.collector._scoped_live and path.startswith(("/content/", "/attachments/")):
+                    self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not-found"}, head_only=head_only)
                     return
 
                 if path.startswith("/content/"):
@@ -588,7 +688,95 @@ class RoomViewServer:
                     head_only=head_only,
                 )
 
+            def _export(self, path: str, query: dict[str, list[str]], *, head_only: bool) -> None:
+                if path == "/export-preview.json":
+                    include_att = query.get("no_attachments", ["0"])[0] not in {"1", "true"}
+                    snapshot_provider = _SnapshotProviderAdapter(owner.collector)
+                    try:
+                        artifact = build_offline_export(
+                            snapshot_provider,
+                            include_attachments=include_att,
+                            max_size_bytes=None,
+                            sensitivity_ack=True,
+                            workspace=owner._workspace,
+                            template_path=owner._template_path,
+                            policy=owner._policy,
+                        )
+                        snapshot_provider.assert_binding()
+                    except (ValueError, OSError):
+                        self._send_json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {"ok": False, "error": "export-preview-failed"},
+                            head_only=head_only,
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "ok": True,
+                            "sensitivity": artifact.sensitivity.to_dict(),
+                            "accounting": artifact.accounting,
+                            "max_size_bytes": owner._max_export_bytes,
+                            "exceeds_max_size": len(artifact.html_bytes) > owner._max_export_bytes,
+                        },
+                        head_only=head_only,
+                    )
+                    return
+
+                if path == "/export.html":
+                    include_att = query.get("no_attachments", ["0"])[0] not in {"1", "true"}
+                    ack = query.get("ack", ["0"])[0] in {"1", "true", "yes"}
+                    snapshot_provider = _SnapshotProviderAdapter(owner.collector)
+                    try:
+                        artifact = build_offline_export(
+                            snapshot_provider,
+                            include_attachments=include_att,
+                            max_size_bytes=owner._max_export_bytes,
+                            sensitivity_ack=ack,
+                            workspace=owner._workspace,
+                            template_path=owner._template_path,
+                            policy=owner._policy,
+                        )
+                        snapshot_provider.assert_binding()
+                    except (SensitivityAckRequiredError, ExportSizeLimitError) as error:
+                        try:
+                            snapshot_provider.assert_binding()
+                        except (ValueError, OSError):
+                            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "export-failed"}, head_only=head_only)
+                            return
+                        status = HTTPStatus.CONFLICT if isinstance(error, SensitivityAckRequiredError) else HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+                        self._send_json(status, error.result, head_only=head_only)
+                        return
+                    except (ValueError, OSError):
+                        self._send_json(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            {"ok": False, "error": "export-failed"},
+                            head_only=head_only,
+                        )
+                        return
+                    disposition = (
+                        'attachment; filename="room-view-snapshot.html"'
+                        if "download" in query
+                        else 'inline; filename="room-view-snapshot.html"'
+                    )
+                    self._send_bytes(
+                        HTTPStatus.OK,
+                        artifact.html_bytes,
+                        "text/html; charset=utf-8",
+                        extra_headers={"Content-Disposition": disposition},
+                        head_only=head_only,
+                    )
+                    return
+
         self._httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        try:
+            self._filesystem = provider.open_filesystem() if self.collector._scoped_live else None
+        except BaseException:
+            self._httpd.server_close()
+            raise
+        self._fs_lock = threading.Lock()
+        self._fs_admission = threading.Lock()
+        self._export_lock = threading.Lock()
         self._httpd.daemon_threads = True
         self._serve_thread: threading.Thread | None = None
 
@@ -632,6 +820,10 @@ class RoomViewServer:
         self.collector.stop()
         self._httpd.shutdown()
         self._httpd.server_close()
+        with self._fs_lock:
+            if self._filesystem is not None:
+                self._filesystem.close()
+                self._filesystem = None
         if self._serve_thread is not None:
             self._serve_thread.join(timeout=2.0)
 
@@ -650,6 +842,7 @@ def serve_forever_cli(
     interval: float = 5.0,
     workspace: Path | None = None,
     require_token: bool = False,
+    comparison_socket: Path | None = None,
     json_mode: bool = False,
     max_seconds: float | None = None,
     stop_on_stdin_eof: bool = False,
@@ -661,6 +854,7 @@ def serve_forever_cli(
         interval_seconds=interval,
         workspace=workspace,
         require_token=require_token,
+        comparison_socket=comparison_socket,
     )
     info = {
         "ok": True,

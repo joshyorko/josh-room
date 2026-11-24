@@ -46,7 +46,7 @@
             b.classList.toggle('active', b.getAttribute('data-filter') === filterValue);
           });
           if (this.descriptor && this.state && this.layout) {
-            this.render(this.descriptor, this.state, this.layout);
+            this.render(this.descriptor, this.state, this.layout, this.scope);
           }
         });
         return btn;
@@ -61,14 +61,22 @@
     setSearch(query) {
       this.searchQuery = (query || '').trim().toLowerCase();
       if (this.descriptor && this.state && this.layout) {
-        this.render(this.descriptor, this.state, this.layout);
+        this.render(this.descriptor, this.state, this.layout, this.scope);
       }
     }
 
-    render(descriptor, state, layout) {
+    render(descriptor, state, layout, scope = {}) {
       this.descriptor = descriptor;
       this.state = state;
       this.layout = layout;
+      this.scope = scope;
+      const workspace = global.RoomViewLayout.isWorkspace(descriptor);
+      document.body.toggleAttribute('data-workspace', workspace);
+      if (this.filtersEl) this.filtersEl.hidden = workspace;
+      if (workspace) {
+        this._renderDirectory();
+        return;
+      }
       this._syncFilterChips(descriptor);
 
       const allLeaves = (layout && layout.allLeaves) || [];
@@ -165,6 +173,78 @@
       }
 
       this._renderPrintTable(descriptor, allLeaves);
+    }
+
+    _renderDirectory() {
+      const dir = this.layout.allTreeNodesById.get(this.scope.directoryId || 'root');
+      const path = dir?.path || '/';
+      const coverage = this.scope.coverage || dir?.fields?.coverage || 'Completeness unknown';
+      const folders = dir?.dirChildren || [];
+      const files = dir?.leafChildren || [];
+      const byName = (a, b) => (a.segmentLabel || a.label).localeCompare(b.segmentLabel || b.label) ||
+        a.id.localeCompare(b.id);
+      const children = [...folders.slice().sort(byName), ...files.slice().sort(byName)];
+      const rows = children.filter((node) => {
+        const label = node.segmentLabel || node.label;
+        return label.toLowerCase().includes(this.searchQuery);
+      });
+      const summary = `${path} · ${rows.length} of ${children.length} observed entries · ${this.scope.coverageLabel || coverage}`;
+      this.summaryEl.textContent = summary;
+      const activeId = this.contentEl.contains(document.activeElement)
+        ? document.activeElement.getAttribute('data-item-id') : null;
+      this.contentEl.textContent = '';
+      const table = document.createElement('table');
+      table.className = 'directory-list';
+      const caption = document.createElement('caption');
+      caption.className = 'sr-only';
+      caption.textContent = summary;
+      const head = document.createElement('thead');
+      const headings = document.createElement('tr');
+      for (const title of ['Name', 'Type', 'Size']) {
+        const th = document.createElement('th');
+        th.scope = 'col';
+        th.textContent = title;
+        headings.appendChild(th);
+      }
+      head.appendChild(headings);
+      const body = document.createElement('tbody');
+      let focusTarget;
+      for (const node of rows) {
+        const folder = node.nodeKind === 'directory';
+        const tr = document.createElement('tr');
+        if (node.id === this.scope.selectedId) tr.className = 'selected';
+        const name = document.createElement('td');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = node.segmentLabel || node.label;
+        button.title = node.path;
+        button.setAttribute('data-item-id', node.objectId);
+        button.addEventListener('click', () => this.callbacks.onSelectItem?.(node.objectId));
+        if (activeId === node.objectId) focusTarget = button;
+        name.appendChild(button);
+        const type = document.createElement('td');
+        type.textContent = folder ? 'Folder' : global.RoomViewLayout.getLegendEntry(this.descriptor, node.kind).label;
+        const size = document.createElement('td');
+        const bytes = node.fields?.file_bytes;
+        size.textContent = !folder && Number.isSafeInteger(bytes) && bytes >= 0 ? `${bytes} B` : '—';
+        tr.append(name, type, size);
+        body.appendChild(tr);
+      }
+      table.append(caption, head, body);
+      this.contentEl.appendChild(table);
+      if (!rows.length) {
+        const message = document.createElement('p');
+        message.textContent = this.searchQuery ? 'No matching observed entries in this folder.'
+          : coverage === 'complete' ? 'No visible entries in this folder.' : 'No entries available in this observation.';
+        this.contentEl.appendChild(message);
+      }
+      focusTarget?.focus({ preventScroll: true });
+      if (this.printTableEl) {
+        const copy = table.cloneNode(true);
+        copy.querySelector('caption').className = '';
+        copy.querySelectorAll('button').forEach((button) => button.replaceWith(button.textContent));
+        this.printTableEl.replaceChildren(copy);
+      }
     }
 
     _renderPrintTable(descriptor, allLeaves) {

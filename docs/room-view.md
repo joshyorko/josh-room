@@ -72,6 +72,19 @@ change the platform support of other Room commands.
 **Serve this Logical JAT…** remain Hauler files/registry projections. Historical
 nested JAT contents are not offered as live 3D workspaces.
 
+### Compare a live file with a recovery point
+
+From an enrolled Room launched by the native extension, select a file and open **Compare**.
+Choose the dated saved recovery point, then **Compare with live file**. The receipt
+identifies the Logical JAT, immutable workspace snapshot and tree. It shows saved
+and live byte counts, admitted SHA-256 digests and a text diff when available.
+A missing saved file is labeled as added in the live Room. Each result covers
+one file at the time of the request. Select Compare again to check a later edit.
+
+Portable snapshots do not support this selective comparison. The CLI workspace
+viewer, saved-manifest viewer and frozen HTML do not connect to recovery storage.
+Use **Browse Recovery Point…** in the native extension for historical browsing.
+
 ### Installed launcher verification
 
 `scripts/installed_room_view_acceptance.js` is a VS Code extension-test driver.
@@ -110,11 +123,13 @@ Built-in native providers:
 - `room --workspace <dir>` — bounded read-only workspace observation using Room
   identity, capture policy, descriptor-relative no-follow reads, mount checks,
   and typed sanitized previews. Requires safe descriptor-relative file APIs
-  (verified on Linux); unsupported platforms fail closed. Defaults: 250 nodes,
-  depth 6, 64 children per directory, 5 seconds, 16 KiB per preview and 512 KiB
-  total preview content. Caps produce explicit omissions, not complete coverage.
-  There is no continuation cursor yet. Incomplete sibling scans are withheld
-  rather than admitting names before all aliases are checked.
+  (verified on Linux). Live navigation starts at the root. Opening a folder
+  advances its own listing. Directory pages withhold names until the full sibling
+  scan can rule out ambiguous aliases. Files are read when selected.
+  Offline exports freeze a bounded observation (defaults of 250 nodes, six
+  levels, 64 children per directory, five seconds, 16 KiB per preview and
+  512 KiB of preview content). Each observed directory carries its coverage.
+  A partial or unexamined directory may have additional entries.
 - `capsule-manifest --manifest <file.json>` — validates a saved Logical JAT
   descriptor and displays recorded workspace/component anchors. This validates
   manifest structure, not the existence or digest of underlying archive bytes;
@@ -205,6 +220,55 @@ Key validation rules:
   upstream exception strings; instead `/state.json` records a sanitized `stale`
   object (`reason: "collector-error"`).
 
+### Live workspace queries
+
+Native workspace sessions advertise `server.filesystem` in `/state.json`.
+Start with `GET /fs/list?id=root`. Use the returned generation, object IDs and
+continuation cursor for subsequent calls. A page reports its directory,
+ancestors, entries, coverage and observed counts. During sibling validation a
+partial page can contain zero entries. Continue while a cursor is present.
+A complete listing with zero admitted entries means there are no visible
+children under the current policy. Boundaries and inaccessible listings carry
+their own status. Reopen the directory if the server revokes its generation.
+
+In live 3D, `GET /fs/list?id=<issued-id>&generation=<generation>&sample=1`
+observes a single sibling-scan batch and returns at most eight metadata entries.
+Samples allocate no continuation. A partial sample can show zero children while
+alias validation is unfinished. The landscape samples up to three direct folders,
+one grandchild, the parent and a neighboring branch. Grid, tree, inspector,
+and export retain their own scope. Opening a sampled object runs the usual
+identity-bound listing or selected preview. Offline views use embedded data.
+
+`/fs/inspect` returns metadata for an issued ID. `/fs/preview` reads the
+selected object under the current workspace binding and policy. Binary previews
+use `/fs/attachment` with the admitted name and digest. The server rejects
+arbitrary paths. These routes operate only on the live native workspace.
+File sizes are reported in bytes. Block heights use a bounded visual scale.
+
+### Find a Room file and compare its saved version
+
+Start with the directory that looks relevant. Its connected platforms show
+containment. Select a candidate to see its path, type, size and available
+reader. Search can stay scoped to the directory where you started even after
+you open a match elsewhere. Previous and Next move through observed matches.
+Continue a partial search to examine more entries. An unexamined branch has
+unknown contents. Grid and the keyboard tree open the same admitted objects.
+
+In a natively launched Room, open **Compare saved version**, choose a dated
+recovery point and compare it with the selected live file. The observation
+time comes from the local comparison. A file absent at the saved point appears
+as added. Equal digests establish identical bytes; a size difference alone can
+establish a change. If equal-sized files exceed the digest limit, the result is
+unknown. The reader explains a withheld or size-limited diff. The result
+applies to that path and point. Reopening the comparison verifies the selected
+point and live observation before restoring its result. To inspect that point
+in native Time Machine, choose the Room and dated point again in VS Code, then
+use **Josh Room: Browse Recovery Point…**. Room View cannot launch that command.
+
+After hydration the landscape shows the files currently present in the Room.
+Opening a directory does not establish which of its files existed at any
+particular saved point. Compare the selected path to answer that question.
+
 ## Embedded `room-view-v1` SQLite schema
 
 ```sql
@@ -251,23 +315,25 @@ into a structured comparison view with scripts/iframes/objects stripped.
 
 ## 3D FSN landscape, accessibility, and size accounting
 
-- **Landscapes**: full-bleed **Night** (default: zenith `#04060c`, horizon
-  `#1a2840`, matching `FogExp2`, anti-aliased infinite `fwidth` world grid) and
-  FSN-inspired **Grass** (`#0087d5` → `#91fff0` sky, `#0f4f1a` → `#418a59`
-  ground). Uses `NeutralToneMapping` and FSN-style restraint (~0.6× unselected,
-  1.0× selected).
+- **Landscapes**: Night and Grass use a plain shaded floor, rectangular
+  directory platforms and orthogonal parent-child wires. A 42-degree vertical
+  camera frames the selected branch. Focus flights take 950 ms with motion
+  enabled. Opening a file leaves its spotlight visible alongside its reader.
+  Escape closes the reader before moving up. The Compare tab puts the saved
+  and current versions above their diff, with exact provenance available on demand.
 - **Hierarchy & scale**: foreground root pedestal → branching group pedestals →
   stage pedestals connected by parent-child ground wires → upright uniform-footprint
   file blocks whose heights represent **5 quantile bins** of the metric. World
   geometry stays constant in size as item counts grow: pedestals with >16 items
-  show the 11 highest-interest items (failures first, then metric) plus an
+  show a subset (stable file order for filesystem nodes, outcome and metric
+  priority for pipeline items) plus an
   expandable `+N more` stacked-outcome block; groups with >50 items collapse
   into stage summary blocks until focused. Distance LOD simplifies far blocks
   and pedestals with ~15% hysteresis.
 - **Spotlight v2 & A/B baseline**: persistent `SpotLight` (never toggled at
   click time; shaders precompiled at boot) with a `SpotLight.map` radial pool,
   `FrontSide` apex-faded dithered volumetric beam cone, world dimming (lights,
-  wires, grid, fog) over 450 ms, and **no literal lamp/fixture**. Baseline
+  wires, floor, fog) over 450 ms, and **no literal lamp/fixture**. Baseline
   prototype parameters remain selectable (`Spot: base` / `?spotlight=baseline`)
   for side-by-side comparison.
 - **Accessibility & fallback**: `<canvas aria-hidden="true">` paired with a
@@ -304,8 +370,8 @@ grid and SQL retain nodes hidden by 3D aggregation or LOD.
 `PreviewContent` stores a bounded typed body, slot, title, language, summary and
 status (`available`, `unavailable`, `redacted`, `omitted`). `ObjectLink` stores a
 validated relation and target ID. Preview and relationship data passes the same
-mandatory sanitizer as descriptor/state data. Live content uses only validated
-`GET /content/<id>/<slot>`; there is no arbitrary path route. Offline snapshots
+mandatory sanitizer as descriptor/state data. Generic providers serve validated preview slots through
+`GET /content/<id>/<slot>`. The live native workspace uses the scoped queries above. Offline snapshots
 embed the same content and links with zero network.
 
 Additive SQLite tables in `room-view-v1` are `nodes` (including computed `path`),

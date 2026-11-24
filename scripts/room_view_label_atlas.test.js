@@ -9,11 +9,15 @@ const zlib = require('node:zlib');
 
 const view = path.join(__dirname, '../src/josh_room/view');
 
-test('live label textures follow the current layout across polls, theme changes and page disposal', async () => {
+async function bundledThree() {
   const template = fs.readFileSync(path.join(view, 'assets/room-view-template.html'), 'utf8');
   const blob = template.match(/id="lib-three"[^>]*>([^<]+)</)[1];
-  const moduleBytes = zlib.gunzipSync(Buffer.from(blob, 'base64'));
-  const three = await import('data:text/javascript;base64,' + moduleBytes.toString('base64'));
+  const bytes = zlib.gunzipSync(Buffer.from(blob, 'base64'));
+  return import('data:text/javascript;base64,' + bytes.toString('base64'));
+}
+
+test('live label textures follow the current layout across polls, theme changes and page disposal', async () => {
+  const three = await bundledThree();
   const liveTextures = new Set();
   const materials = new Set();
   const THREE = {
@@ -48,6 +52,7 @@ test('live label textures follow the current layout across polls, theme changes 
   const ctx = {
     createRadialGradient: () => ({ addColorStop() {} }),
     createLinearGradient: () => ({ addColorStop() {} }),
+    measureText: text => ({ width: text.length * 7.5 }), scale() {},
     clearRect() {}, fillRect() {}, beginPath() {}, arc() {}, roundRect() {}, fill() {}, stroke() {}, fillText() {},
   };
   const document = { createElement: () => ({ getContext: () => ctx }) };
@@ -56,6 +61,7 @@ test('live label textures follow the current layout across polls, theme changes 
     vm.runInContext(fs.readFileSync(path.join(view, 'viewer', name + '.js'), 'utf8'), context);
   }
   const scene = new window.RoomViewScene3D.FsnScene3D(THREE, new EventTarget(), {});
+  assert.equal(scene.camera.fov, 42);
   const lightingTextures = new Set(liveTextures);
   const update = (tick) => {
     const nodes = [
@@ -82,9 +88,22 @@ test('live label textures follow the current layout across polls, theme changes 
     assert.notEqual(current, stable);
     if (highlighted) assert.equal(current, highlighted);
     highlighted = current;
-    // Root plus normal/highlighted variants for the two distinct file labels.
-    assert.equal(liveTextures.size - lightingTextures.size, 5);
-    assert.equal(scene.labelAtlas.cache.size, 5);
+    const visible = scene.labelPool.filter(label => label.mesh.visible);
+    assert.ok(visible.includes(shared[0]), 'selected file is the first collision priority');
+    for (const label of visible) {
+      const r = label.screenRect;
+      assert.ok(Math.abs(r.right - r.left - label.width) < 0.01);
+      assert.ok(Math.abs(r.bottom - r.top - label.height) < 0.01);
+      assert.ok(r.left >= 0 && r.top >= 0 && r.right <= 1280 && r.bottom <= 720);
+      assert.ok(label.mesh.material.depthTest, 'foreground geometry occludes labels');
+      for (const other of visible.filter(item => item !== label)) {
+        const b = other.screenRect;
+        assert.ok(r.right <= b.left || b.right <= r.left || r.bottom <= b.top || b.bottom <= r.top);
+      }
+    }
+    const textureCount = 3 + visible.filter(label => label.nodeId === scene.selectedNodeId || label.nodeId === scene.hoveredNodeId).length;
+    assert.equal(liveTextures.size - lightingTextures.size, textureCount);
+    assert.equal(scene.labelAtlas.cache.size, textureCount);
   }
   scene.setTheme('grass');
   assert.equal(scene.labelAtlas.cache.size, 3);
@@ -97,4 +116,192 @@ test('live label textures follow the current layout across polls, theme changes 
   assert.equal(scene.labelGroup.children.length, 0);
   assert.equal(scene.labelAtlas.cache.size, 0);
   assert.deepEqual(liveTextures, lightingTextures);
+});
+
+test('camera frames expanded deck corners and recenters the selected file beside the open reader', async () => {
+  const THREE = await bundledThree();
+  const window = {};
+  const context = vm.createContext({ window, performance });
+  vm.runInContext(fs.readFileSync(path.join(view, 'viewer', 'scene3d.js'), 'utf8'), context);
+  const scene = Object.create(window.RoomViewScene3D.FsnScene3D.prototype);
+  vm.runInContext(fs.readFileSync(path.join(view, 'viewer', 'layout.js'), 'utf8'), context);
+  const nodes = [{ id: 'root', label: '/', node_kind: 'directory' }];
+  for (let i = 0; i < 7; i++) {
+    const id = 'd' + i;
+    nodes.push({ id, parent_id: 'root', label: id, node_kind: 'directory' });
+    for (let j = 0; j < 8; j++) {
+      nodes.push({ id: id + '-' + j, parent_id: id, label: 'dir-' + j, node_kind: 'directory' });
+    }
+  }
+  const layout = window.RoomViewLayout.buildFsnLayout({}, { nodes });
+  const overlay = (left, top, right, bottom) => ({
+    dataset: {}, getBoundingClientRect: () => ({ left, top, right, bottom, width: right-left, height: bottom-top }),
+  });
+  Object.assign(scene, { THREE, frameOverlays: [overlay(0, 0, 1280, 95), overlay(0, 752, 1280, 800),
+    overlay(8, 100, 220, 740), overlay(870, 98, 1272, 735)], requestRender() {},
+    camera: new THREE.PerspectiveCamera(42, 1.6, 0.25, 650),
+    canvas: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 800 }) },
+  });
+  scene._updateFraming();
+  assert.deepEqual({...scene.safeRect}, { left: 226, top: 101, right: 864, bottom: 746, width: 638, height: 645 });
+  scene.layout = layout;
+  const assertVisible = (x,y,z) => {
+    const ndc = new THREE.Vector3(x,y,z).project(scene.camera);
+    const sx = (ndc.x + 1) * 640;
+    const sy = (1 - ndc.y) * 400;
+    assert.ok(sx >= scene.safeRect.left && sx <= scene.safeRect.right);
+    assert.ok(sy >= scene.safeRect.top && sy <= scene.safeRect.bottom);
+  };
+  for (const id of ['root', 'node/d6']) {
+    const directory = layout.nodeById.get(id);
+    const pose = scene._directoryPose(directory);
+    scene.camera.position.copy(pose.pos);
+    scene.camera.lookAt(pose.target);
+    scene.camera.updateMatrixWorld();
+    for (const p of layout.pedestals.filter(p => p.id === id || p.parentId === id || p.id === directory.parentId)) {
+      for (const x of [p.x-p.width/2, p.x+p.width/2]) {
+        for (const z of [p.z-p.depth/2, p.z+p.depth/2]) assertVisible(x,p.height,z);
+      }
+    }
+    for (const wire of layout.wires.filter(w => w.childId === id || w.parentId === id)) {
+      for (const point of wire.points) assertVisible(...point);
+    }
+  }
+  Object.assign(scene, { manualCamera: true, overviewTarget: new THREE.Vector3(), overviewPos: new THREE.Vector3() });
+  const openReader = scene.frameOverlays.pop();
+  scene._updateFraming();
+  assert.equal(scene.safeRect.right, 1280);
+  assert.equal(scene.safeRect.left, 226);
+  scene.frameOverlays.push(openReader);
+  scene._updateFraming();
+  assert.equal(scene.safeRect.right, 864);
+  // A detached map must use its complete output area even while the reader is open.
+  const interactive = scene.camera;
+  Object.assign(scene, { scene: new THREE.Scene(), groundMesh: new THREE.Object3D(),
+    _updateBlockMatrices() {}, _updateFloorLabels() {}, renderer: { render(world, camera) {
+      assert.notEqual(interactive, camera);
+      assert.equal(camera.view.enabled, false);
+      const b = scene.layout.bounds;
+      for (const x of [b.minX, b.maxX]) {
+        for (const z of [b.minZ, b.maxZ]) {
+          const projected = new THREE.Vector3(x,0,z).project(camera);
+          assert.ok(Math.abs(projected.x) < 1 && Math.abs(projected.y) < 1);
+        }
+      }
+    } },
+  });
+  scene.canvas.toDataURL = () => 'synthetic';
+  assert.equal(scene.captureTopDownDataUrl(), 'synthetic');
+  assert.equal(scene.camera, interactive);
+  assert.equal(scene.safeRect.right, 864);
+  // Portrait split: only the left 120 CSS pixels are available, along the full height.
+  scene.canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 540, height: 1000 });
+  scene.frameOverlays = [overlay(126, 0, 540, 1000)];
+  scene._updateFraming();
+  const narrow = scene._directoryPose(layout.nodeById.get('root'));
+  scene.camera.position.copy(narrow.pos);
+  scene.camera.lookAt(narrow.target);
+  scene.camera.updateMatrixWorld();
+  assert.equal(scene.safeRect.width, 120);
+  for (const p of layout.pedestals.filter(p => p.parentId === 'root')) {
+    for (const x of [p.x - p.width / 2, p.x + p.width / 2]) {
+      const ndc = new THREE.Vector3(x, p.height, p.z).project(scene.camera);
+      assert.ok((ndc.x + 1) * 270 < 120 && ndc.x >= -1 && ndc.z < 1);
+    }
+  }
+  const floorTarget = {};
+  scene.pickables = [floorTarget];
+  scene.beamV2Mesh = { visible: true };
+  scene.pointerNdc = new THREE.Vector2();
+  scene.raycaster = {
+    setFromCamera() {}, intersectObjects(objects) { assert.deepEqual(objects, [floorTarget]); return []; },
+  };
+  assert.equal(scene._pickAtEvent({ clientX: 800, clientY: 300 }), null);
+  const { pos, target } = scene._directoryPose(layout.nodeById.get('root'));
+  Object.assign(scene, { camPos: pos, camTarget: target, requestRender() {}, cancelIntroAndTour() {},
+    _directoryWaypoints: () => [], reducedMotion: false });
+  const destination = pos.clone().add(new THREE.Vector3(3, 0, 4));
+  scene._flyTo(destination, target);
+  assert.equal(scene.flight.durationMs, 950);
+  scene.reducedMotion = true;
+  scene._flyTo(destination, target);
+  assert.equal(scene.flight, null);
+  assert.equal(scene.camPos.distanceTo(destination), 0);
+});
+
+test('manual camera pose follows authorized node identity through navigation and layout moves', async () => {
+  const THREE = await bundledThree();
+  const window = {};
+  const context = vm.createContext({ window, performance });
+  for (const name of ['scene3d', 'layout']) vm.runInContext(fs.readFileSync(path.join(view, 'viewer', name + '.js'), 'utf8'), context);
+  const scene = Object.create(window.RoomViewScene3D.FsnScene3D.prototype);
+  const makeLayout = labels => window.RoomViewLayout.buildFsnLayout({}, { nodes: [
+    { id: 'root', node_kind: 'directory', label: '/' },
+    ...labels.map(id => ({ id, label: id, node_kind: 'directory', parent_id: 'root' })),
+    { id: 'a-file', label: 'actual.txt', parent_id: 'a', node_kind: 'file' },
+  ] });
+  Object.assign(scene, { THREE, camera: new THREE.PerspectiveCamera(42, 1.6, 0.25, 650),
+    camPos: new THREE.Vector3(), camTarget: new THREE.Vector3(), cameraMemory: new Map(),
+    focusedPedestalId: 'node/a', manualCamera: true, selectedNodeId: 'node/a',
+    layout: makeLayout(['a','b']), spotState: {targetActive:false}, reducedMotion: true,
+    worldGroup: new THREE.Group(), searchMatches: new Set(), _blockLodState: new Map(),
+    requestRender() {}, _updateColorsAndSelection() {}, clearSpotlight() {},
+    _clearWorldGroup() {}, _buildWorldGeometry() {}, _computeOverviewCamera() {}, _updateBlockMatrices() {},
+  });
+  const anchor = n => new THREE.Vector3(n.x, n.y, n.z);
+  const eye = new THREE.Vector3(4, 8, 19);
+  const look = new THREE.Vector3(1, 1, -2);
+  const a = scene.layout.nodeById.get('node/a');
+  scene.camPos.copy(anchor(a)).add(eye);
+  scene.camTarget.copy(anchor(a)).add(look);
+  const firstDirection = scene.camPos.clone().sub(scene.camTarget).normalize();
+  scene.setLayout(makeLayout(['a','b','c']), { preserveCamera: true, navigationTargetId: 'node/b' });
+  scene.focusNode('node/b', { instant: true });
+  assert.ok(scene.camPos.clone().sub(scene.camTarget).normalize().distanceTo(firstDirection) < 1e-6);
+  scene.camTarget.x += 2;
+  scene.focusNode('node/a', { instant: true });
+  for (const [pose, delta] of [[scene.camPos,eye], [scene.camTarget,look]]) {
+    assert.ok(pose.clone().sub(anchor(scene.layout.nodeById.get('node/a'))).distanceTo(delta) < 1e-6);
+  }
+  scene.setLayout(makeLayout(['a','b','c','d']), { preserveCamera: true });
+  assert.ok(scene.camPos.clone().sub(anchor(scene.layout.nodeById.get('node/a'))).distanceTo(eye) < 1e-6);
+  scene.setSearchMatches(['a','a-file','missing'], 'a-file', [['missing', ['root','b','unseen']]]);
+  const marker = scene.searchLines;
+  const count = marker.geometry.getAttribute('position').count;
+  assert.equal(count, 18, 'two direct match outlines and one front edge for an observed descendant');
+  assert.equal(scene.searchBranches.has('b'), true);
+  assert.equal(marker.isLight, undefined);
+  scene.setLayout(makeLayout(['a','b']), { preserveCamera: true });
+  assert.notEqual(scene.searchLines, marker);
+  scene.setSearchMatches([], null);
+  assert.equal(scene.searchLines, null);
+});
+
+test('extreme incoming wire cannot shrink a focused directory to a dot; a file pose includes nearby real siblings', async () => {
+  const THREE = await bundledThree();
+  const window = {};
+  const context = vm.createContext({ window, performance });
+  vm.runInContext(fs.readFileSync(path.join(view, 'viewer', 'scene3d.js'), 'utf8'), context);
+  const scene = Object.create(window.RoomViewScene3D.FsnScene3D.prototype);
+  const pad = (id,x,parentId) => ({id,x,y:0,z:0,width:6,height:1,depth:4,parentId,nodeKind:'directory'});
+  const parent = pad('root', -1000);
+  const child = pad('child', 0, 'root');
+  const block = (id,x) => ({id,x,y:1,z:0,width:1,height:3,depth:1,parentId:'child',nodeType:'item'});
+  const file = block('file', -2);
+  const adjacent = block('adjacent', 1);
+  const distant = block('distant', 200);
+  scene.layout = {nodeById:new Map([parent,child,file,adjacent,distant].map(n=>[n.id,n])),pedestals:[parent,child],
+    blocks:[file,adjacent],summaryBlocks:[],wires:[{parentId:'root',childId:'child',
+      points:[[-1000,0,0],[-1000,0,4],[0,0,4],[0,0,2]]}]};
+  const points = [];
+  scene.THREE = THREE;
+  scene._fitPoints = p => points.push(...p);
+  scene._directoryPose(child);
+  assert.ok(points.every(([x])=>Math.abs(x)<20));
+  assert.ok(points.some(([x,y,z])=>x===0 && z===4), 'incoming wire bend remains in framing');
+  points.length = 0;
+  scene.layout.blocks.push(distant);
+  scene._filePose(file);
+  assert.ok(points.some(([x,y])=>x===adjacent.x+0.5 && y===adjacent.y+adjacent.height));
+  assert.ok(points.every(([x])=>Math.abs(x)<20));
 });

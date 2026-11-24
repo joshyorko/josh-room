@@ -1,0 +1,2602 @@
+{
+  "baseline": "1267443",
+  "candidate": "1b79fc630ceb3587ff801e2adcf6c6687a34ac10",
+  "fixture": "Enrolled synthetic MinIO Room with seven nonempty top-level directories, four direct files in src, three src subdirectories, and a four-level nested branch. Live src/main.py returns 3, the selected immutable version returns 1. Additional paths were created after the historical saves.",
+  "pin": "d24134b877c34e5e964d9b298fdc6c42",
+  "method": "Linux headless Chrome with SwiftShader. Real pointer events on raycast-hit src and main.py, then explicit controls for reading and saved comparison. Identical fixture, default camera for each stage, viewports in CSS pixels. Capture after camera settlement. Rendered geometry only. Rectangle edges from projected cuboid corners, label edges from rendered meshes. Occupancy is the area of the projected bounding rectangle divided by viewport area. AABB intersections are conservative.",
+  "runs": {
+    "before": [
+      {
+        "stage": "overview",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          8,
+          1,
+          7
+        ],
+        "root": {
+          "rect": [
+            514,
+            552,
+            766,
+            642
+          ],
+          "areaPct": 2.21,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            885,
+            445,
+            1020,
+            482
+          ],
+          "areaPct": 0.49,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          52,
+          25,
+          25,
+          25,
+          25,
+          25,
+          25,
+          25
+        ]
+      },
+      {
+        "stage": "overview",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          8,
+          1,
+          7
+        ],
+        "root": {
+          "rect": [
+            514,
+            552,
+            766,
+            642
+          ],
+          "areaPct": 2.21,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            885,
+            445,
+            1020,
+            482
+          ],
+          "areaPct": 0.49,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          52,
+          25,
+          25,
+          25,
+          25,
+          25,
+          25,
+          25
+        ]
+      },
+      {
+        "stage": "overview",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          8,
+          1,
+          7
+        ],
+        "root": {
+          "rect": [
+            790,
+            746,
+            1130,
+            867
+          ],
+          "areaPct": 1.98,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            1290,
+            601,
+            1474,
+            651
+          ],
+          "areaPct": 0.44,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          71,
+          34,
+          34,
+          34,
+          34,
+          34,
+          34,
+          34
+        ]
+      },
+      {
+        "stage": "overview",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          8,
+          1,
+          7
+        ],
+        "root": {
+          "rect": [
+            790,
+            746,
+            1130,
+            867
+          ],
+          "areaPct": 1.98,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            1290,
+            601,
+            1474,
+            651
+          ],
+          "areaPct": 0.44,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          71,
+          34,
+          34,
+          34,
+          34,
+          34,
+          34,
+          34
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -1068,
+            960,
+            1182,
+            3263
+          ],
+          "areaPct": 506.03,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            441,
+            506,
+            723,
+            638
+          ],
+          "areaPct": 3.64,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            486,
+            317,
+            554,
+            573
+          ],
+          "areaPct": 1.7,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 7,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          91,
+          26,
+          27,
+          28,
+          25,
+          30,
+          25
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -1068,
+            960,
+            1182,
+            3263
+          ],
+          "areaPct": 506.03,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            441,
+            506,
+            723,
+            638
+          ],
+          "areaPct": 3.64,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            486,
+            317,
+            554,
+            573
+          ],
+          "areaPct": 1.7,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 7,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          91,
+          26,
+          27,
+          28,
+          25,
+          30,
+          25
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -1346,
+            1296,
+            1692,
+            4405
+          ],
+          "areaPct": 455.49,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            692,
+            683,
+            1072,
+            862
+          ],
+          "areaPct": 3.28,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            751,
+            428,
+            844,
+            774
+          ],
+          "areaPct": 1.55,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          122,
+          35,
+          37,
+          38,
+          34,
+          41,
+          43,
+          33
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -1346,
+            1296,
+            1692,
+            4405
+          ],
+          "areaPct": 455.49,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            692,
+            683,
+            1072,
+            862
+          ],
+          "areaPct": 3.28,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            751,
+            428,
+            844,
+            774
+          ],
+          "areaPct": 1.55,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          122,
+          35,
+          37,
+          38,
+          34,
+          41,
+          43,
+          33
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -138,
+            791,
+            1308,
+            2002
+          ],
+          "areaPct": 171.01,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            567,
+            471,
+            827,
+            590
+          ],
+          "areaPct": 3.02,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            614,
+            293,
+            665,
+            528
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          770,
+          104,
+          1270,
+          792
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 3,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          85,
+          26,
+          27,
+          28,
+          23
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -138,
+            791,
+            1308,
+            2002
+          ],
+          "areaPct": 171.01,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            567,
+            471,
+            827,
+            590
+          ],
+          "areaPct": 3.02,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            614,
+            293,
+            665,
+            528
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          770,
+          104,
+          1270,
+          792
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 3,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          85,
+          26,
+          27,
+          28,
+          23
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -90,
+            1068,
+            1862,
+            2703
+          ],
+          "areaPct": 153.91,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            861,
+            636,
+            1213,
+            797
+          ],
+          "areaPct": 2.73,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            925,
+            395,
+            993,
+            713
+          ],
+          "areaPct": 1.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1410,
+          104,
+          1910,
+          1072
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          115,
+          34,
+          36,
+          39,
+          32
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -90,
+            1068,
+            1862,
+            2703
+          ],
+          "areaPct": 153.91,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            861,
+            636,
+            1213,
+            797
+          ],
+          "areaPct": 2.73,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            925,
+            395,
+            993,
+            713
+          ],
+          "areaPct": 1.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1410,
+          104,
+          1910,
+          1072
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          115,
+          34,
+          36,
+          39,
+          32
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -138,
+            791,
+            1308,
+            2002
+          ],
+          "areaPct": 171.01,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            567,
+            471,
+            827,
+            590
+          ],
+          "areaPct": 3.02,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            614,
+            293,
+            665,
+            528
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          770,
+          104,
+          1270,
+          792
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 3,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          85,
+          26,
+          27,
+          28,
+          23
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -138,
+            791,
+            1308,
+            2002
+          ],
+          "areaPct": 171.01,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            567,
+            471,
+            827,
+            590
+          ],
+          "areaPct": 3.02,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            614,
+            293,
+            665,
+            528
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          770,
+          104,
+          1270,
+          792
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 3,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          85,
+          26,
+          27,
+          28,
+          23
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -90,
+            1068,
+            1862,
+            2703
+          ],
+          "areaPct": 153.91,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            861,
+            636,
+            1213,
+            797
+          ],
+          "areaPct": 2.73,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            925,
+            395,
+            993,
+            713
+          ],
+          "areaPct": 1.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1410,
+          104,
+          1910,
+          1072
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          115,
+          34,
+          36,
+          39,
+          32
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -90,
+            1068,
+            1862,
+            2703
+          ],
+          "areaPct": 153.91,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            861,
+            636,
+            1213,
+            797
+          ],
+          "areaPct": 2.73,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            925,
+            395,
+            993,
+            713
+          ],
+          "areaPct": 1.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1410,
+          104,
+          1910,
+          1072
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          115,
+          34,
+          36,
+          39,
+          32
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -138,
+            791,
+            1308,
+            2002
+          ],
+          "areaPct": 171.01,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            567,
+            471,
+            827,
+            590
+          ],
+          "areaPct": 3.02,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            614,
+            293,
+            665,
+            528
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          770,
+          104,
+          1270,
+          792
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 3,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          85,
+          26,
+          27,
+          28,
+          23
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -138,
+            791,
+            1308,
+            2002
+          ],
+          "areaPct": 171.01,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            567,
+            471,
+            827,
+            590
+          ],
+          "areaPct": 3.02,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            614,
+            293,
+            665,
+            528
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          770,
+          104,
+          1270,
+          792
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 3,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          85,
+          26,
+          27,
+          28,
+          23
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -90,
+            1068,
+            1862,
+            2703
+          ],
+          "areaPct": 153.91,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            861,
+            636,
+            1213,
+            797
+          ],
+          "areaPct": 2.73,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            925,
+            395,
+            993,
+            713
+          ],
+          "areaPct": 1.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1410,
+          104,
+          1910,
+          1072
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          115,
+          34,
+          36,
+          39,
+          32
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          5,
+          4,
+          4
+        ],
+        "root": {
+          "rect": [
+            -90,
+            1068,
+            1862,
+            2703
+          ],
+          "areaPct": 153.91,
+          "hudOverlap": false,
+          "readerOverlap": true,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            861,
+            636,
+            1213,
+            797
+          ],
+          "areaPct": 2.73,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            925,
+            395,
+            993,
+            713
+          ],
+          "areaPct": 1.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1410,
+          104,
+          1910,
+          1072
+        ],
+        "visible_labels": 5,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          115,
+          34,
+          36,
+          39,
+          32
+        ]
+      }
+    ],
+    "after": [
+      {
+        "stage": "overview",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          9,
+          6,
+          8
+        ],
+        "root": {
+          "rect": [
+            524,
+            522,
+            756,
+            585
+          ],
+          "areaPct": 1.43,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            911,
+            441,
+            1049,
+            475
+          ],
+          "areaPct": 0.46,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 9,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "overview",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          9,
+          6,
+          8
+        ],
+        "root": {
+          "rect": [
+            524,
+            522,
+            756,
+            585
+          ],
+          "areaPct": 1.43,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            911,
+            441,
+            1049,
+            475
+          ],
+          "areaPct": 0.46,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 9,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "overview",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          9,
+          6,
+          8
+        ],
+        "root": {
+          "rect": [
+            773,
+            699,
+            1147,
+            802
+          ],
+          "areaPct": 1.86,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            1374,
+            572,
+            1590,
+            624
+          ],
+          "areaPct": 0.54,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 10,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "overview",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          9,
+          6,
+          8
+        ],
+        "root": {
+          "rect": [
+            773,
+            699,
+            1147,
+            802
+          ],
+          "areaPct": 1.86,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            1374,
+            572,
+            1590,
+            624
+          ],
+          "areaPct": 0.54,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": null,
+        "reader": null,
+        "visible_labels": 10,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            69,
+            638,
+            419,
+            744
+          ],
+          "areaPct": 3.62,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            711,
+            501,
+            879,
+            559
+          ],
+          "areaPct": 0.95,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            740,
+            384,
+            775,
+            533
+          ],
+          "areaPct": 0.51,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 9,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            69,
+            638,
+            419,
+            744
+          ],
+          "areaPct": 3.62,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            711,
+            501,
+            879,
+            559
+          ],
+          "areaPct": 0.95,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            740,
+            384,
+            775,
+            533
+          ],
+          "areaPct": 0.51,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 9,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            112,
+            862,
+            637,
+            1022
+          ],
+          "areaPct": 4.05,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            1062,
+            660,
+            1304,
+            744
+          ],
+          "areaPct": 0.98,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            1104,
+            492,
+            1155,
+            705
+          ],
+          "areaPct": 0.52,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 10,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "branch",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            112,
+            862,
+            637,
+            1022
+          ],
+          "areaPct": 4.05,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "branch": {
+          "rect": [
+            1062,
+            660,
+            1304,
+            744
+          ],
+          "areaPct": 0.98,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            1104,
+            492,
+            1155,
+            705
+          ],
+          "areaPct": 0.52,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": null,
+        "visible_labels": 10,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -733,
+            721,
+            36,
+            965
+          ],
+          "areaPct": 18.32,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            581,
+            461,
+            818,
+            556
+          ],
+          "areaPct": 2.2,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            620,
+            297,
+            660,
+            514
+          ],
+          "areaPct": 0.85,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          830,
+          626,
+          1270,
+          792
+        ],
+        "visible_labels": 7,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -733,
+            721,
+            36,
+            965
+          ],
+          "areaPct": 18.32,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            581,
+            461,
+            818,
+            556
+          ],
+          "areaPct": 2.2,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            620,
+            297,
+            660,
+            514
+          ],
+          "areaPct": 0.85,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          830,
+          626,
+          1270,
+          792
+        ],
+        "visible_labels": 7,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -1821,
+            1152,
+            -133,
+            1712
+          ],
+          "areaPct": 45.59,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            863,
+            660,
+            1255,
+            821
+          ],
+          "areaPct": 3.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            926,
+            393,
+            994,
+            751
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1470,
+          906,
+          1910,
+          1072
+        ],
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "selected",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -1821,
+            1152,
+            -133,
+            1712
+          ],
+          "areaPct": 45.59,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            863,
+            660,
+            1255,
+            821
+          ],
+          "areaPct": 3.04,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            926,
+            393,
+            994,
+            751
+          ],
+          "areaPct": 1.17,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1470,
+          906,
+          1910,
+          1072
+        ],
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -342,
+            598,
+            177,
+            756
+          ],
+          "areaPct": 8.01,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            592,
+            407,
+            785,
+            482
+          ],
+          "areaPct": 1.41,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            623,
+            270,
+            657,
+            448
+          ],
+          "areaPct": 0.59,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          530,
+          547,
+          1270,
+          792
+        ],
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -342,
+            598,
+            177,
+            756
+          ],
+          "areaPct": 8.01,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            592,
+            407,
+            785,
+            482
+          ],
+          "areaPct": 1.41,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            623,
+            270,
+            657,
+            448
+          ],
+          "areaPct": 0.59,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          530,
+          547,
+          1270,
+          792
+        ],
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -1250,
+            1015,
+            31,
+            1429
+          ],
+          "areaPct": 25.58,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            873,
+            607,
+            1224,
+            749
+          ],
+          "areaPct": 2.4,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            930,
+            365,
+            990,
+            687
+          ],
+          "areaPct": 0.93,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1170,
+          827,
+          1910,
+          1072
+        ],
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "read",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -1250,
+            1015,
+            31,
+            1429
+          ],
+          "areaPct": 25.58,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            873,
+            607,
+            1224,
+            749
+          ],
+          "areaPct": 2.4,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            930,
+            365,
+            990,
+            687
+          ],
+          "areaPct": 0.93,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1170,
+          827,
+          1910,
+          1072
+        ],
+        "visible_labels": 8,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -2541,
+            1042,
+            -726,
+            1663
+          ],
+          "areaPct": 110.07,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            180,
+            583,
+            511,
+            721
+          ],
+          "areaPct": 4.46,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            233,
+            360,
+            291,
+            661
+          ],
+          "areaPct": 1.7,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          530,
+          213,
+          1270,
+          792
+        ],
+        "visible_labels": 6,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1280,
+          800
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -2541,
+            1042,
+            -726,
+            1663
+          ],
+          "areaPct": 110.07,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            180,
+            583,
+            511,
+            721
+          ],
+          "areaPct": 4.46,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            233,
+            360,
+            291,
+            661
+          ],
+          "areaPct": 1.7,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          530,
+          213,
+          1270,
+          792
+        ],
+        "visible_labels": 6,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "night",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -4166,
+            1502,
+            -940,
+            2627
+          ],
+          "areaPct": 175.02,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            462,
+            780,
+            946,
+            985
+          ],
+          "areaPct": 4.78,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            539,
+            457,
+            625,
+            896
+          ],
+          "areaPct": 1.82,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1170,
+          493,
+          1910,
+          1072
+        ],
+        "visible_labels": 7,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      },
+      {
+        "stage": "diff",
+        "size": [
+          1920,
+          1080
+        ],
+        "theme": "grass",
+        "platforms_files_wires": [
+          13,
+          9,
+          12
+        ],
+        "root": {
+          "rect": [
+            -4166,
+            1502,
+            -940,
+            2627
+          ],
+          "areaPct": 175.02,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": true
+        },
+        "branch": {
+          "rect": [
+            462,
+            780,
+            946,
+            985
+          ],
+          "areaPct": 4.78,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "file": {
+          "rect": [
+            539,
+            457,
+            625,
+            896
+          ],
+          "areaPct": 1.82,
+          "hudOverlap": false,
+          "readerOverlap": false,
+          "clipped": false
+        },
+        "reader": [
+          1170,
+          493,
+          1910,
+          1072
+        ],
+        "visible_labels": 7,
+        "label_hud_intersections": 0,
+        "label_reader_intersections": 0,
+        "label_clip_count": 0,
+        "visible_label_heights_px": [
+          35,
+          35,
+          35,
+          35,
+          35,
+          35,
+          35
+        ]
+      }
+    ]
+  },
+  "before_narrow": {
+    "width": 390,
+    "scroll": 390,
+    "mode": "grid",
+    "reduced": true,
+    "hasDiff": true
+  },
+  "after_fallback": {
+    "width": 390,
+    "scroll": 390,
+    "webgl": false,
+    "mode": "grid",
+    "reduced": true,
+    "names": [
+      "assets",
+      "config",
+      "docs",
+      "examples",
+      "scripts",
+      "src",
+      "tests",
+      "README.md"
+    ]
+  },
+  "after_narrow": {
+    "width": 390,
+    "scroll": 390,
+    "mode": "grid",
+    "reduced": true,
+    "hasDiff": true
+  }
+}

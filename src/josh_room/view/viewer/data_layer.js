@@ -212,11 +212,15 @@
       for (const [id, name, ord] of gRes[0].values) groups.push({ id, name, order: ord });
     }
     const attByItem = new Map();
-    const aRes = db.exec('SELECT item_id, name, media_type, size, sha256 FROM attachments ORDER BY item_id, name');
+    const hasBlobs = tables.has('attachment_blobs');
+    const aRes = db.exec(`SELECT a.item_id, a.name, a.media_type, a.size, a.sha256,
+      (a.bytes IS NOT NULL ${hasBlobs ? 'OR b.bytes IS NOT NULL' : ''}) FROM attachments a
+      ${hasBlobs ? 'LEFT JOIN attachment_blobs b ON b.sha256 = a.sha256' : ''}
+      ORDER BY a.item_id, a.name`);
     if (aRes[0]) {
-      for (const [item_id, name, media_type, size, sha256] of aRes[0].values) {
+      for (const [item_id, name, media_type, size, sha256, embedded] of aRes[0].values) {
         if (!attByItem.has(item_id)) attByItem.set(item_id, []);
-        attByItem.get(item_id).push({ name, media_type, size, digest: sha256 });
+        attByItem.get(item_id).push({ name, media_type, size, digest: sha256, embedded: Boolean(embedded) });
       }
     }
     const prevByNode = new Map();
@@ -349,6 +353,9 @@
       this.state = initialPayload.state;
       this.sensitivity = initialPayload.sensitivity;
       this.meta = initialPayload.meta || {};
+      this.filesystem = mode === 'live' && initialPayload.server?.filesystem === true;
+      this.comparison = this.filesystem && initialPayload.server?.comparison === true;
+      this.fsGeneration = null;
       this._blobCache = new Map();
       this._indexAttachments();
       this._refreshSequence = 0;
@@ -387,6 +394,76 @@
       }
       const q = params.toString();
       return q ? `?${q}` : '';
+    }
+
+    async queryFilesystem(operation, params, signal) {
+      if (!this.filesystem) throw new Error('Live filesystem unavailable');
+      const resp = await fetch(`/fs/${operation}?${new URLSearchParams(params)}`, {
+        cache: 'no-store', headers: this._liveHeaders(), signal,
+      });
+      if (!resp.ok) {
+        const error = new Error(`Filesystem request failed (HTTP ${resp.status})`);
+        error.status = resp.status;
+        if (operation === 'points' || operation === 'compare' || params?.sample === '1') {
+          const detail = await resp.json().catch(() => null);
+          error.code = detail?.error;
+        }
+        throw error;
+      }
+      return resp.json();
+    }
+
+    // At most six independent, metadata-only samples: parent, three direct
+    // folders, one grandchild and one neighboring branch. None owns a cursor.
+    async sceneNeighborhood(page, signal, priorFolders = []) {
+      const nodes = new Map();
+      const sampled = new Set();
+      const sample = async id => {
+        signal.throwIfAborted();
+        if (!id || sampled.has(id)) return [];
+        sampled.add(id);
+        let result;
+        try {
+          result = await this.queryFilesystem('list', { id, generation: page.generation, sample: '1' }, signal);
+        } catch (error) {
+          signal.throwIfAborted();
+          if (error.code === 'filesystem-scene-entry-stale' || error.code === 'filesystem-unknown') {
+            nodes.delete(id);
+            return [];
+          }
+          throw error;
+        }
+        signal.throwIfAborted();
+        if (result.generation !== page.generation) throw Object.assign(new Error('Stale landscape'), { status: 409 });
+        for (const n of [result.directory, ...result.entries]) {
+          if (sampled.has(n.id) && id !== n.id) continue;
+          nodes.set(n.id, { id: n.id, parent_id: n.parent_id, label: n.label,
+            node_kind: n.node_kind, kind: n.kind, metric: n.metric, fields: {
+              file_bytes: n.fields?.file_bytes,
+              coverage: id === n.id ? result.coverage : n.fields?.coverage,
+            } });
+        }
+        return result.entries.filter(n => n.node_kind === 'directory');
+      };
+      const folders = page.entries.filter(n => n.node_kind === 'directory');
+      const neighbors = page.directory.parent_id ? await sample(page.directory.parent_id) : [];
+      const center = Math.floor(folders.length / 2);
+      let deeper;
+      const candidates = [folders[center]?.id, ...priorFolders, folders[0]?.id, folders.at(-1)?.id];
+      for (const id of [...new Set(candidates.filter(Boolean))].slice(0, 3)) {
+        const children = await sample(id);
+        deeper ||= children[0];
+      }
+      if (deeper) await sample(deeper.id);
+      const neighbor = neighbors.find(n => n.id !== page.directory.id);
+      if (neighbor) await sample(neighbor.id);
+      return [...nodes.values()];
+    }
+
+    applyFilesystemNodes(nodes, generation) {
+      this.fsGeneration = generation;
+      this.state = { ...this.state, nodes, items: [], groups: [] };
+      this._indexAttachments();
     }
 
     async refreshLive() {
@@ -435,7 +512,7 @@
     }
 
     async fetchPreviewSlot(objectId, slot) {
-      if (this.mode === 'live') {
+      if (this.mode === 'live' && !this.filesystem) {
         const url = `/content/${encodeURIComponent(objectId)}/${encodeURIComponent(slot)}${this._liveQuerySuffix()}`;
         const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
         if (!resp.ok) return null;
@@ -450,7 +527,11 @@
 
     async loadAttachmentBytes(itemId, name) {
       if (this.mode === 'live') {
-        const url = `/attachments/${encodeURIComponent(itemId)}/${encodeURIComponent(name)}${this._liveQuerySuffix()}`;
+        const ref = this._blobCache.get(JSON.stringify([itemId, name]));
+        if (this.filesystem && !ref) return null;
+        const url = this.filesystem
+          ? `/fs/attachment?${new URLSearchParams({ id: itemId, name, generation: this.fsGeneration, digest: ref.digest })}`
+          : `/attachments/${encodeURIComponent(itemId)}/${encodeURIComponent(name)}${this._liveQuerySuffix()}`;
         const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
         if (!resp.ok) return null;
         const buf = await resp.arrayBuffer();

@@ -170,14 +170,8 @@ def _short_digest(hex_digest: str) -> str:
 
 
 def _safe_id(prefix: str, relative: str) -> str:
-    digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:8]
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", relative).strip("-")[:36]
-    if not slug:
-        slug = "entry"
-    candidate = f"{prefix}-{slug}-{digest}"
-    if not candidate[0].isalnum():
-        candidate = f"n-{candidate}"
-    return candidate[:64]
+    digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}-{digest}"
 
 
 def _safe_display_label(name: str, fallback_key: str) -> str:
@@ -528,11 +522,11 @@ class RoomWorkspaceProvider:
                 "source": LegendEntry("Source", "#22C55E", "solid"),
                 "config": LegendEntry("Config", "#38BDF8", "solid"),
                 "doc": LegendEntry("Docs", "#14B8A6", "solid"),
-                "artifact": LegendEntry("Artifact", "#A855F7", "notch"),
+                "artifact": LegendEntry("Artifact", "#A855F7", "solid"),
                 "redacted": LegendEntry("Redacted", "#F59E0B", "hollow"),
                 "excluded": LegendEntry("Omitted", "#EF4444", "hollow"),
             },
-            metric=MetricDescriptor("File Size", min=0.0, max=64.0, unit="KiB"),
+            metric=MetricDescriptor("File Size", min=0.0, max=65536.0, unit="bytes"),
             view="3d",
             tool="josh-room",
             tool_version="0.1.0",
@@ -567,6 +561,26 @@ class RoomWorkspaceProvider:
 
     def describe(self) -> ViewDescriptor:
         return self._descriptor
+
+    def open_filesystem(self):
+        from .filesystem import WorkspaceFilesystem
+
+        return WorkspaceFilesystem(self)
+
+    def overview(self) -> ViewState:
+        """Live bootstrap: discover metadata and read content only on request."""
+        fd, _ = self._open_bound_root()
+        try:
+            self._capture_policy(fd)
+            now = _utc_now_iso()
+            root = NodeState("root", None, "directory", "/", now, fields={"coverage": "not-examined"})
+            return ViewState(now, now, (), (), nodes=(root,), summary={
+                "provider_kind": "native-room-workspace",
+                "freshness": "observed-live-workspace-not-snapshot",
+                "coverage": "not-examined",
+            })
+        finally:
+            os.close(fd)
 
     def _open_relative_dir(
         self,
@@ -647,8 +661,9 @@ class RoomWorkspaceProvider:
             opened = os.fstat(fd)
             if (
                 not stat.S_ISREG(opened.st_mode)
-                or opened.st_dev != expected_info.st_dev
-                or opened.st_ino != expected_info.st_ino
+                or opened.st_nlink != 1
+                or stamp(opened) != stamp(expected_info)
+                or _safe_mount_id(fd) != _safe_mount_id(dir_fd)
                 or opened.st_size > limit
             ):
                 return None
@@ -660,10 +675,10 @@ class RoomWorkspaceProvider:
                     break
                 chunks.append(block)
                 total += len(block)
-            if total > limit:
+            if total != opened.st_size or stamp(os.fstat(fd)) != stamp(opened):
                 return None
             return b"".join(chunks)
-        except OSError:
+        except (OSError, ValueError):
             return None
         finally:
             os.close(fd)
@@ -708,9 +723,9 @@ class RoomWorkspaceProvider:
                 PreviewContent(
                     slot=classification.slot,
                     media_type="text/plain",
-                    title="Binary evidence",
+                    title="Binary file",
                     status="unavailable",
-                    reason=f"{classification.embed_media_type} payload inspected via Evidence tab",
+                    reason=f"{classification.embed_media_type} has no text preview",
                 ),
                 0,
                 False,
@@ -861,6 +876,7 @@ class RoomWorkspaceProvider:
 
             root_kind = self._dir_boundary_kind(root_fd, self._root, is_root=True)
             dir_meta[""] = {
+                "coverage": "not-examined",
                 "boundary": root_kind,
                 "capture_mode": policy.capture_mode,
                 "policy_digest": _short_digest(policy.sha256),
@@ -886,6 +902,7 @@ class RoomWorkspaceProvider:
                 try:
                     dir_fd = self._open_relative_dir(root_fd, rel_parts, root_dev, root_mount)
                 except (OSError, ValueError):
+                    dir_meta[rel_dir]["coverage"] = "inaccessible"
                     omissions.add("inaccessible-or-filesystem-boundary")
                     continue
 
@@ -894,7 +911,8 @@ class RoomWorkspaceProvider:
                     kind = self._dir_boundary_kind(dir_fd, dir_path, is_root=not rel_dir)
                     if rel_dir and kind in ("reserved-boundary", "git-pointer-unsupported", "inaccessible-boundary"):
                         omissions.add(kind)
-                        dir_meta.setdefault(rel_dir, {})["boundary"] = kind
+                        dir_meta[rel_dir]["coverage"] = kind
+                        dir_meta[rel_dir]["boundary"] = kind
                         continue
                     next_cohesive = bool(cohesive or kind == "git-directory-unverified")
 
@@ -914,11 +932,12 @@ class RoomWorkspaceProvider:
                                 raw_entries.append(entry)
                     except OSError:
                         omissions.add("inaccessible-entry")
+                        dir_meta[rel_dir]["coverage"] = "inaccessible"
                         continue
 
                     # Without the complete sibling set alias safety is unknown.
                     if not scan_complete:
-                        dir_meta.setdefault(rel_dir, {})["truncated_children"] = truncated_children
+                        dir_meta[rel_dir]["coverage"] = "partial"
                         continue
 
                     raw_entries.sort(key=lambda e: e.name)
@@ -938,10 +957,12 @@ class RoomWorkspaceProvider:
                     if colliding_names:
                         omissions.add("path-collision")
 
+                    dir_meta[rel_dir]["coverage"] = "complete"
                     emitted_in_dir = 0
                     for entry in raw_entries:
                         if time.monotonic() >= deadline:
                             omissions.add("time-cap")
+                            dir_meta[rel_dir]["coverage"] = "partial"
                             break
                         name = entry.name
                         if name == ".git":
@@ -960,6 +981,7 @@ class RoomWorkspaceProvider:
                         try:
                             info = entry.stat(follow_symlinks=False)
                         except OSError:
+                            dir_meta[rel_dir]["coverage"] = "partial"
                             omissions.add("inaccessible-entry")
                             continue
                         if stat.S_ISLNK(info.st_mode) or (getattr(info, "st_file_attributes", 0) & 0x400):
@@ -1016,6 +1038,7 @@ class RoomWorkspaceProvider:
                             dir_children_rel.setdefault(rel_dir, {})[name] = child_id
                             dir_children_rel.setdefault(child_rel, {})
                             dir_meta[child_rel] = {
+                                "coverage": "not-examined",
                                 "boundary": child_boundary,
                                 "evidence_code": ev_code,
                                 "planned_consequence": consequence,
@@ -1067,7 +1090,7 @@ class RoomWorkspaceProvider:
                                 )
                                 if att_bytes is not None:
                                     digest = hashlib.sha256(att_bytes).hexdigest()
-                                    att_name = _safe_attachment_name(name, child_rel)
+                                    att_name = _safe_attachment_name(safe_label, child_rel)
                                     new_attachments[(child_id, att_name)] = _AttachmentRecord(
                                         rel_parts=(*rel_parts, name),
                                         sha256=digest,
@@ -1085,7 +1108,6 @@ class RoomWorkspaceProvider:
                                         )
                                     )
 
-                            size_kib = round(min(64.0, max(0.25, info.st_size / 1024.0)), 2)
                             file_fields: dict[str, str | int | float | bool | None] = {
                                 "entry_kind": classification.node_kind,
                                 "file_bytes": int(info.st_size),
@@ -1105,7 +1127,7 @@ class RoomWorkspaceProvider:
                                     node_kind=classification.node_kind,
                                     updated_at=now_iso,
                                     kind=legend_kind,
-                                    metric=size_kib,
+                                    metric=info.st_size,
                                     fields=file_fields,
                                     attachments=tuple(att_refs),
                                     previews=(preview,),
@@ -1117,7 +1139,7 @@ class RoomWorkspaceProvider:
                                     group=top_group_id,
                                     stage=stage,
                                     kind=legend_kind,
-                                    metric=size_kib,
+                                    metric=info.st_size,
                                     label=safe_label,
                                     updated_at=now_iso,
                                     fields=file_fields,
@@ -1133,7 +1155,8 @@ class RoomWorkspaceProvider:
                     os.close(dir_fd)
 
                 if truncated_children > 0:
-                    dir_meta.setdefault(rel_dir, {})["truncated_children"] = truncated_children
+                    dir_meta[rel_dir]["coverage"] = "partial"
+                    dir_meta[rel_dir]["truncated_children"] = truncated_children
 
             # Post-scan integrity check: verify policy and root directory identity did not drift.
             policy_drifted = False
@@ -1150,6 +1173,8 @@ class RoomWorkspaceProvider:
             if policy_drifted:
                 # Fail closed: strip preview bodies & attachments if policy/root drifted mid-scan.
                 new_attachments.clear()
+                for metadata in dir_meta.values():
+                    metadata["coverage"] = "stale"
                 stripped_nodes: list[NodeState] = []
                 for node in nodes_list:
                     stripped_previews = tuple(

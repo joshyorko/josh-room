@@ -7,6 +7,7 @@ import json
 import sqlite3
 import time
 from types import MappingProxyType
+from urllib.parse import urlencode
 
 import pytest
 
@@ -543,6 +544,94 @@ def test_live_server_host_check_methods_headers_attachments_and_stale_recovery()
         assert stale_payload["state"]["stale"]["last_ok"] == "2026-11-20T15:42:00Z"
 
 
+def test_scoped_filesystem_transport_boundary(tmp_path):
+    (tmp_path / "hello.txt").write_text("synthetic file body")
+    provider = RoomWorkspaceProvider(tmp_path)
+    with RoomViewServer(provider, require_token=True) as server:
+        route = "/fs/list?id=root"
+        headers = {"X-Josh-Room-View-Token": server.token}
+        assert _raw_http(server.port, "GET", route)[0] == 403
+        assert _raw_http(server.port, "GET", route, headers={**headers, "Origin": "https://other.invalid"})[0] == 403
+        assert _raw_http(server.port, "GET", route, headers={**headers, "Host": "other.invalid"})[0] == 403
+        assert _raw_http(server.port, "GET", route, headers={**headers, "Sec-Fetch-Site": "cross-site"})[0] == 403
+        assert _raw_http(server.port, "POST", route, headers=headers)[0] == 405
+        status, _, body = _raw_http(server.port, "HEAD", route, headers=headers)
+        assert status == 200 and body == b""
+        assert server.collector.current_payload()["server"]["filesystem"] is True
+        for path in (route + "&id=root", route + "&path=hello.txt", "/fs/list?id=..%2Ffake",
+                     "/fs/preview?id=root", "/fs/list?id=root&cursor=oops"):
+            assert _raw_http(server.port, "GET", path, headers=headers)[0] == 400
+        assert _raw_http(server.port, "GET", "/fs/other?id=root", headers=headers)[0] == 404
+        listing = json.loads(_raw_http(server.port, "GET", route, headers=headers)[2])
+        generation = listing["generation"]
+        assert _raw_http(server.port, "GET", f"/fs/inspect?id=forged&generation={generation}", headers=headers)[0] == 404
+        status, _, body = _raw_http(server.port, "GET", "/fs/list?id=root&generation=forged", headers=headers)
+        assert status == 409 and b"hello.txt" not in body
+    with RoomViewServer(SyntheticPipelineProvider(preset="small")) as generic:
+        assert _raw_http(generic.port, "GET", "/fs/list?id=root")[0] == 404
+        assert "filesystem" not in generic.collector.current_payload()["server"]
+
+
+def test_foreground_listing_can_follow_an_active_directory_sample(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    (tmp_path / "child").mkdir()
+    with RoomViewServer(RoomWorkspaceProvider(tmp_path), interval_seconds=60) as server:
+        root = json.loads(_raw_http(server.port, "GET", "/fs/list?id=root")[2])
+        route = "/fs/list?" + urlencode({"id": root["entries"][0]["id"], "generation": root["generation"]})
+        active = Event()
+        release = Event()
+        original = server._filesystem.listing
+
+        def hold_sample(*args, **kwargs):
+            if kwargs.get("sample"):
+                active.set()
+                assert release.wait(3)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(server._filesystem, "listing", hold_sample)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            sample = executor.submit(_raw_http, server.port, "GET", route + "&sample=1")
+            try:
+                assert active.wait(3)
+                foreground = executor.submit(_raw_http, server.port, "GET", route)
+                deadline = time.monotonic() + 1
+                while not server._fs_admission.locked() and time.monotonic() < deadline:
+                    time.sleep(0.002)
+                assert server._fs_admission.locked()
+                assert _raw_http(server.port, "GET", route + "&sample=1")[0] == 429
+            finally:
+                release.set()
+            assert foreground.result()[0] == 200
+            assert sample.result()[0] == 200
+        for url in ("/fs/list?id=root&sample=1", route + "&sample=0", route + "&cursor=other&sample=1"):
+            assert _raw_http(server.port, "GET", url)[0] == 400
+
+
+def test_scoped_query_rechecks_binding_before_writing_response(tmp_path, monkeypatch):
+    root = tmp_path / "room"
+    root.mkdir()
+    (root / "example.txt").write_text("synthetic content")
+    provider = RoomWorkspaceProvider(root)
+    with RoomViewServer(provider, interval_seconds=60) as server:
+        listing = json.loads(_raw_http(server.port, "GET", "/fs/list?id=root")[2])
+        node = listing["entries"][0]
+        read = server._filesystem.preview
+
+        def move_after_preview(*args):
+            result = read(*args)
+            root.rename(tmp_path / "moved")
+            return result
+
+        monkeypatch.setattr(server._filesystem, "preview", move_after_preview)
+        args = urlencode({"id": node["id"], "generation": listing["generation"]})
+        status, _, body = _raw_http(server.port, "GET", "/fs/preview?" + args)
+        assert status == 409 and b"synthetic content" not in body
+        assert provider.binding_invalidated
+        assert not server.collector.current_payload()["state"].get("nodes")
+
+
 def test_live_server_sensitive_export_requires_ack_and_optional_token():
     provider = SyntheticPipelineProvider(preset="sensitive")
     with RoomViewServer(provider, port=0, require_token=True) as server:
@@ -988,23 +1077,46 @@ def test_native_room_workspace_provider_enforces_policy_symlink_redaction_and_ex
     att = provider.attachment(img_node.id, img_node.attachments[0].name)
     assert att is not None and att.data == png_bytes
 
-    # Live server exposes /content/<id>/<slot> and /attachments/<id>/<name>, NEVER arbitrary filesystem routes
+    # Native HTTP discovery and selected-content reads use session handles.
     with RoomViewServer(provider, port=0, interval_seconds=60.0) as server:
-        st, _, body = _raw_http(server.port, "GET", f"/content/{sched_node.id}/source")
-        assert st == 200
-        assert "def run" in json.loads(body)["preview"]["body"]
+        def request(route, **params):
+            status, _, body = _raw_http(server.port, "GET", f"/fs/{route}?{urlencode(params)}")
+            assert status == 200, body
+            return json.loads(body)
 
-        st, _, body = _raw_http(server.port, "GET", f"/content/{leak_node.id}/source")
-        assert st == 200
-        assert json.loads(body)["preview"]["status"] == "redacted"
-        assert "body" not in json.loads(body)["preview"]
+        root = request("list", id="root")
+        generation = root["generation"]
 
-        st, _, body = _raw_http(server.port, "GET", f"/attachments/{img_node.id}/{img_node.attachments[0].name}")
-        assert st == 200 and body == png_bytes
+        def children(node_id):
+            page = request("list", id=node_id, generation=generation)
+            entries = list(page["entries"])
+            while page["cursor"]:
+                page = request("list", id=node_id, generation=generation, cursor=page["cursor"])
+                entries.extend(page["entries"])
+            assert page["coverage"] == "complete"
+            return {node["label"]: node["id"] for node in entries}
 
-        # Generic filesystem path must 404
-        st, _, _ = _raw_http(server.port, "GET", "/src/core/scheduler.py")
-        assert st == 404
+        top = children("root")
+        src = children(top["src"])
+        selected = children(src["core"])["scheduler.py"]
+        node = request("preview", id=selected, generation=generation)["node"]
+        assert "def run" in node["previews"][0]["body"]
+        redacted = request("preview", id=src["leak.py"], generation=generation)["node"]["previews"][0]
+        assert redacted["status"] == "redacted" and "body" not in redacted
+
+        image = children(top["docs"])["diagram.png"]
+        attachment = request("preview", id=image, generation=generation)["node"]["attachments"][0]
+        args = {"id": image, "generation": generation, "name": attachment["name"], "digest": attachment["digest"]}
+        route = "/fs/attachment?" + urlencode(args)
+        status, headers, body = _raw_http(server.port, "GET", route)
+        assert status == 200 and body == png_bytes
+        assert headers["Cache-Control"] == "no-store"
+        args["digest"] = "0" * 64
+        assert _raw_http(server.port, "GET", "/fs/attachment?" + urlencode(args))[0] in {404, 409}
+        assert _raw_http(server.port, "GET", "/src/core/scheduler.py")[0] == 404
+        assert _raw_http(server.port, "GET", "/export-preview.json")[0] == 200
+        legacy = f"/attachments/{img_node.id}/{img_node.attachments[0].name}"
+        assert _raw_http(server.port, "GET", legacy)[0] == 404
 
     # Tampering attachment on disk causes fail-closed None on attachment()
     (ws / "docs" / "diagram.png").write_bytes(b"tampered")
@@ -1086,6 +1198,9 @@ def test_native_room_withholds_incompletely_scanned_sibling_set(tmp_path):
     assert not state.items
     assert state.summary["truncated"] is True
     assert "directory-scan-cap" in state.summary["omissions"]
+    root = next(node for node in state.nodes if node.parent_id is None)
+    assert root.fields["coverage"] == "partial"
+    assert "truncated_children" not in root.fields
 
 
 def test_native_room_refuses_platform_without_safe_descriptor_reads(tmp_path, monkeypatch):
@@ -1309,7 +1424,7 @@ def test_export_rejects_artifact_if_its_attachment_read_revokes_binding(tmp_path
     (root / "diagram.png").write_bytes(_synthetic_png_bytes())
     provider = RoomWorkspaceProvider(root)
     with RoomViewServer(provider, port=0, interval_seconds=60, workspace=root) as server:
-        assert server.collector.current_payload()["state"]["items"]
+        assert server.collector.current_payload()["state"]["nodes"]
         server.collector.stop()  # Export itself must be the first observer.
         root.rename(tmp_path / "moved")
         status, _, body = _raw_http(server.port, "GET", endpoint)

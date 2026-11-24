@@ -1,0 +1,88 @@
+{
+  "source": "60b3806a57173b470588347d47efd09f6ac9fda6",
+  "fixture": {
+    "kind": "synthetic Linux filesystem",
+    "large_directory_files": 530,
+    "selected": "src/josh_room/file_012.py",
+    "directory_files_before": 16,
+    "directory_files_after": 17
+  },
+  "installed": {
+    "platform": "Linux x64",
+    "command": "VS Code extension-host test invoking registered Explore and Stop",
+    "vsix_sha256": "f07d432820a8df7cba34497d769c0d713048cc5dbbbb601f57ebd3692d97f04e",
+    "template_sha256": "031b5a5f5e173d57804d5699d0821244bc1a437572cafe5320371c70add155bf",
+    "managed_probe": [
+      {
+        "stage": "installed",
+        "found": true
+      },
+      {
+        "stage": "managed-launch",
+        "command": "rcc",
+        "artifact": "sha256:4f5f2dcd727b26ee6cef6ffd20b9ec030d08da15685c062f1fa4ed2b7ec45d96"
+      },
+      {
+        "stage": "desktop-http",
+        "remote": false,
+        "root": 200,
+        "state": 200,
+        "hasFixture": true,
+        "unauthenticated": 403,
+        "post": 405
+      },
+      {
+        "stage": "stopped",
+        "stopped": true,
+        "desktopStopped": true
+      }
+    ],
+    "limits": "Virtual display, isolated trusted fixture, direct registered-command invocation and intercepted browser handoff."
+  },
+  "browser": {
+    "runtime": "T3 shared Chromium preview; actual live CLI on loopback",
+    "viewport_css": [
+      1280,
+      800
+    ],
+    "webgl": true,
+    "first_frame_ms_single_run": 104.6,
+    "overview_draw_calls": 58,
+    "selected_draw_calls": 17,
+    "click_to_visible_text_ms_single_run": 572,
+    "after_sibling_insertion": {
+      "coverage": "complete",
+      "files": 17,
+      "same_file": true,
+      "exact_body": true,
+      "roving_tab_stops": 1
+    },
+    "grid": [
+      {
+        "css_width": 1280,
+        "css_height": 720,
+        "document_overflow_px": 0,
+        "grid_top_minus_banner_bottom_px": 0
+      },
+      {
+        "css_width": 1920,
+        "css_height": 1080,
+        "document_overflow_px": 0,
+        "grid_top_minus_banner_bottom_px": 0
+      },
+      {
+        "css_width": 375,
+        "css_height": 812,
+        "document_overflow_px": 0,
+        "grid_top_minus_banner_bottom_px": 0
+      }
+    ],
+    "baseline": {
+      "source": "a8058a9c9ca02c29f3d12407a035925ce96902c7",
+      "first_frame_ms_single_run": 186.3,
+      "draw_calls": 66,
+      "530_file_directory_tree_label": "/archive (0)"
+    },
+    "limits": "Single timings on a development workstation. No hardware equivalence, repeated-sample performance distribution, or human study claimed."
+  }
+}

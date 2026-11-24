@@ -30,8 +30,10 @@ JS_MODULES_ORDER = (
     "scene3d.js",
     "aria_tree.js",
     "grid2d.js",
+    "saved_comparison.js",
     "evidence.js",
     "sql_console.js",
+    "filesystem_search.js",
     "app.js",
     "bootstrap.js",
 )

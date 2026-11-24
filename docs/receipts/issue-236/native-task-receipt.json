@@ -1,0 +1,175 @@
+{
+  "source_commit": "3ab227f3ed61f2421a9cdcb493aae7c6acfcf47d",
+  "viewer_template_sha256": "2c51e865168bb4694032606be0fcaa52a1cc58f73acbc5af663c686719819937",
+  "question": "Which settings.py controls application retry behavior, and how did its retry delay change between two chosen saved points and the live file?",
+  "answer": {
+    "application": "src/app/settings.py",
+    "earlier_point_A": {
+      "snapshot": "90788636767445029c9756c2b0f4c755",
+      "RETRY_DELAY": 15
+    },
+    "later_point_B": {
+      "snapshot": "8833a3395b544faebcba2bd2d1642d04",
+      "RETRY_DELAY": 30
+    },
+    "live": {
+      "RETRY_DELAY": 45,
+      "MAX_ATTEMPTS": 4
+    },
+    "decoys": {
+      "docs/settings.py": "EXAMPLE = True",
+      "tests/fixtures/settings.py": "FAKE_DELAY = 0"
+    }
+  },
+  "backend": "Disposable enrolled MinIO Room Store, Linux Secret Service, age keyset and restic snapshots. The native observation viewer used the authenticated comparison broker and recovery CLI.",
+  "method": "Uninterrupted Chrome viewport recording at 10 fps per task, driven by browser mouse and keyboard inputs. Typed search, clicked result paths, clicked visible scene geometry and list entries. No edited transitions or added UI.",
+  "environment": "Headless desktop Chrome, software WebGL. Native viewer served from the exact archived commit; browser qualification does not exercise installation.",
+  "limits": [
+    "The shared T3 preview lost its recording/tab during the continuity pilot. The final recordings use the repository Chrome/CDP qualification approach.",
+    "Lookup timing is one automated sample per mode from root to selected application file. The 3D pass includes two 800 ms camera settle waits. This is not a human speed benchmark.",
+    "Revisiting the file opens the summary. Clicking Compare restores and re-verifies the previous selected point automatically.",
+    "Night is exercised at 1280x800. Grass is exercised at 1280x800 and 390x844; the recording scales to a fixed 960x600 frame. The removal is an external change to the synthetic source file while the viewer remains read-only."
+  ],
+  "clips": {
+    "investigation.webm": {
+      "bytes": 424629,
+      "sha256": "f47e4457c3ed4cf1988805f922509a2e04acb388ecccd25ea047e514131b1ff8",
+      "duration_seconds": 42.9,
+      "events": [
+        {
+          "ms": 3067,
+          "event": "3D lookup",
+          "elapsed_ms": 2977,
+          "clicks": 3
+        },
+        {
+          "ms": 3921,
+          "event": "Live retry policy",
+          "RETRY_DELAY": 45,
+          "MAX_ATTEMPTS": 4
+        },
+        {
+          "ms": 17645,
+          "event": "Saved vs live",
+          "point": "90788636767445029c9756c2b0f4c755",
+          "before": 15,
+          "after": 45
+        },
+        {
+          "ms": 28900,
+          "event": "Saved vs live",
+          "point": "8833a3395b544faebcba2bd2d1642d04",
+          "before": 30,
+          "after": 45
+        },
+        {
+          "ms": 30554,
+          "event": "Visited neighbor",
+          "path": "/src/app/unit_000.py"
+        },
+        {
+          "ms": 40666,
+          "event": "Back and Compare restored exact saved result",
+          "point": "8833a3395b544faebcba2bd2d1642d04"
+        },
+        {
+          "ms": 43010,
+          "event": "List lookup",
+          "elapsed_ms": 1843,
+          "clicks": 3
+        },
+        {
+          "ms": 43010,
+          "event": "Completed",
+          "pointer_clicks": 18
+        }
+      ]
+    },
+    "native-continuity.webm": {
+      "bytes": 595783,
+      "sha256": "45c5ffb5519526800a01ba4076cef6bc28ad560d85ab9da4de2e79b61d27a513",
+      "duration_seconds": 39.6,
+      "events": [
+        {
+          "ms": 2494,
+          "event": "Workspace search",
+          "status": "Whole workspace / \u00b7 Search complete for admitted entries \u00b7 3 matches \u00b7 108 admitted entries \u00b7 1 omitted"
+        },
+        {
+          "ms": 3647,
+          "event": "Read namesake",
+          "path": "/docs/settings.py",
+          "value": "EXAMPLE = True"
+        },
+        {
+          "ms": 5711,
+          "event": "Read namesake",
+          "path": "/tests/fixtures/settings.py",
+          "value": "FAKE_DELAY = 0"
+        },
+        {
+          "ms": 7849,
+          "event": "Read namesake",
+          "path": "/src/app/settings.py",
+          "value": "RETRY_DELAY = 45"
+        },
+        {
+          "ms": 17958,
+          "event": "Saved vs live",
+          "point": "8833a3395b544faebcba2bd2d1642d04",
+          "before": 30,
+          "after": 45
+        },
+        {
+          "ms": 19155,
+          "event": "Pagination retained result",
+          "page_rows": 44,
+          "point": "8833a3395b544faebcba2bd2d1642d04"
+        },
+        {
+          "ms": 20365,
+          "event": "Mode round trip retained result"
+        },
+        {
+          "ms": 20709,
+          "event": "Visited neighbor",
+          "path": "/src/app/unit_046.py"
+        },
+        {
+          "ms": 29186,
+          "event": "Back and Compare restored exact saved result",
+          "point": "8833a3395b544faebcba2bd2d1642d04"
+        },
+        {
+          "ms": 35189,
+          "event": "Poll retained result"
+        },
+        {
+          "ms": 36205,
+          "event": "Narrow result",
+          "width": 390,
+          "document_width": 390
+        },
+        {
+          "ms": 38556,
+          "event": "Removed file revoked",
+          "location": "/src/app",
+          "stale_diff_visible": false
+        },
+        {
+          "ms": 39754,
+          "event": "Completed",
+          "pointer_clicks": 26
+        }
+      ]
+    }
+  },
+  "screenshots": [
+    "native-narrow-comparison.png",
+    "native-point-A.png",
+    "native-point-B.png",
+    "native-removal.png",
+    "native-room.png",
+    "native-search.png"
+  ]
+}

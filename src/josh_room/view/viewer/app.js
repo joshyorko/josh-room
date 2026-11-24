@@ -20,8 +20,17 @@
       );
 
       this.expandedDirs = new Set();
+      this.collapsedDirs = new Set();
       this.expandedPedestals = new Set();
       this.history = [];
+      this.forward = [];
+      this.fsPage = null;
+      this.fsRequest = null;
+      this.fsBusy = false;
+      this.sceneContext = [];
+      this.sceneRequest = null;
+      this.fsCoverage = this.data.filesystem ? 'loading' : null;
+      if (this.data.filesystem) this.data.applyFilesystemNodes([this._placeholderRoot()], null);
       this.currentNodeId = 'root';
       this.failureIndex = -1;
       this.webglActive = false;
@@ -49,6 +58,22 @@
         document.getElementById('aria-live-region'),
         {
           onSelectNode: (nodeId) => this.handleNodeSelect(nodeId, { fromTree: true }),
+          onToggle: (nodeId, expand) => {
+            if (expand) this.expandDirectory(nodeId);
+            else {
+              this._remember(nodeId);
+              this.currentNodeId = nodeId;
+              this.expandedDirs.delete(nodeId);
+              this.collapsedDirs.add(nodeId);
+              this.evidence.hide();
+              this.scene3d?.clearSpotlight();
+              this._rebuildLayout({ preserveCamera: true });
+              this.ariaTree.syncFromWorld(nodeId);
+              this._updateBreadcrumbs();
+              this._renderGrid();
+              this._updateNavigationButtons();
+            }
+          },
           onExpandMore: (pedId) => this.expandPedestal(pedId),
         }
       );
@@ -61,8 +86,247 @@
       this._exposeDebugHandle();
 
       if (this.data.mode === 'live') {
+        if (this.data.filesystem) this._openFilesystem('root', { pushHistory: false });
         this._startLivePolling();
       }
+    }
+
+    _placeholderRoot() {
+      return { id: 'root', node_kind: 'directory', parent_id: null, label: '/' };
+    }
+
+    _treeId(node) {
+      return node.parent_id == null ? 'root' : global.RoomViewLayout.makeCustomNodeId(node.id);
+    }
+
+    _directoryId() {
+      const current = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      return current?.nodeType === 'item' ? current.parentId : current?.id || 'root';
+    }
+
+    _renderGrid() {
+      this.filesystemSearch?.syncSelection(this.layout.allTreeNodesById.get(this.currentNodeId)?.objectId);
+      const directoryId = this._directoryId();
+      const pageMatches = this.fsPage && this._treeId(this.fsPage.directory) === directoryId;
+      this.gridView.render(this.data.descriptor, this.data.state, this.layout, {
+        directoryId,
+        selectedId: this.currentNodeId,
+        coverage: pageMatches ? this.fsPage.coverage : undefined,
+        coverageLabel: pageMatches || !this.fsPage ? this.fsCoverage : undefined,
+      });
+    }
+
+    _updateNavigationButtons() {
+      document.getElementById('btn-back').disabled = !this.history.length;
+      document.getElementById('btn-forward').disabled = !this.forward.length;
+      document.getElementById('btn-up').disabled = this.currentNodeId === 'root';
+      const badge = document.getElementById('fs-coverage');
+      const more = document.getElementById('fs-continue');
+      document.getElementById('fs-details').hidden = !this.fsPage || this.currentNodeId !== this._treeId(this.fsPage.directory);
+      badge.hidden = !this.fsCoverage;
+      if (this.fsCoverage) badge.textContent = this.fsCoverage;
+      more.hidden = !this.data.filesystem || !(this.fsRetry || this.fsResume || this.fsPage?.cursor);
+      more.disabled = this.fsBusy;
+      more.textContent = this.fsRetry ? 'Retry' : 'Continue';
+    }
+
+    _remember(nodeId) {
+      if (this.currentNodeId === nodeId) return;
+      this.history.push(this.currentNodeId);
+      if (this.history.length > 40) this.history.shift();
+      this.forward.length = 0;
+    }
+
+    async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
+      refresh = false, instant = false, moveCamera = true, reading = null, reconcile = true, frame = false, invalidation = null } = {}) {
+      this.fsRequest?.abort();
+      this.sceneRequest?.abort();
+      this.sceneRequest = null;
+      this.fsResume = null;
+      const previousPage = this.fsPage;
+      const previousNode = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      const wasReading = this.evidence.isOpen();
+      const previousChain = previousPage
+        ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
+          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
+      const request = new AbortController();
+      this.fsRequest = request;
+      this.fsBusy = true;
+      this.fsRetry = false;
+      const generation = this.data.fsGeneration;
+      const query = (name, params) => this.data.queryFilesystem(name, {
+        ...(generation ? { generation } : {}), ...params,
+      }, request.signal);
+      if (!refresh) {
+        this.fsCoverage = kind === 'directory' || id === 'root' ? 'Loading directory…' : 'Loading selection…';
+        this._updateNavigationButtons();
+      }
+      try {
+        if (invalidation) throw invalidation;
+        let page = this.fsPage;
+        if (!kind && id !== 'root') {
+          const inspected = await query('inspect', { id });
+          kind = inspected.node.node_kind;
+        }
+        const isFile = Boolean(kind && kind !== 'directory');
+        let file = null;
+        if (isFile) {
+          const preview = await query('preview', { id });
+          file = preview.node;
+          if (page?.directory.id !== file.parent_id) {
+            page = await query('list', { id: file.parent_id });
+          }
+        } else {
+          page = await query('list', { id, ...(cursor ? { cursor } : {}) });
+          if (cursor && previousNode?.nodeType === 'item' && previousPage?.directory.id === id) {
+            file = (await query('preview', { id: previousNode.objectId })).node;
+          }
+        }
+        if (request.signal.aborted) return;
+        if (generation && page.generation !== generation) throw Object.assign(new Error('Stale directory'), { status: 409 });
+        // Keep the previous observation intact until the destination and its
+        // independently verified neighborhood can replace it in one layout.
+        const stageScene = this.scene3d && this.viewMode === '3d' && previousPage;
+        let destinationContext = [];
+        if (stageScene) {
+          try {
+            destinationContext = await this.data.sceneNeighborhood(page, request.signal,
+              this._neighborCandidates(page));
+          } catch (error) {
+            if (request.signal.aborted || ![413, 429, 503].includes(error.status)) throw error;
+          }
+          if (request.signal.aborted) return;
+          // Navigation performs its authoritative query first. Revalidate before
+          // publishing the selected content if the later samples took time.
+          await query('inspect', { id: file?.id || page.directory.id, generation: page.generation });
+          if (request.signal.aborted) return;
+        }
+        const selected = file || page.directory;
+        const selectedId = this._treeId(selected);
+        const previousId = this.currentNodeId;
+        if (pushHistory) this._remember(selectedId);
+        const nodes = new Map();
+        for (const node of [...page.ancestors, page.directory, ...page.entries, selected]) {
+          nodes.set(node.id, node);
+        }
+        const contextChanged = JSON.stringify(this.sceneContext || []) !== JSON.stringify(destinationContext);
+        this.sceneContext = destinationContext;
+        this.fsPage = page;
+        const dir = nodes.get(page.directory.id);
+        nodes.set(dir.id, { ...dir, fields: { ...dir.fields, coverage: page.coverage,
+          entries_on_page: page.entries.length, examined: page.examined, omitted: page.omitted } });
+        this.fsCoverage = `${page.coverage} · ${page.entries.length} shown · ${page.examined} examined · ${page.omitted} omitted`;
+        this.currentNodeId = selectedId;
+        this.data.applyFilesystemNodes(Array.from(nodes.values()), page.generation);
+        this._syncFromData({ contextChanged, navigationTargetId: previousId !== selectedId ? selectedId : null });
+        const target = this.layout.allTreeNodesById.get(selectedId);
+        const block = this.layout.nodeById.get(selectedId);
+        if (!refresh) {
+          if (frame) this.scene3d?.frameOverview({ instant });
+          else this.scene3d?.focusNode(selectedId, { instant, moveCamera });
+          this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
+        }
+        if (target && ((!refresh && file && (!cursor || wasReading)) || (refresh && wasReading))) {
+          const restoring = reading && target.objectId === reading.id;
+          const unchanged = restoring && await this.evidence.readingUnchanged(target, reading);
+          if (request.signal.aborted) return;
+          this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
+            quantileBin: block?.quantileBin, preserveTab: previousId === selectedId,
+            reading: unchanged ? reading : null, deferContent: restoring && !unchanged,
+          });
+        } else if (!refresh) this.evidence.hide();
+        if (!request.signal.aborted && !stageScene) this._sampleScene(page);
+      } catch (error) {
+        if (request.signal.aborted) return;
+        if (error.status === 429) {
+          this.fsCoverage = 'Directory request busy. Retry to continue.';
+          this.fsResume = () => this._openFilesystem(id, { pushHistory, cursor, kind, refresh, instant, moveCamera, frame });
+          return;
+        }
+        const position = this.evidence.captureReadingPosition?.();
+        if ([403, 409].includes(error.status)) {
+          this.history.length = 0;
+          this.forward.length = 0;
+        }
+        this.filesystemSearch?.observationLost();
+        this.evidence.hide();
+        this.scene3d?.clearSpotlight();
+        this._clearSceneContext(false);
+        this.fsPage = null;
+        this.fsCoverage = error.status === 409
+          ? 'Workspace changed. Reopen the root to refresh.'
+          : `Directory unavailable (${error.message}).`;
+        this.fsRetry = true;
+        this.data.applyFilesystemNodes([this._placeholderRoot()], null);
+        this.currentNodeId = 'root';
+        this._syncFromData();
+        if (reconcile && (error.status === 409 || error.status === 404) && previousChain.length) {
+          try {
+            await this._restoreFilesystem(previousChain, request.signal, wasReading, position);
+          } catch (_) {
+            if (!request.signal.aborted) {
+              this.fsRetry = true;
+              this.fsCoverage = 'Workspace unavailable. Retry from the root.';
+            }
+          }
+        }
+      } finally {
+        if (!request.signal.aborted) {
+          this.fsBusy = false;
+          this._updateNavigationButtons();
+        }
+      }
+    }
+
+    async _restoreFilesystem(chain, signal, wasReading, reading) {
+      let index = 1;
+      let directory = 'root';
+      let generation;
+      let cursor;
+      const resume = async () => {
+        this.fsResume = null;
+        this.fsBusy = true;
+        try {
+          for (let batch = 0; batch < 8; batch++) {
+            const page = await this.data.queryFilesystem('list', {
+              id: directory, ...(generation ? { generation } : {}), ...(cursor ? { cursor } : {}),
+            }, signal);
+            if (signal.aborted) return;
+            generation = page.generation;
+            cursor = page.cursor;
+            const next = page.entries.find(node => node.id === chain[index]?.id);
+            if (next?.node_kind === 'directory') {
+              directory = next.id;
+              index++;
+              cursor = null;
+              continue;
+            }
+            if (next || index === chain.length || !cursor) {
+              this.data.fsGeneration = generation;
+              this.fsPage = page;
+              this.fsRetry = false;
+              await this._openFilesystem(next?.id || directory, {
+                kind: next?.node_kind || 'directory', pushHistory: false, instant: true, reading, reconcile: false,
+              });
+              if (!wasReading) this.evidence.hide();
+              return;
+            }
+          }
+          this.fsResume = resume;
+          this.fsRetry = false;
+          this.fsCoverage = 'Rechecking selected path. Continue to resume.';
+        } catch (error) {
+          if (signal.aborted) return;
+          this.fsCoverage = `Workspace unavailable (${error.message}). Retry from root.`;
+          this.fsRetry = true;
+        } finally {
+          if (!signal.aborted) {
+            this.fsBusy = false;
+            this._updateNavigationButtons();
+          }
+        }
+      };
+      return resume();
     }
 
     _init3DOrFallback() {
@@ -134,15 +398,22 @@
         metricSpan.textContent = 'Height: 5 quantile bins';
       }
       strip.append(sep, metricSpan);
+      const key = document.getElementById('menu-map-key');
+      if (key) key.replaceChildren(...Array.from(strip.children, child => {
+        const entry = child.cloneNode(true);
+        entry.removeAttribute('id');
+        return entry;
+      }));
     }
 
-    _syncFromData({ isInitial = false } = {}) {
+    _syncFromData({ isInitial = false, contextChanged = false, navigationTargetId = null } = {}) {
       const desc = this.data.descriptor;
       const state = this.data.state;
       const sens = this.data.sensitivity;
 
       document.title = `${desc.title || 'Josh Room View'} — Room View`;
 
+      document.getElementById('room-title').textContent = desc.title || 'Room View';
       const modeBadge = document.getElementById('badge-mode');
       modeBadge.textContent = this.data.mode === 'live' ? 'LIVE' : 'OFFLINE';
 
@@ -170,12 +441,22 @@
       liveExportBtn.hidden = this.data.mode !== 'live';
 
       this._renderBottomLegend(desc);
-      this._rebuildLayout({ runEstablishingShot: isInitial, preserveCamera: !isInitial });
-      this.gridView.render(desc, state, this.layout);
+      const signature = JSON.stringify([desc, state.nodes, state.items, state.groups, this.currentNodeId]);
+      if (this.layoutSignature !== signature) {
+        const previous = this.layout;
+        this._rebuildLayout({ runEstablishingShot: isInitial, preserveCamera: !isInitial, navigationTargetId });
+        while (this.currentNodeId !== 'root' && !this.layout.allTreeNodesById.has(this.currentNodeId)) {
+          this.currentNodeId = previous?.allTreeNodesById.get(this.currentNodeId)?.parentId || 'root';
+        }
+        this.layoutSignature = signature;
+      } else if (contextChanged) this._drawScene({ preserveCamera: true });
+      this._renderGrid();
+      this._updateNavigationButtons();
+      if (!this.data.filesystem && this.searchInputEl.value) this._runSearch(this.searchInputEl.value);
       this.sqlConsole.renderPresets(desc);
 
       // Reconcile open inspector drawer against refreshed state after live poll!
-      if (!isInitial && this.evidence.isOpen() && this.evidence.currentObjectId) {
+      if (!this.data.filesystem && !isInitial && this.evidence.isOpen() && this.evidence.currentObjectId) {
         const objId = this.evidence.currentObjectId;
         const refreshedLeaf = this.layout.allLeavesByObjectId.get(objId);
         if (refreshedLeaf) {
@@ -200,18 +481,78 @@
       this._updateTelemetry();
     }
 
-    _rebuildLayout({ runEstablishingShot = false, preserveCamera = false } = {}) {
-      this.layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor, this.data.state, {
-        expandedDirs: this.expandedDirs,
-        expandedPedestals: this.expandedPedestals,
-      });
-      if (this.scene3d) {
-        this.scene3d.setLayout(this.layout, {
-          descriptor: this.data.descriptor,
-          runEstablishingShot,
-          preserveCamera,
-        });
+    _neighborCandidates(page) {
+      if (page.directory.id !== this.fsPage?.directory.id || page.generation !== this.fsPage?.generation) return [];
+      // Across pages only IDs are hints. Every retained folder must be sampled
+      // again before any of its metadata appears in the destination.
+      return (this.sceneContext || []).filter(n => n.node_kind === 'directory' &&
+        n.parent_id === page.directory.id && n.fields?.coverage !== 'not-examined').map(n => n.id).slice(0, 3);
+    }
+
+    _clearSceneContext(redraw = true) {
+      this.sceneRequest?.abort();
+      this.sceneRequest = null;
+      if (!this.sceneContext?.length) return;
+      this.sceneContext = [];
+      if (this.tooltipEl) {
+        this.tooltipEl.hidden = true;
+        this.tooltipEl.textContent = '';
       }
+      if (redraw) this._drawScene({ preserveCamera: true });
+    }
+
+    async _sampleScene(page) {
+      if (!this.scene3d || this.viewMode !== '3d' || this.sceneRequest || !page) return;
+      const request = new AbortController();
+      this.sceneRequest = request;
+      try {
+        const nodes = await this.data.sceneNeighborhood(page, request.signal, this._neighborCandidates(page));
+        if (request.signal.aborted || this.fsPage !== page) return;
+        if (JSON.stringify(nodes) !== JSON.stringify(this.sceneContext)) {
+          this.sceneContext = nodes;
+          this._drawScene({ preserveCamera: true });
+        }
+      } catch (error) {
+        if (request.signal.aborted || this.fsPage !== page) return;
+        // Congestion does not change the authority behind the current frame.
+        if (error.status === 429) return;
+        if (error.status === 409 || error.status === 403) {
+          const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
+          await this._openFilesystem(selected?.objectId || page.directory.id, {
+            pushHistory: false, refresh: true, invalidation: error,
+          });
+        } else this._clearSceneContext();
+      } finally {
+        if (this.sceneRequest === request) this.sceneRequest = null;
+      }
+    }
+
+    _layoutOptions() {
+      return { selectedNodeId: this.currentNodeId, expandedDirs: this.expandedDirs,
+        collapsedDirs: this.collapsedDirs, expandedPedestals: this.expandedPedestals };
+    }
+
+    _drawScene(options) {
+      if (!this.scene3d || !this.layout) return;
+      let layout = this.layout;
+      if (this.sceneContext?.length) {
+        const nodes = new Map(this.sceneContext.map(node => [node.id, node]));
+        for (const node of this.data.state.nodes) {
+          const sample = nodes.get(node.id);
+          if (sample?.fields.coverage && node.fields?.coverage === 'not-examined') {
+            nodes.set(node.id, { ...node, fields: { ...node.fields, coverage: sample.fields.coverage } });
+          } else nodes.set(node.id, node);
+        }
+        layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor,
+          { ...this.data.state, nodes: [...nodes.values()] }, this._layoutOptions());
+      }
+      this.scene3d.setLayout(layout, { descriptor: this.data.descriptor, ...options });
+    }
+
+    _rebuildLayout({ runEstablishingShot = false, preserveCamera = false, navigationTargetId = null } = {}) {
+      this.layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor, this.data.state, this._layoutOptions());
+      this._drawScene({ runEstablishingShot, preserveCamera, navigationTargetId });
+      this.ariaTree.expanded = new Set(this.layout.pedestals.filter(node => !node.collapsed).map(node => node.id));
       this.ariaTree.build(this.data.descriptor, this.data.state, this.layout);
     }
 
@@ -231,16 +572,20 @@
       document.getElementById('btn-mode-3d').classList.toggle('active', mode === '3d');
       document.getElementById('btn-mode-grid').classList.toggle('active', mode === 'grid');
       document.getElementById('btn-mode-sql').classList.toggle('active', mode === 'sql');
-      if (mode === '3d' && this.scene3d) this.scene3d.requestRender();
+      if (mode === '3d' && this.scene3d) {
+        this.scene3d.requestRender();
+        if (this.fsPage) this._sampleScene(this.fsPage);
+      } else this._clearSceneContext();
     }
 
     expandPedestal(pedestalId) {
       this.expandedPedestals.add(pedestalId);
       this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
-      this.handleNodeSelect(pedestalId, { pushHistory: false });
+      this.ariaTree.syncFromWorld(this.currentNodeId);
     }
 
     expandDirectory(dirId) {
+      this.collapsedDirs.delete(dirId);
       this.expandedDirs.add(dirId);
       this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
     }
@@ -252,7 +597,8 @@
       while (cur && cur.parentId) {
         const parentId = cur.parentId;
         const parentPed = this.layout.nodeById.get(parentId);
-        if (parentPed && parentPed.collapsed) {
+        if (!parentPed || parentPed.collapsed) {
+          this.collapsedDirs.delete(parentId);
           this.expandedDirs.add(parentId);
           rebuilt = true;
         }
@@ -266,6 +612,11 @@
 
     handleNodeSelect(nodeId, { shiftKey = false, fromTree = false, pushHistory = true, instant = false } = {}) {
       if (!this.layout) return;
+      const logicalNode = this.layout.allTreeNodesById.get(nodeId);
+      if (this.data.filesystem && (logicalNode || nodeId === 'root' || nodeId.startsWith('node/'))) {
+        const id = logicalNode?.objectId || (nodeId === 'root' ? 'root' : decodeURIComponent(nodeId.slice(5)));
+        return this._openFilesystem(id, { kind: logicalNode?.nodeKind, pushHistory, instant, moveCamera: !shiftKey });
+      }
       let node = this.layout.nodeById.get(nodeId);
       if (!node) {
         // Node may live inside a collapsed subtree (>50) or aggregated >16 pedestal!
@@ -297,11 +648,11 @@
       }
 
       if (pushHistory && this.currentNodeId && this.currentNodeId !== nodeId) {
-        this.history.push(this.currentNodeId);
-        if (this.history.length > 40) this.history.shift();
+        this._remember(nodeId);
       }
       this.currentNodeId = nodeId;
-      document.getElementById('btn-back').disabled = this.history.length === 0;
+      this._updateNavigationButtons();
+      this._renderGrid();
 
       const freshNode = this.layout.nodeById.get(nodeId) || node;
       if (this.scene3d) {
@@ -359,15 +710,7 @@
     }
 
     ascendToParent() {
-      if (this.evidence.isOpen()) {
-        this.evidence.hide();
-        const cur = this.layout && this.layout.nodeById.get(this.currentNodeId);
-        if (cur && cur.parentId) {
-          this.handleNodeSelect(cur.parentId);
-          return;
-        }
-      }
-      const cur = this.layout && this.layout.nodeById.get(this.currentNodeId);
+      const cur = this.layout?.allTreeNodesById.get(this.currentNodeId);
       if (cur && cur.parentId) {
         this.handleNodeSelect(cur.parentId);
       } else {
@@ -376,8 +719,12 @@
     }
 
     frameAll({ instant = false } = {}) {
+      if (this.data.filesystem) return this._openFilesystem('root', { instant, frame: true });
+      this._remember('root');
       this.evidence.hide();
       this.currentNodeId = 'root';
+      this._updateNavigationButtons();
+      this._renderGrid();
       if (this.scene3d) this.scene3d.frameOverview({ instant });
       this.ariaTree.syncFromWorld('root', 'Framed complete filesystem overview');
       this._updateBreadcrumbs();
@@ -386,7 +733,8 @@
     stepFailure(delta) {
       const allLeaves = (this.layout && this.layout.allLeaves) || [];
       const failures = allLeaves.filter((leaf) => global.RoomViewLayout.getLegendEntry(this.data.descriptor, leaf.kind).isFailure);
-      if (!failures.length) return;
+      if (global.RoomViewLayout.isWorkspace(this.data.descriptor) || !failures.length) return;
+      if (this.failureIndex < 0 && delta < 0) this.failureIndex = 0;
       this.failureIndex = (this.failureIndex + delta + failures.length) % failures.length;
       this.selectItemById(failures[this.failureIndex].objectId, { openInspector: true });
     }
@@ -417,6 +765,7 @@
         const seg = node.nodeType === 'root' ? '/' : (node.segmentLabel || node.label).replace(/^\/+/, '');
         btn.textContent = seg;
         btn.title = node.path || seg;
+        if (idx === chain.length - 1) btn.setAttribute('aria-current', 'location');
         btn.addEventListener('click', () => this.handleNodeSelect(node.id));
         nav.appendChild(btn);
       });
@@ -429,6 +778,10 @@
       const spotLabel = this.spotlightMode === 'v2' ? 'Spot v2' : 'Spot base';
       const draws = this.scene3d ? ` · ${this.scene3d.stats.drawCalls} draws` : ' · 2D';
       const dirInfo = this.layout ? `${this.layout.pedestals.length} dirs · ` : '';
+      if (global.RoomViewLayout.isWorkspace(this.data.descriptor)) {
+        el.textContent = `${dirInfo}${counts.total} observed files`;
+        return;
+      }
       el.textContent = `${dirInfo}${counts.total} objects (${counts.fail} fail) · ${spotLabel}${draws}`;
     }
 
@@ -448,6 +801,10 @@
         const entry = global.RoomViewLayout.getLegendEntry(this.data.descriptor, node.kind);
         const rawMetric = node.item.metric != null ? `${node.item.metric}${unit} (Bin ${node.quantileBin}/5)` : 'n/a';
         mEl.textContent = `${entry.symbol} ${entry.label} · ${rawMetric}`;
+      } else if (this.data.filesystem && node.nodeKind === 'directory') {
+        const coverage = node.coverage || 'not-examined';
+        mEl.textContent = `Directory · ${coverage} · open for current listing`;
+        if (this.scene3d?.searchBranches?.has(node.objectId)) mEl.textContent += ' · contains an observed search match';
       } else if (node.counts) {
         mEl.textContent = global.RoomViewLayout.formatCountsSummary(node.counts, this.data.descriptor);
       }
@@ -598,12 +955,30 @@
       document.getElementById('btn-theme-night').addEventListener('click', () => this._applyTheme('night'));
       document.getElementById('btn-theme-grass').addEventListener('click', () => this._applyTheme('grass'));
       document.getElementById('btn-frame-all').addEventListener('click', () => this.frameAll());
+      document.getElementById('btn-forward').addEventListener('click', () => {
+        if (!this.forward.length) return;
+        this.history.push(this.currentNodeId);
+        this.handleNodeSelect(this.forward.pop(), { pushHistory: false });
+      });
+      document.getElementById('btn-up').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('fs-details').addEventListener('click', () => {
+        const target = this.layout.allTreeNodesById.get(this.currentNodeId);
+        if (target) this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout);
+      });
+      document.getElementById('fs-continue').addEventListener('click', () => {
+        if (this.fsResume) this.fsResume();
+        else if (this.fsRetry) this._openFilesystem('root', { pushHistory: false });
+        else if (this.fsPage?.cursor) this._openFilesystem(this.fsPage.directory.id, {
+          cursor: this.fsPage.cursor, kind: 'directory', pushHistory: false,
+        });
+      });
       document.getElementById('btn-back').addEventListener('click', () => {
         if (!this.history.length) return;
         const prev = this.history.pop();
+        this.forward.push(this.currentNodeId);
         this.handleNodeSelect(prev, { pushHistory: false });
       });
-      document.getElementById('btn-inspector-close').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.dismiss({ close: true }));
       document.getElementById('btn-prev-fail').addEventListener('click', () => this.stepFailure(-1));
       document.getElementById('btn-next-fail').addEventListener('click', () => this.stepFailure(1));
 
@@ -650,6 +1025,20 @@
       });
       window.addEventListener('beforeprint', () => this._preparePrint());
 
+      if (this.data.filesystem) {
+        this.filesystemSearch = new global.RoomViewFilesystemSearch({
+          list: (id, generation, cursor, signal) => this.data.queryFilesystem('list', {
+            id, ...(generation ? { generation } : {}), ...(cursor ? { cursor } : {}),
+          }, signal),
+          inspect: (id, generation, signal) => this.data.queryFilesystem('inspect', { id, generation }, signal),
+          select: hit => this._openFilesystem(hit.id, { kind: hit.node_kind }),
+          onMatches: (ids, active, routes) => this.scene3d?.setSearchMatches(ids, active, routes),
+          directory: () => this.fsPage?.directory.id || 'root',
+          root: () => 'root',
+          generation: () => this.data.fsGeneration,
+        });
+        return;
+      }
       this.searchInputEl.addEventListener('input', () => this._runSearch(this.searchInputEl.value));
       this.searchInputEl.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') {
@@ -686,6 +1075,7 @@
           if (!help.hidden) { help.hidden = true; return; }
           if (!exp.hidden) { exp.hidden = true; return; }
           if (!lb.hidden) { lb.hidden = true; return; }
+          if (this.evidence.isOpen()) { this.evidence.dismiss(); return; }
           this.ascendToParent();
         } else if (ev.key === 'f' || ev.key === 'F') {
           ev.preventDefault();
@@ -733,7 +1123,24 @@
 
     _startLivePolling() {
       const intervalMs = Math.max(1000, (this.data.liveConfig && this.data.liveConfig.pollIntervalMs) || 5000);
-      setInterval(async () => {
+      const poll = async () => {
+        if (this.data.filesystem) {
+          if (this.fsBusy || !this.fsPage) return;
+          const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
+          const page = this.fsPage;
+          const navigation = this.fsRequest;
+          try {
+            await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
+            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) await this.filesystemSearch.validateDisplayed();
+            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) await this._sampleScene(page);
+          } catch (error) {
+            if (error.status === 429) return;
+            if (page === this.fsPage && navigation === this.fsRequest && !this.fsBusy) {
+              return this._openFilesystem(selected?.objectId || page.directory.id, { kind: selected?.nodeKind, refresh: true, pushHistory: false, invalidation: error });
+            }
+          }
+          return;
+        }
         try {
           await this.data.refreshLive();
           this._syncFromData({ isInitial: false });
@@ -742,7 +1149,9 @@
           staleBanner.textContent = 'STALE DATA (poll-connection-error) — retrying automatically';
           staleBanner.hidden = false;
         }
-      }, intervalMs);
+      };
+      this.refresh = poll;
+      setInterval(poll, intervalMs);
     }
 
     _exposeDebugHandle() {
@@ -801,8 +1210,7 @@
           if (app.scene3d) app.scene3d.settleAnimationsImmediately();
         },
         refreshNow: async () => {
-          await app.data.refreshLive();
-          app._syncFromData({ isInitial: false });
+          await app.refresh?.();
         },
         runSql: (q) => app.sqlConsole.execute(q),
         openTab: (tab) => app.evidence.switchTab(tab),

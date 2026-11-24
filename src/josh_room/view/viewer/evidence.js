@@ -281,6 +281,22 @@
     return card;
   }
 
+  function fileReaderAction(target) {
+    const previews = target.previews || [];
+    const text = previews.find(p => p.status === 'available' && p.body != null);
+    const attachments = (target.attachments || []).filter(a => a.embedded !== false);
+    const pdf = attachments.find(a => a.media_type === 'application/pdf');
+    const image = attachments.find(a => a.media_type?.startsWith('image/'));
+    if (text) {
+      const label = text.media_type === 'text/x-diff' ? 'Read diff' : text.media_type === 'application/json'
+        ? 'Inspect JSON' : text.slot === 'log' || text.language === 'log' ? 'Read log' : 'Read file';
+      return { label, tab: 'content', slot: text.slot };
+    }
+    if (pdf || image) return { label: pdf ? 'Read PDF' : 'View image', tab: 'evidence' };
+    if (attachments.length) return { label: 'Open file', tab: 'evidence' };
+    return { label: 'File details', tab: 'details', detail: target.attachments?.length ? 'Attachment bytes omitted from this observation' : previews.find(p => p.reason)?.reason || 'No preview available' };
+  }
+
   class EvidenceDrawer {
     constructor(dataLayer, loadPdfJsFn, callbacks) {
       this.data = dataLayer;
@@ -296,11 +312,26 @@
       this.tabDetailsEl = document.getElementById('tab-details');
       this.tabEvidenceEl = document.getElementById('tab-evidence');
       this.tabTimelineEl = document.getElementById('tab-timeline');
+      this.comparison = new global.RoomSavedComparison(dataLayer, document.getElementById('tab-compare'),
+        document.getElementById('btn-compare-tab'));
+      this.fileSummary = document.getElementById('file-summary');
+      this.summaryInfo = document.getElementById('file-summary-info');
+      this.readButton = document.getElementById('btn-read-file');
+      this.compareButton = document.getElementById('btn-compare-file');
+      this.readerBack = document.getElementById('btn-reader-back');
+      this.readButton.addEventListener('click', () => {
+        if (this.openCurrentVersion) this.openCurrentVersion();
+        else this._openReader(this.readTab, this.readButton);
+      });
+      this.compareButton.addEventListener('click', () => this._openReader('compare', this.compareButton));
+      this.readerBack.addEventListener('click', () => this.dismiss());
       this.lightboxEl = document.getElementById('lightbox-modal');
       this.lightboxImg = document.getElementById('lightbox-img');
       this.lightboxCaption = document.getElementById('lightbox-caption');
 
+      this.readingPositions = new Map();
       this.currentItem = null;
+      this.contentFingerprint = null;
       this.currentObjectId = null;
       this.activeTab = 'content';
       this.activePreviewSlot = null;
@@ -334,6 +365,22 @@
     }
 
     switchTab(tabName) {
+      if (tabName !== 'evidence') this.releasePdfPosition?.();
+      const tabs = Array.from(this.drawerEl.querySelectorAll('.tab-btn'));
+      if (!tabs.some(btn => !btn.hidden && btn.dataset.tab === tabName)) {
+        tabName = tabs.find(btn => !btn.hidden && btn.dataset.tab !== 'compare')?.dataset.tab || 'details';
+      }
+      if (this.reader && this.fileSummary.hidden && this.activeTab === this.readTab && tabName !== this.readTab) {
+        this.filePosition = this.captureReadingPosition();
+      }
+      if (tabName === 'compare') this.comparison.open();
+      else this.comparison.close();
+      if (this.reader && tabName !== 'compare') {
+        if (tabName === 'evidence' && this.prepareAttachment) {
+          this.prepareAttachment();
+          this.prepareAttachment = null;
+        }
+      }
       this.activeTab = tabName;
       this.drawerEl.querySelectorAll('.tab-btn').forEach((btn) => {
         const active = btn.getAttribute('data-tab') === tabName;
@@ -346,9 +393,176 @@
       this.tabTimelineEl.hidden = tabName !== 'timeline';
     }
 
+    async _openReader(tab, opener) {
+      if (!this.reader) return;
+      const item = this.currentItem;
+      const saved = this.readingPositions.get(this.currentObjectId);
+      let position = this.summaryReading;
+      if (tab === 'compare') this.filePosition = position;
+      if (!position && saved && tab !== 'compare') {
+        const unchanged = await this.readingUnchanged(item, saved);
+        if (this.currentItem !== item || this.fileSummary.hidden || !this.isOpen()) return;
+        if (unchanged) {
+          position = saved;
+          this.activePreviewSlot = saved.slot;
+          this._renderContent(item, this.descriptor, this.layout);
+          this.prepareAttachment = () => this._renderEvidence(item, saved);
+        } else this.readingPositions.delete(this.currentObjectId);
+      }
+      this.summaryReading = null;
+      this.fileSummary.hidden = true;
+      this.readerBack.hidden = false;
+      this.readerOpener = opener;
+      this.switchTab(tab);
+      if (position && tab !== 'compare') this._restoreTextScroll(position);
+      if (opener) this.readerBack.focus({ preventScroll: true });
+      if (position && tab === 'evidence') this._restorePdfPosition(position);
+    }
+
+    dismiss({ close = false } = {}) {
+      if (!close && this.reader && this.fileSummary.hidden) {
+        const current = this.captureReadingPosition();
+        this.releasePdfPosition?.();
+        this.summaryReading = { ...current,
+          comparison: current.comparison, summary: true, tab: this.readTab };
+        this.filePosition = null;
+        this._rememberPosition(this.summaryReading);
+        this.comparison.close();
+        this.fileSummary.hidden = false;
+        this.readerBack.hidden = true;
+        (this.readerOpener && !this.readerOpener.hidden ? this.readerOpener : this.readButton).focus();
+        document.getElementById('aria-live-region').textContent = 'Back to ' + this.currentItem.label + '.';
+        return;
+      }
+      const returnFocus = this.returnFocus;
+      const label = this.currentItem?.label;
+      this.hide();
+      const opener = returnFocus?.isConnected && returnFocus !== document.body &&
+        returnFocus.tagName !== 'CANVAS' && !returnFocus.closest('[hidden], [inert]') &&
+        returnFocus.getClientRects().length ? returnFocus : null;
+      const candidates = [
+        opener,
+        document.querySelector('#grid-view:not([hidden]) tr.selected button'),
+        document.querySelector('#tree-panel[data-open="true"] [role="treeitem"][aria-selected="true"]'),
+        document.querySelector('#breadcrumbs button[aria-current="location"]'),
+        document.getElementById('btn-tree-toggle'),
+      ];
+      for (const candidate of candidates) {
+        if (!candidate) continue;
+        candidate.focus({ preventScroll: true });
+        if (document.activeElement === candidate) break;
+      }
+      document.getElementById('aria-live-region').textContent =
+        label ? 'Inspector closed. Selected ' + label + '.' : 'Inspector closed.';
+    }
+
+    captureReadingPosition() {
+      if (!this.isOpen() || !this.currentItem) return null;
+      if (this.reader && !this.fileSummary.hidden && this.summaryReading) return this.summaryReading;
+      if (this.reader && this.activeTab !== this.readTab && this.filePosition?.id === this.currentObjectId) {
+        return { ...this.filePosition, tab: this.activeTab, detailsTop: this.tabDetailsEl.scrollTop,
+          comparison: this.comparison.capture() };
+      }
+      const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
+      const page = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot')).find(
+        slot => slot.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top);
+      const scroll = this.tabContentEl.querySelector('.code-viewer, .json-tree');
+      return {
+        textTop: scroll?.scrollTop || 0, textLeft: scroll?.scrollLeft || 0,
+        pageOffset: page ? Math.max(0, viewport.getBoundingClientRect().top - page.getBoundingClientRect().top) : 0,
+        pdfLeft: viewport?.scrollLeft || 0,
+        id: this.currentObjectId, tab: this.activeTab, slot: this.activePreviewSlot,
+        summary: this.reader && !this.fileSummary.hidden,
+        comparison: this.comparison.capture(),
+        digest: this._contentDigest(this.currentItem),
+        attachment: this.tabEvidenceEl.querySelector('.att-pill.active')?.getAttribute('data-attachment-name'),
+        page: Number(page?.dataset.pageNum) || 1, fit: this._pdfFitMode, scale: this._pdfScale,
+        top: this.tabContentEl.scrollTop, detailsTop: this.tabDetailsEl.scrollTop,
+      };
+    }
+
+    _restoreTextScroll(position) {
+      this.tabContentEl.scrollTop = position.top || 0;
+      this.tabDetailsEl.scrollTop = position.detailsTop || 0;
+      const scroll = this.tabContentEl.querySelector('.code-viewer, .json-tree');
+      if (scroll) {
+        scroll.scrollTop = position.textTop || 0;
+        scroll.scrollLeft = position.textLeft || 0;
+      }
+    }
+
+    _restorePdfPosition(position) {
+      this.releasePdfPosition?.();
+      const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
+      const slots = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot'));
+      const page = slots?.[position.page - 1];
+      if (!page || !viewport.clientHeight) return;
+      // Keep the measured page point fixed while lazy canvases replace placeholders.
+      const align = () => {
+        if (!viewport.clientHeight) return;
+        const delta = page.getBoundingClientRect().top - viewport.getBoundingClientRect().top + (position.pageOffset || 0);
+        if (Math.abs(delta) > 0.5) viewport.scrollTop += delta;
+        viewport.scrollLeft = position.pdfLeft || 0;
+      };
+      align();
+      const observer = new ResizeObserver(align);
+      observer.observe(viewport);
+      for (const slot of slots.slice(0, position.page)) observer.observe(slot);
+      const events = new AbortController();
+      // Focus restoration can enqueue a browser scroll after layout has settled.
+      viewport.addEventListener('scroll', align, { passive: true, signal: events.signal });
+      this.releasePdfPosition = () => {
+        observer.disconnect();
+        events.abort();
+        this.releasePdfPosition = null;
+      };
+      for (const event of ['pointerdown', 'wheel', 'keydown']) {
+        this.tabEvidenceEl.addEventListener(event, this.releasePdfPosition, { capture: true, passive: true, signal: events.signal });
+      }
+    }
+
+    async _contentDigest(target) {
+      const bytes = new TextEncoder().encode(JSON.stringify([target.previews || [], target.attachments || []]));
+      const hash = await crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(hash)).join(',');
+    }
+
+    async readingUnchanged(target, position) {
+      return (target.objectId || target.id) === position.id && await position.digest === await this._contentDigest(target);
+    }
+
+    _rememberPosition(position) {
+      if (!position || !this.currentObjectId) return;
+      this.readingPositions.delete(this.currentObjectId);
+      this.readingPositions.set(this.currentObjectId, position);
+      if (this.readingPositions.size > 16) this.readingPositions.delete(this.readingPositions.keys().next().value);
+    }
+
     hide() {
+      if (this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
+      this.comparison.select(null);
+      this.reader = false;
+      this.openCurrentVersion = null;
+      this.filePosition = null;
+      this.summaryReading = null;
+      this.prepareAttachment = null;
+      this.returnFocus = null;
+      this.readerOpener = null;
+      this.summaryInfo.textContent = '';
+      this.layout = null;
+      this.descriptor = null;
+      this.fileSummary.hidden = true;
+      this.readerBack.hidden = true;
+      this._attRequestSeq++;
       this._teardownPdf();
+      this.lightboxEl.hidden = true;
+      this.lightboxImg.removeAttribute('src');
+      this.lightboxCaption.textContent = '';
+      for (const el of [this.tabContentEl, this.tabDetailsEl, this.tabEvidenceEl, this.tabTimelineEl, this.titleEl, this.pathEl]) {
+        el.textContent = '';
+      }
       this.currentItem = null;
+      this.contentFingerprint = null;
       this.currentObjectId = null;
       this.activePreviewSlot = null;
       this.drawerEl.hidden = true;
@@ -358,14 +572,46 @@
       return !this.drawerEl.hidden;
     }
 
-    showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false } = {}) {
-      this._teardownPdf();
+    showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
+      const sameObject = this.currentObjectId === (target.objectId || target.id);
+      if (!sameObject && this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
+      this.comparison.select(target, reading?.comparison);
+      if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
+      if (!sameObject) { this.summaryReading = null; this.filePosition = null; }
+      const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
+      this.descriptor = descriptor;
+      this.layout = layout;
+      const native = this.data.filesystem || global.RoomViewLayout.isWorkspace(descriptor);
+      this.reader = native && ['file', 'artifact'].includes(target.nodeKind);
+      this.drawerEl.classList.toggle('filesystem-reader', Boolean(native));
+      const attachments = target.attachments || [];
+      const fileAvailable = attachments.some(a => a.embedded !== false);
+      const hasText = (target.previews || []).some(p => p.status === 'available');
+      document.getElementById('attachment-tab-label').textContent = native ? 'File' : 'Evidence';
+      this.drawerEl.querySelector('[data-tab="content"]').hidden = native &&
+        (!(target.previews || []).length || (fileAvailable && !hasText));
+      this.drawerEl.querySelector('[data-tab="timeline"]').hidden = Boolean(native);
+      this.drawerEl.querySelector('[data-tab="evidence"]').hidden = native && !fileAvailable;
+      const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
+      const wasDeferred = sameObject && this.openCurrentVersion;
+      const unchanged = preserveTab && sameObject && fingerprint === this.contentFingerprint;
+      const changed = preserveTab && sameObject && !unchanged;
+      if (!unchanged || deferContent) {
+        this._attRequestSeq++;
+        this._teardownPdf();
+        this.lightboxEl.hidden = true;
+        this.lightboxImg.removeAttribute('src');
+        this.prepareAttachment = null;
+        this.contentFingerprint = fingerprint;
+      }
+      if (!sameObject) this.activePreviewSlot = null;
+      if (!sameObject && !this.drawerEl.contains(document.activeElement)) this.returnFocus = document.activeElement;
       this.currentItem = target;
       this.currentObjectId = target.objectId || target.id;
       this.drawerEl.hidden = false;
 
       const entry = global.RoomViewLayout.getLegendEntry(descriptor, target.kind);
-      this.badgeEl.textContent = `${entry.symbol} ${entry.label}`;
+      this.badgeEl.textContent = target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`;
       this.badgeEl.style.color = entry.color;
       this.badgeEl.style.borderColor = entry.color;
       this.badgeEl.style.borderStyle = entry.shape === 'hollow' ? 'dashed' : 'solid';
@@ -383,12 +629,81 @@
       if (this.contentCountBadgeEl) this.contentCountBadgeEl.textContent = String(previews.length);
       this.countBadgeEl.textContent = String(atts.length);
 
+      const summary = this.reader && (reading ? reading.summary : !sameObject || wasSummary);
+      this.fileSummary.hidden = !summary;
+      this.readerBack.hidden = !this.reader || summary;
+      if (this.reader) {
+        const action = fileReaderAction(target);
+        this.readButton.textContent = action.label;
+        this.summaryInfo.textContent = [
+          Number.isSafeInteger(target.fields?.file_bytes) ? target.fields.file_bytes + ' bytes' : null,
+          action.detail,
+        ].filter(Boolean).join(' · ');
+        this.compareButton.hidden = this.comparison.tab.hidden;
+        if (!sameObject || !preserveTab) {
+          this.readTab = action.tab;
+          this.activePreviewSlot = action.slot || null;
+        }
+      }
+
+      const deferred = changed || deferContent || wasDeferred;
+      this.openCurrentVersion = null;
+      if (deferred && !native) {
+        const reopen = document.createElement('button');
+        reopen.type = 'button';
+        reopen.textContent = 'Content changed. Open current version';
+        reopen.addEventListener('click', () => this.showTarget(this.currentItem, descriptor, state, layout, { quantileBin }));
+        this.tabContentEl.replaceChildren(reopen);
+        this.tabEvidenceEl.replaceChildren();
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        this._renderTimeline(target, state);
+        this.switchTab('content');
+        return;
+      }
+      if (deferred && this.reader) {
+        for (const panel of [this.tabContentEl, this.tabEvidenceEl, this.tabDetailsEl, this.tabTimelineEl]) panel.replaceChildren();
+        this.summaryReading = null;
+        this.filePosition = null;
+        this.readingPositions.delete(this.currentObjectId);
+        this.comparison.select(null);
+        this.fileSummary.hidden = false;
+        this.readerBack.hidden = true;
+        this.compareButton.hidden = true;
+        this.summaryInfo.textContent = 'The observed content changed.';
+        this.readButton.textContent = 'Open current version';
+        this.openCurrentVersion = () => {
+          this.openCurrentVersion = null;
+          this.showTarget(target, descriptor, state, layout, { quantileBin });
+          this._openReader(this.readTab, this.readButton);
+        };
+        return;
+      }
+      if (unchanged) {
+        if (this.drawerEl.querySelector('.tab-btn[aria-selected="true"][hidden]')) this.switchTab(this.activeTab);
+        this._renderDetails(target, descriptor, layout, quantileBin);
+        this._renderTimeline(target, state);
+        return;
+      }
+      if (reading) this.activePreviewSlot = reading.slot;
       this._renderContent(target, descriptor, layout);
       this._renderDetails(target, descriptor, layout, quantileBin);
       this._renderTimeline(target, state);
-      this._renderEvidence(target);
+      if (this.reader) {
+        this.tabEvidenceEl.replaceChildren();
+        this.prepareAttachment = () => this._renderEvidence(target, reading);
+      } else {
+        this._renderEvidence(target, reading);
+      }
+      if (summary) {
+        this.summaryReading = reading || null;
+        this.comparison.close();
+        return;
+      }
 
-      if (preserveTab) {
+      if (reading) {
+        this.switchTab(reading.tab);
+        this._restoreTextScroll(reading);
+      } else if (preserveTab) {
         this.switchTab(this.activeTab);
       } else if (previews.length > 0) {
         this.switchTab('content');
@@ -526,6 +841,7 @@
       } else {
         const slotBar = document.createElement('div');
         slotBar.className = 'preview-slot-bar';
+        slotBar.hidden = !!this.data.filesystem && previews.length === 1;
         const stageEl = document.createElement('div');
         stageEl.className = 'preview-stage';
         this.tabContentEl.append(slotBar, stageEl);
@@ -549,6 +865,10 @@
           left.textContent = `${prev.title} · ${prev.media_type}`;
           const right = document.createElement('span');
           right.textContent = prev.truncated ? 'BOUNDED EXCERPT' : (prev.status || 'available').toUpperCase();
+          if (this.data.filesystem && prev.status === 'available') {
+            left.textContent = [prev.language || prev.media_type, prev.summary].filter(Boolean).join(' · ');
+            right.textContent = prev.truncated ? 'Bounded excerpt' : '';
+          }
           hdr.append(left, right);
           stageEl.appendChild(hdr);
 
@@ -600,13 +920,13 @@
       const metricName = descriptor.metric ? descriptor.metric.name : 'metric';
       const entry = global.RoomViewLayout.getLegendEntry(descriptor, target.kind);
       const rows = [
-        ['ID', target.objectId || target.id],
         ['Path', target.path || '—'],
         ['Type', target.nodeKind || 'file'],
-        ['Outcome', `${entry.symbol} ${entry.label} (${target.kind})`],
+        [global.RoomViewLayout.isWorkspace(descriptor) ? 'Kind' : 'Outcome', target.nodeKind === 'directory' ? 'Directory' : `${entry.symbol} ${entry.label}`],
         [metricName, target.metric != null ? `${target.metric}${unit}${quantileBin ? ` (Bin ${quantileBin}/5)` : ''}` : '—'],
         ['Updated', target.updated_at || '—'],
       ];
+
       if (target.group) rows.push([descriptor.group_label || 'Group', target.group]);
       if (target.stage) rows.push(['Stage', target.stage]);
       for (const [k, v] of Object.entries(target.fields || {})) {
@@ -632,17 +952,24 @@
         sumEl.textContent = target.summary;
         this.tabDetailsEl.appendChild(sumEl);
       }
-      this.tabDetailsEl.appendChild(grid);
+      const provenance = document.createElement('details');
+      const provenanceHeading = document.createElement('summary');
+      provenanceHeading.textContent = 'Object provenance';
+      const source = document.createElement('p');
+      source.textContent = [descriptor.title, this.data.mode === 'offline' ? 'Frozen observation' : 'Live observation',
+        target.objectId || target.id].filter(Boolean).join(' · ');
+      provenance.append(provenanceHeading, source);
+      this.tabDetailsEl.append(grid, provenance);
 
       const linksSection = this._buildLinksSection(target, layout);
       if (linksSection) this.tabDetailsEl.appendChild(linksSection);
 
-      if ((target.attachments || []).length > 0) {
+      if ((target.attachments || []).some(a => !this.reader || a.embedded !== false)) {
         const hintBtn = document.createElement('button');
         hintBtn.type = 'button';
         hintBtn.className = 'hud-btn hud-btn-accent';
         hintBtn.style.marginTop = '12px';
-        hintBtn.textContent = `Open ${target.attachments.length} attached evidence file${target.attachments.length > 1 ? 's' : ''}`;
+        hintBtn.textContent = this.reader ? fileReaderAction(target).label : `Open ${target.attachments.length} attached evidence file${target.attachments.length > 1 ? 's' : ''}`;
         hintBtn.addEventListener('click', () => this.switchTab('evidence'));
         this.tabDetailsEl.appendChild(hintBtn);
       }
@@ -675,7 +1002,7 @@
       this.tabTimelineEl.appendChild(ul);
     }
 
-    _renderEvidence(target) {
+    _renderEvidence(target, reading) {
       this.tabEvidenceEl.textContent = '';
       const objId = target.objectId || target.id;
       const atts = target.attachments || [];
@@ -698,7 +1025,8 @@
       const images = sortedAtts.filter((a) => a.media_type.startsWith('image/'));
       const buttons = [];
 
-      const selectAtt = (att, btn) => {
+      const initial = sortedAtts.find(att => att.name === reading?.attachment) || sortedAtts[0];
+      const selectAtt = (att, btn, position) => {
         buttons.forEach((b) => b.classList.remove('active'));
         if (btn) btn.classList.add('active');
         this._attRequestSeq += 1;
@@ -706,7 +1034,7 @@
         this._teardownPdf();
         stageEl.textContent = '';
         if (att.media_type === 'application/pdf') {
-          this._openPdf(objId, att, stageEl, reqSeq);
+          this._openPdf(objId, att, stageEl, reqSeq, position);
         } else if (att.media_type.startsWith('image/')) {
           this._openImages(objId, images.length >= 2 ? images : [att], stageEl, reqSeq);
         } else if (att.media_type === 'text/html') {
@@ -720,16 +1048,16 @@
         }
       };
 
-      sortedAtts.forEach((att, idx) => {
+      sortedAtts.forEach((att) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'att-pill';
         btn.setAttribute('data-attachment-name', att.name);
-        btn.textContent = `${att.name} (${Math.max(1, Math.round(att.size / 1024))} KB)`;
+        btn.textContent = this.reader ? `${target.label} (${att.size} bytes)` : `${att.name} (${Math.max(1, Math.round(att.size / 1024))} KB)`;
         btn.addEventListener('click', () => selectAtt(att, btn));
         buttons.push(btn);
         listEl.appendChild(btn);
-        if (idx === 0) selectAtt(att, btn);
+        if (att === initial) selectAtt(att, btn, reading);
       });
     }
 
@@ -748,6 +1076,7 @@
     }
 
     _teardownPdf() {
+      this.releasePdfPosition?.();
       if (this._pdfObserver) {
         this._pdfObserver.disconnect();
         this._pdfObserver = null;
@@ -758,7 +1087,7 @@
       }
     }
 
-    async _openPdf(itemId, att, container, reqSeq) {
+    async _openPdf(itemId, att, container, reqSeq, reading) {
       const startMs = performance.now();
       const status = document.createElement('div');
       status.className = 'muted-text';
@@ -790,8 +1119,8 @@
           return;
         }
         this._pdfDoc = pdfDoc;
-        this._pdfFitMode = 'width';
-        this._pdfScale = 1.0;
+        this._pdfFitMode = reading?.fit || 'width';
+        this._pdfScale = reading?.scale || 1;
 
         container.textContent = '';
 
@@ -909,7 +1238,10 @@
           { root: viewportEl, rootMargin: '120px 0px' }
         );
         slots.forEach((s) => this._pdfObserver.observe(s));
-        await renderPageIntoSlot(slots[0]);
+        const landing = slots[(reading?.page || 1) - 1] || slots[0];
+        await renderPageIntoSlot(landing);
+        if (reqSeq !== this._attRequestSeq) return;
+        if (reading) this._restorePdfPosition(reading);
 
         btnFitW.addEventListener('click', () => { this._pdfFitMode = 'width'; this._pdfScale = 1.0; rerenderVisible(); });
         btnFitP.addEventListener('click', () => { this._pdfFitMode = 'page'; this._pdfScale = 1.0; rerenderVisible(); });

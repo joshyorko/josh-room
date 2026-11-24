@@ -14,9 +14,6 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
   <!-- Full-viewport 3D UNIX Filesystem World (aria-hidden; mirrored by APG role="tree") -->
   <div id="world-stage" class="world-stage">
     <canvas id="fsn-canvas" aria-hidden="true"></canvas>
-    <div id="webgl-fallback-notice" class="floating-notice" hidden>
-      WebGL unavailable — running in 2D Grid mode. Content previews, attachments, and SQL console remain active.
-    </div>
     <div id="hover-tooltip" class="hover-tooltip" role="tooltip" hidden></div>
   </div>
 
@@ -24,38 +21,59 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
   <header id="hud-top" class="hud-top" aria-label="Room View navigation and controls">
     <div class="hud-left">
       <button id="btn-back" class="hud-btn hud-icon-btn" type="button" title="Go back (Backspace)" aria-label="Go back" disabled>&#8592;</button>
-      <nav id="breadcrumbs" class="breadcrumbs" aria-label="Directory path"></nav>
-      <span id="badge-mode" class="pill pill-mode">OFFLINE</span>
-      <span id="badge-sensitivity" class="pill pill-sensitivity">SYNTHETIC</span>
+      <button id="btn-forward" class="hud-btn hud-icon-btn" type="button" title="Go forward" aria-label="Go forward" disabled>&#8594;</button>
+      <button id="btn-up" class="hud-btn hud-icon-btn" type="button" title="Go to parent folder" aria-label="Go to parent folder" disabled>&#8593;</button>
+      <div class="room-location">
+        <div class="room-heading"><strong id="room-title"></strong><div class="session-badges"><span id="badge-mode" class="pill pill-mode">Offline</span> <span id="badge-sensitivity" class="pill pill-sensitivity"></span></div></div>
+        <nav id="breadcrumbs" class="breadcrumbs" aria-label="Directory path"></nav>
+      </div>
     </div>
     <div class="hud-right">
       <label class="search-wrap" aria-label="Search files and directories">
         <span class="search-slash" aria-hidden="true">/</span>
-        <input id="search-input" type="search" placeholder="Search paths, files, runs..." autocomplete="off" spellcheck="false">
+        <input id="search-input" type="search" placeholder="Find in this view" autocomplete="off" spellcheck="false">
       </label>
+      <select id="fs-search-scope" class="hud-btn" aria-label="Search scope" hidden>
+        <option value="directory">This folder</option>
+        <option value="subtree">This subtree</option>
+        <option value="workspace">Whole workspace</option>
+      </select>
       <div class="seg-group" role="group" aria-label="View mode">
         <button id="btn-mode-3d" class="seg-btn active" type="button" data-view="3d">3D</button>
         <button id="btn-mode-grid" class="seg-btn" type="button" data-view="grid" title="Toggle 2D Grid (G)">Grid</button>
-        <button id="btn-mode-sql" class="seg-btn" type="button" data-view="sql">SQL</button>
       </div>
       <div class="seg-group" role="group" aria-label="Landscape theme">
         <button id="btn-theme-night" class="seg-btn active" type="button" data-theme="night">Night</button>
         <button id="btn-theme-grass" class="seg-btn" type="button" data-theme="grass">Grass</button>
       </div>
       <button id="btn-tree-toggle" class="hud-btn" type="button" aria-expanded="false" aria-controls="tree-panel" title="Toggle accessible directory tree">Tree</button>
-      <button id="btn-spotlight-ab" class="hud-btn" type="button" title="Switch Spotlight v2 / Baseline">Spot: v2</button>
-      <button id="btn-motion" class="hud-btn" type="button" title="Toggle motion (M)">Motion</button>
-      <button id="btn-frame-all" class="hud-btn" type="button" title="Frame entire tree (F)">Frame</button>
-      <button id="btn-export-live" class="hud-btn hud-btn-accent" type="button" hidden>Export HTML</button>
-      <button id="btn-print" class="hud-btn" type="button" title="Print top-down map and 2D grid">Print</button>
-      <button id="btn-help" class="hud-btn hud-icon-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">?</button>
+      <details class="advanced-hud">
+        <summary class="hud-btn">More</summary>
+        <div class="advanced-actions">
+          <button id="btn-help" class="hud-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">Keyboard help</button>
+          <details class="world-key"><summary>Map key</summary><div id="menu-map-key"></div></details>
+          <button id="btn-mode-sql" class="seg-btn" type="button" data-view="sql">SQL</button>
+          <button id="btn-spotlight-ab" class="hud-btn" type="button" title="Switch Spotlight v2 / Baseline">Spot: v2</button>
+          <button id="btn-motion" class="hud-btn" type="button" title="Toggle motion (M)">Motion</button>
+          <button id="btn-frame-all" class="hud-btn" type="button" title="Frame entire tree (F)">Frame</button>
+          <button id="btn-export-live" class="hud-btn hud-btn-accent" type="button" hidden>Export HTML</button>
+          <button id="btn-print" class="hud-btn" type="button" title="Print top-down map and 2D grid">Print</button>
+        </div>
+      </details>
+
     </div>
   </header>
 
   <!-- Sensitivity / Stale Banners (thin strip directly below HUD when active) -->
   <div id="banner-stack" class="banner-stack">
+    <div id="webgl-fallback-notice" class="banner" hidden>WebGL is unavailable. Browsing in Grid.</div>
     <div id="sensitivity-banner" class="banner banner-sensitivity" hidden></div>
     <div id="stale-banner" class="banner banner-stale" role="status" hidden></div>
+    <div class="filesystem-status">
+      <span id="fs-coverage" role="status" hidden></span>
+      <button id="fs-details" class="hud-btn" type="button" hidden>Directory details</button>
+      <button id="fs-continue" class="hud-btn" type="button" hidden>Load more</button>
+    </div>
     <div id="search-results-bar" class="search-results-bar" hidden></div>
   </div>
 
@@ -72,10 +90,10 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
   <div id="aria-live-region" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <!-- Dismissible Contextual Inspector & Evidence Drawer (HIDDEN until selection) -->
-  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object content, details, links, and evidence" hidden>
+  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object" hidden>
     <div class="drawer-header">
       <div class="drawer-title-group">
-        <span id="inspector-kind-badge" class="kind-badge">PASS</span>
+        <span id="inspector-kind-badge" class="kind-badge"></span>
         <div>
           <h2 id="inspector-title">Object</h2>
           <p id="inspector-path" class="drawer-subtitle"></p>
@@ -84,23 +102,33 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <div class="drawer-header-actions">
         <button id="btn-prev-fail" class="hud-btn hud-sm" type="button" title="Previous failure ([)">[ Fail</button>
         <button id="btn-next-fail" class="hud-btn hud-sm" type="button" title="Next failure (])">Fail ]</button>
-        <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector (Esc)">&times;</button>
+        <button id="btn-reader-back" class="hud-btn hud-sm" type="button" hidden>Back to file</button>
+        <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector">&times;</button>
       </div>
     </div>
+    <section id="file-summary" aria-label="Selected object actions" hidden>
+      <p id="file-summary-info"></p>
+      <div class="file-summary-actions">
+        <button id="btn-read-file" class="hud-btn" type="button">Read file</button>
+        <button id="btn-compare-file" class="hud-btn" type="button" hidden>Compare saved version</button>
+      </div>
+    </section>
     <div class="drawer-tabs" role="tablist" aria-label="Inspector sections">
       <button class="tab-btn active" role="tab" aria-selected="true" data-tab="content" type="button">Content <span id="content-count-badge" class="tab-count">0</span></button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="details" type="button">Details</button>
-      <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button">Evidence <span id="evidence-count-badge" class="tab-count">0</span></button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button"><span id="attachment-tab-label">Evidence</span> <span id="evidence-count-badge" class="tab-count">0</span></button>
+      <button id="btn-compare-tab" class="tab-btn" role="tab" aria-controls="tab-compare" aria-selected="false" data-tab="compare" type="button" hidden>Compare</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="timeline" type="button">Timeline</button>
     </div>
     <div id="tab-content" class="drawer-body" role="tabpanel"></div>
     <div id="tab-details" class="drawer-body" role="tabpanel" hidden></div>
     <div id="tab-evidence" class="drawer-body" role="tabpanel" hidden></div>
+    <div id="tab-compare" class="drawer-body" role="tabpanel" aria-labelledby="btn-compare-tab" hidden></div>
     <div id="tab-timeline" class="drawer-body" role="tabpanel" hidden></div>
   </aside>
 
   <!-- Full 2D Grid Fallback / Triage View -->
-  <main id="grid-view" class="overlay-view" aria-label="2D Triage Grid" hidden>
+  <main id="grid-view" class="overlay-view" aria-label="Grid browser" hidden>
     <div class="grid-toolbar">
       <div id="grid-filters" class="grid-filters"></div>
       <div id="grid-summary-stats" class="grid-summary-stats"></div>
@@ -152,7 +180,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
         <button id="btn-help-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close help">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="muted-text">Click a directory slab or conduit wire to fly along its branch; click any file, run, or artifact block to spotlight it and inspect bounded read-only source, diffs, JSON trees, execution logs, evidence, and relationship links. Drag to orbit, Shift-drag to pan, scroll to zoom.</p>
+        <p class="muted-text">Select a directory to follow its branch. Select a block to spotlight the object and see what you can open. Drag to orbit, Shift-drag to pan, or scroll to zoom.</p>
         <table class="shortcuts-table">
           <tbody>
             <tr><td><kbd>&#8593;</kbd> / <kbd>&#8595;</kbd></td><td>Previous / next sibling</td></tr>
@@ -161,9 +189,9 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
             <tr><td><kbd>Enter</kbd></td><td>Fly to and select focused object</td></tr>
             <tr><td><kbd>Esc</kbd></td><td>Close inspector or climb to parent</td></tr>
             <tr><td><kbd>F</kbd></td><td>Frame entire filesystem tree</td></tr>
-            <tr><td><kbd>/</kbd></td><td>Search across all paths &amp; objects (including aggregated)</td></tr>
-            <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Previous / next failure</td></tr>
-            <tr><td><kbd>G</kbd></td><td>Toggle 2D Grid triage view</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Search within the selected scope</td></tr>
+            <tr class="outcome-shortcut"><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Previous / next failure</td></tr>
+            <tr><td><kbd>G</kbd></td><td>Toggle Grid view</td></tr>
             <tr><td><kbd>M</kbd></td><td>Toggle reduced motion</td></tr>
             <tr><td><kbd>?</kbd></td><td>Show / hide this help dialog</td></tr>
           </tbody>
