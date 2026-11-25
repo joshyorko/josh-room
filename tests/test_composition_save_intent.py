@@ -6,6 +6,7 @@ from test_composition_retirement import Authority
 from test_composition_updates import reserved
 
 from josh_room import composition_save_intent as intent_module
+from josh_room.composition_safety import plan_digest
 from josh_room.composition_save_intent import (
     INTENT_FORMAT,
     projected_capacity,
@@ -30,6 +31,7 @@ def example():
         "expected_parent_logical_jat_id": "jat-parent", "capture_mode": "source-only",
         "children": [{"path": "child", "room_id": "child", "logical_jat_id": "jat-update"}],
     }
+    intent["parent_plan_sha256"] = plan_digest(plan)
     return envelope, intent, {"update": child_plan}, plan
 
 
@@ -82,7 +84,8 @@ def test_competing_writer_and_early_intent_release_fail_closed():
     with pytest.raises(ValueError, match="exact operation"):
         validate_intent_transition(admitted, admitted, "different-operation")
     with pytest.raises(ValueError, match="verified publication"):
-        validate_intent_transition(admitted, {**admitted, "save_intent": None}, "aggregate")
+        validate_intent_transition(admitted, {**admitted, "save_intent": None,
+            "completed_saves": {"aggregate": intent["approval_sha256"]}}, "aggregate")
     competing = copy.deepcopy(admitted)
     competing["state"]["child_updates"] = {"different-child": {}}
     with pytest.raises(ValueError, match="another operation"):

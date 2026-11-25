@@ -118,6 +118,15 @@ def _pin(pin, catalog, room_id, logical_id):
     return record
 
 
+def recovery_time(value):
+    match = _TIMESTAMP.fullmatch(value)
+    if match is None:
+        raise ValueError("invalid composition timestamp")
+    fraction = re.search(r"\.([0-9]{1,9})", value)
+    instant = datetime.fromisoformat(value).replace(microsecond=0)
+    return instant, int(fraction[1].ljust(9, "0")) if fraction else 0
+
+
 def writable_latest(project, retired_points=()):
     """Select the newest retained point without rewriting the immutable catalog."""
     records = project.get("snapshots", {})
@@ -125,7 +134,7 @@ def writable_latest(project, retired_points=()):
     if latest in records and latest not in retired_points:
         return latest
     return max((point for point in records if point not in retired_points),
-               key=lambda point: (records[point]["created_at"], point), default=None)
+               key=lambda point: (recovery_time(records[point]["created_at"]), point), default=None)
 
 
 def retired_recovery_points(envelope):

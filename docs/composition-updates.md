@@ -70,7 +70,9 @@ operation stops, run `composition save-intent --dimension <id> --namespace <id> 
 to recover its operation ID, approval digest, and child publication status.
 Resume with the same sources and approval. A child point can already be saved
 when the parent fails. A completed remote publication retains the exact
-operation binding for local marker repair.
+operation binding for local marker repair. An uncommitted claimed slot can
+require operator reconciliation. A claim alone does not prove that the backup
+exists, and retry does not take over a claimed slot with no verified output.
 
 The reservation upgrades that Catalog's authority format. Older controllers
 refuse the new format. The existing ledger size and record limits still apply.

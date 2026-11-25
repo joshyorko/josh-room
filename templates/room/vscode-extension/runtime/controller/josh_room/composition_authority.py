@@ -14,7 +14,12 @@ from urllib.parse import urlsplit
 
 from botocore.exceptions import ClientError
 
-from .composition_safety import CompositionSafetyState, retired_recovery_points
+from .composition_safety import (
+    CompositionSafetyState,
+    _digest,
+    _identifier,
+    retired_recovery_points,
+)
 from .composition_save_intent import (
     INTENT_FORMAT,
     MAX_DESCRIPTOR_CIPHERTEXT,
@@ -126,7 +131,7 @@ class CompositionAuthority:
                 "repository_id",
                 "state",
                 "capture_claims",
-            } | ({'retirements'} if has_retirements else set()) | ({'save_intent'} if has_intent else set())
+            } | ({'retirements'} if has_retirements else set()) | ({'save_intent', 'completed_saves'} if has_intent else set())
             or format_name not in ("composition-authority-v1", "composition-authority-v2", INTENT_FORMAT)
             or body["namespace"] != self.namespace
             or body["binding"] != self.binding
@@ -148,6 +153,14 @@ class CompositionAuthority:
             if body["state"] is None:
                 raise ValueError("Catalog Save intent requires an existing state")
             validate_intent(body["save_intent"])
+            receipts = body["completed_saves"]
+            if not isinstance(receipts, dict) or len(receipts) > 32:
+                raise ValueError("invalid completed Catalog Save approvals")
+            for operation_id, approval in receipts.items():
+                _identifier(operation_id)
+                _digest(approval)
+                if body["state"]["operations"].get(operation_id, {}).get("phase") != "committed":
+                    raise ValueError("completed Catalog Save approval lacks a committed operation")
         if has_retirements:
             if not isinstance(body["retirements"], list) or len(body["retirements"]) > 4096:
                 raise ValueError("invalid retirement ledger")

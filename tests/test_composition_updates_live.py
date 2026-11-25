@@ -687,6 +687,15 @@ def test_aggregate_intent_blocks_other_writers_and_survives_child_publication(ru
     assert updates.inspect_catalog_save(r.authority, NAMESPACE)["status"] == "no-pending-save"
     envelope, _ = r.authority.read()
     assert len(envelope["state"]["child_updates"]) == 1
+    (root / "a/new.txt").write_text("fresh edits after the same operation committed")
+    writes = r.transport.writes
+    retry = updates.save_catalog_workspace(*args)
+    assert retry["approval_sha256"] == approval
+    assert retry["changed"] is False
+    with pytest.raises(ValueError, match="committed intent"):
+        updates.save_catalog_workspace(*args, approval="f" * 64)
+    assert r.transport.writes == writes
+
 
 
 def test_retiring_latest_parent_and_child_leaves_active_baselines_writable(runtime):
@@ -714,3 +723,60 @@ def test_retiring_latest_parent_and_child_leaves_active_baselines_writable(runti
     (cold / "a/new.txt").write_text("save from retained child")
     args = (cold, r.dimension, NAMESPACE, "parent", baseline, "second-save", r.authority, r.factory, r.private)
     assert save_catalog_workspace(*args, approval=save_catalog_workspace(*args)["approval_sha256"])["marker_verified"]
+
+
+def test_completed_parent_releases_intent_before_attempting_local_repair(runtime, monkeypatch):
+    from josh_room import composition_updates as updates
+
+    r = runtime
+    baseline, root, _ = entered(r)
+    (root / "notes.txt").write_text("approved Catalog edit")
+    args = (root, r.dimension, NAMESPACE, "parent", baseline, "parent-crash", r.authority, r.factory, r.private)
+    review = updates.save_catalog_workspace(*args)
+
+    class ProcessLoss(BaseException):
+        pass
+
+    with monkeypatch.context() as crashed:
+        def interrupt(*args, **kwargs):
+            raise ProcessLoss("synthetic loss after remote parent publication")
+
+        crashed.setattr(updates, "_bind_parent_save", interrupt)
+        with pytest.raises(ProcessLoss):
+            updates.save_catalog_workspace(*args, approval=review["approval_sha256"])
+
+    assert updates.inspect_catalog_save(r.authority, NAMESPACE)["parent_committed"]
+    (root / "notes.txt").write_text("new local edit after publication")
+    writes = r.transport.writes
+    preview = updates.save_catalog_workspace(*args)
+    assert preview["approval_sha256"] == review["approval_sha256"]
+    assert r.transport.writes == writes
+    with pytest.raises(ValueError, match="Local metadata could not be rebound"):
+        updates.save_catalog_workspace(*args, approval=review["approval_sha256"])
+    assert r.transport.writes == writes + 1
+    assert (root / "notes.txt").read_text() == "new local edit after publication"
+    assert updates.inspect_catalog_save(r.authority, NAMESPACE)["status"] == "no-pending-save"
+
+
+def test_occupied_sibling_after_intent_admission_stops_before_first_child_reservation(runtime, monkeypatch):
+    from josh_room import composition_updates as updates
+
+    r = runtime
+    baseline, root, _ = entered(r)
+    (root / "a/new.txt").write_text("reviewed child edit")
+    args = (root, r.dimension, NAMESPACE, "parent", baseline, "occupied-race", r.authority, r.factory, r.private)
+    review = updates.save_catalog_workspace(*args)
+    start = updates._start_save
+
+    def occupy(*args, **kwargs):
+        result = start(*args, **kwargs)
+        (root / "b").mkdir()
+        (root / "b/local.txt").write_text("new occupied path")
+        return result
+
+    monkeypatch.setattr(updates, "_start_save", occupy)
+    with pytest.raises(ValueError, match="Catalog Save stopped"):
+        updates.save_catalog_workspace(*args, approval=review["approval_sha256"])
+    envelope, _ = r.authority.read()
+    assert not envelope["state"].get("child_updates")
+    assert (root / "b/local.txt").read_text() == "new occupied path"

@@ -5788,7 +5788,7 @@ class HierarchyRoomsProvider {
         const [id, namespace] = JSON.parse(key);
         const storage = dimensionList(catalog).find(row => (row.id || row.dimension_id) === id);
         const parent = storage?.catalogs?.find(row => row.namespace === namespace);
-        if (storage?.catalog_discovery_partial !== true && Array.isArray(parent?.child_recovery_points)
+        if ((parent?.pins_complete === true || storage?.catalog_discovery_partial !== true) && Array.isArray(parent?.child_recovery_points)
             && Array.isArray(parent?.recovery_points) && parent.recovery_points.every(point => !retired.has(point.snapshot_id))) {
           this.pendingCatalogPins.delete(key);
         }

@@ -450,3 +450,15 @@ def test_component_claim_requires_committed_ref_from_its_refresh_slot():
     del authority.body["capture_claims"][interrupted]
     assert retire_parent(authority)["status"] == "retired"
     assert apply(authority, "recovery-point", "child", "jat-child")["status"] == "retired"
+
+
+def test_writable_latest_orders_offsets_and_nanoseconds():
+    from josh_room.composition_safety import writable_latest
+
+    project = {"latest": "retired", "snapshots": {
+        "retired": {"created_at": "2026-02-01T00:00:00Z"},
+        "lexically-later": {"created_at": "2026-01-02T03:00:00+02:00"},
+        "absolute-later": {"created_at": "2026-01-02T02:00:00.000000001Z"},
+        "a-tie-nanoseconds": {"created_at": "2026-01-02T02:00:00.000000002Z"},
+    }}
+    assert writable_latest(project, {"retired"}) == "a-tie-nanoseconds"

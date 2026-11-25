@@ -7,6 +7,7 @@ import hashlib
 from .composition_safety import (
     CompositionSafetyState,
     _identifier,
+    recovery_time,
     retired_recovery_points,
     writable_latest,
 )
@@ -59,7 +60,7 @@ def active_inventory(envelope, *, validated_state=None):
         records = project.get('snapshots', {})
         removed = {t['snapshot'] for t in retired if t['kind'] == 'recovery-point' and t['room'] == room}
         points = [point for point in records if point not in removed]
-        points.sort(key=lambda point: (records[point]['created_at'], point), reverse=True)
+        points.sort(key=lambda point: (recovery_time(records[point]['created_at']), point), reverse=True)
         rooms[room] = {'kind': 'catalog' if room in parents else 'room',
                        'recovery_points': points,
                        'latest': writable_latest(project, removed)}

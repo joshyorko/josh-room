@@ -27,12 +27,12 @@ def validate_intent(intent):
         return
     if not isinstance(intent, dict) or set(intent) != {
         "operation_id", "room_id", "baseline", "approval_sha256", "root_approval", "parent_output", "children",
-        "retained_missing_children",
+        "retained_missing_children", "parent_plan_sha256",
     }:
         raise ValueError("invalid Catalog Save intent")
     for key in ("operation_id", "room_id", "baseline", "parent_output"):
         _identifier(intent[key])
-    for key in ("approval_sha256", "root_approval"):
+    for key in ("approval_sha256", "root_approval", "parent_plan_sha256"):
         _digest(intent[key])
     children = intent["children"]
     missing = intent["retained_missing_children"]
@@ -112,7 +112,11 @@ def projected_capacity(envelope, intent, child_plans, parent_plan):
     projected = copy.deepcopy(envelope)
     projected.update(format=INTENT_FORMAT, save_intent=intent)
     projected.setdefault("retirements", [])
+    projected.setdefault("completed_saves", {})[intent["operation_id"]] = intent["approval_sha256"]
     state = projected["state"]
+    # The child reservation may upgrade an older contract. The longest contract
+    # name remains in the projection even if today's input happens to be shorter.
+    state["contract"] = max(state["contract"], "composition-safety-v5", key=len)
     operations = state["operations"]
     updates = state.get("child_updates", {})
     claims = projected["capture_claims"]
@@ -165,6 +169,13 @@ def validate_intent_transition(previous, candidate, intent_id):
     before, after = previous.get("save_intent"), candidate.get("save_intent")
     if previous["format"] == INTENT_FORMAT and candidate["format"] != INTENT_FORMAT:
         raise ValueError("Catalog Save authority cannot be downgraded")
+    old_receipts = previous.get("completed_saves", {})
+    new_receipts = candidate.get("completed_saves", {})
+    expected_receipts = old_receipts if before is None or after is not None else {
+        **old_receipts, before["operation_id"]: before["approval_sha256"],
+    }
+    if new_receipts != expected_receipts:
+        raise ValueError("completed Catalog Save approvals are immutable")
     if before is None and after is None:
         return
     intent = before or after
@@ -189,6 +200,9 @@ def validate_intent_transition(previous, candidate, intent_id):
                     if not update or update["phase"] != "committed" or update["pin"]["logical_jat_id"] != row["approved_output"]:
                         raise ValueError("Catalog Save intent cannot clear before its child publications")
         return
+    for key in ("namespace", "binding", "request", "secret", "repository_id"):
+        if previous[key] != candidate[key]:
+            raise ValueError("Catalog Save authority identity is immutable")
     if before != after:
         raise ValueError("Catalog Save intent is immutable")
     if previous.get("retirements", []) != candidate.get("retirements", []):
@@ -198,15 +212,31 @@ def validate_intent_transition(previous, candidate, intent_id):
         older, newer = (body["state"].get(kind, {}) for body in (previous, candidate))
         if any(older.get(key) != newer.get(key) for key in (older.keys() | newer.keys()) - allowed):
             raise ValueError("Catalog Save intent does not admit another operation")
-    allowed_claims = {intent["parent_output"]}
+    state = candidate["state"]
+    previous_claims = previous["capture_claims"]
+    new_claims = candidate["capture_claims"]
+    if any(new_claims.get(name) != value for name, value in previous_claims.items()):
+        raise ValueError("Catalog Save capture claims are immutable")
+    allowed_claims = set()
+    previous_state = previous["state"]
+    parent_before = previous_state["operations"].get(intent_id)
+    if parent_before and parent_before["phase"] == "parent-prepared":
+        allowed_claims.add(intent["parent_output"])
     for row in intent["children"]:
         if not row["writes_snapshot"]:
             continue
-        allowed_claims.add(row["approved_output"])
-        allowed_claims.update(derived_claim(previous["namespace"], row["approved_output"], name) for name in COMPONENTS)
-    if set(candidate["capture_claims"]) - set(previous["capture_claims"]) - allowed_claims:
+        update = previous_state.get("child_updates", {}).get(row["operation_id"])
+        if not update or update["phase"] != "reserved":
+            continue
+        output = row["approved_output"]
+        allowed_claims.add(output)
+        if output in previous_claims:
+            modes = update["plan"].get("component_plan", {}).get("selection", {}).get("components", {})
+            allowed_claims.update(derived_claim(previous["namespace"], output, name)
+                                  for name in COMPONENTS if modes.get(name) == "refresh")
+    added_claims = set(new_claims) - set(previous_claims)
+    if added_claims - allowed_claims or len(added_claims) > 1 or (added_claims and state != previous_state):
         raise ValueError("Catalog Save intent does not admit another capture claim")
-    state = candidate["state"]
     for child in intent["children"]:
         update = state.get("child_updates", {}).get(child["operation_id"])
         if not child["writes_snapshot"] or update is None:
@@ -220,6 +250,8 @@ def validate_intent_transition(previous, candidate, intent_id):
     parent = state["operations"].get(intent_id)
     if parent is not None:
         plan = parent["plan"]
+        if plan_digest(plan) != intent["parent_plan_sha256"]:
+            raise ValueError("parent plan digest differs from its Catalog Save intent")
         if (plan["parent_room_id"], plan["expected_parent_logical_jat_id"], plan["parent_logical_jat_id"]) != (
                 intent["room_id"], intent["baseline"], intent["parent_output"]):
             raise ValueError("parent reservation differs from its Catalog Save intent")

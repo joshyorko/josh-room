@@ -12,6 +12,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from .catalog import Catalog
 from .composition_authority import CompositionAuthority
 from .composition_retirement import active_inventory
+from .composition_safety import recovery_time
 
 _PREFIX = "composition/v1/"
 _PAGE_SIZE = 16
@@ -112,7 +113,7 @@ def discover_catalogs(backend, dimension, material):
                             result["catalog_discovery_partial"] = True
                         parents.setdefault(parent, {})[snapshot] = point
                     for parent, records in parents.items():
-                        newest = sorted(records.values(), key=lambda row: (row["created_at"], row["snapshot_id"]), reverse=True)
+                        newest = sorted(records.values(), key=lambda row: (recovery_time(row["created_at"]), row["snapshot_id"]), reverse=True)
                         available = _MAX_POINTS - points
                         if len(newest) > available:
                             result["catalog_discovery_partial"] = True
@@ -124,7 +125,7 @@ def discover_catalogs(backend, dimension, material):
                         rooms, history = _child_history(parent, operations, active_rooms, projects)
                         history_size = len(json.dumps(rooms)) + len(json.dumps(history))
                         if len(history) <= 128 and child_history_bytes + history_size <= _CHILD_HISTORY_BUDGET:
-                            entry.update(child_rooms=rooms, child_recovery_points=history)
+                            entry.update(child_rooms=rooms, child_recovery_points=history, pins_complete=len(newest) <= available)
                             child_history_bytes += history_size
                         else:
                             result["catalog_discovery_partial"] = True
