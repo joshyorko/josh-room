@@ -2302,6 +2302,7 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
   const current = currentRoom(root);
   if ((child || restoreChildren) && current?.dimension_id === id && current.composition_namespace === catalog.namespace
       && current.project_id === catalog.parent_room_id && current.snapshot_id === point.snapshot_id
+      && current.workspace_path_sha256 === realWorkspacePathSha256(root)
       && !fs.existsSync(path.join(root, ".josh-room-split.json"))) {
     return enterCatalogChildAt(root, current, dimension, child, restoreChildren);
   }
@@ -2360,7 +2361,7 @@ function listCatalogChildren(root, dimension, marker, { childPath, offset, revis
   dimension, { title: "Reading saved child Rooms…", action: "read the entered Catalog parent" });
 }
 
-async function enterChildRoom(multiple = false) {
+async function enterChildRoom(multiple = false, childPath) {
   assertWorkspaceTrusted("enter a child Room");
   const root = activeWorkspace();
   const marker = currentRoom(root);
@@ -2368,18 +2369,19 @@ async function enterChildRoom(multiple = false) {
   const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
   const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
   if (!dimension) throw new Error("The parent Dimension is not configured.");
-  return enterCatalogChildAt(root, marker, dimension, undefined, multiple);
+  return enterCatalogChildAt(root, marker, dimension, childPath, multiple);
 }
 
 function enterCatalogChildAt(root, marker, dimension, childPath, multiple = false, childPaths) {
   const actions = require("./catalog-actions");
   return (multiple ? actions.hydrateChildren : actions.enterChild)(vscode, {
     root, marker, childPath, childPaths, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
+    localState: row => catalogChildLocalState(root, marker, row),
     enter: ({ namespace, child }) => runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
       "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
     dimension, { title: "Entering pinned child Room…", action: "enter a child Room" }),
     open: (target) => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(target), false),
-  });
+  }).finally(() => roomsProvider?.emitter?.fire(undefined));
 }
 
 function catalogPromptKey(root, marker) {
@@ -2387,6 +2389,65 @@ function catalogPromptKey(root, marker) {
     root, marker.dimension_id, marker.composition_namespace, marker.project_id, marker.snapshot_id,
   ])).digest("hex");
   return `josh-room.catalog-child-prompt.v1:${fingerprint}`;
+}
+
+function localCatalogChildren(root) {
+  const manifestPath = path.join(root, ".josh-room-composition.json");
+  try {
+    const stat = fs.lstatSync(manifestPath, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size > 64 * 1024) return [];
+    const { children } = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    return Array.isArray(children) && children.length <= 32 ? children.filter(row => typeof row?.path === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function catalogChildLocalState(root, marker, row) {
+  const parts = row.path.split("/");
+  if (/[\\\0]/.test(row.path) || parts.some(part => !part || part === "." || part === "..")) return "occupied";
+  let target = root;
+  try {
+    for (const part of parts) {
+      target = path.join(target, part);
+      const entry = fs.lstatSync(target, { throwIfNoEntry: false });
+      if (!entry) return "missing";
+      if (!entry.isDirectory()) return "occupied";
+    }
+    const local = currentRoom(target);
+    return local && local.dimension_id === marker.dimension_id && local.composition_namespace === marker.composition_namespace
+      && local.project_id === row.room_id && local.snapshot_id === row.snapshot_id
+      && local.workspace_path_sha256 === realWorkspacePathSha256(target) ? "restored" : "occupied";
+  } catch {
+    return "occupied";
+  }
+}
+
+function openWorkspaceRows() {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root || vscode.workspace.isTrusted !== true) return [];
+  const marker = currentRoom(root);
+  if (!marker?.workspace_path_sha256 || marker.workspace_path_sha256 !== realWorkspacePathSha256(root)) return [];
+  const isCatalog = Boolean(marker.composition_namespace);
+  const isChild = isCatalog && fs.existsSync(path.join(root, ".josh-room-split.json"));
+  const command = (label, icon, id, args = []) => ({ kind: "workspace-action", id: [id, ...args].join(":"),
+    label, icon, command: { command: id, title: label, arguments: args } });
+  const actions = isChild ? [command("Save Child Room", "save", "joshRoom.saveChild")]
+    : isCatalog ? [command("Restore Child Rooms…", "cloud-download", "joshRoom.restoreCatalogChildren"),
+      command("Refresh Child Pins…", "link", "joshRoom.refreshCatalogPins")]
+      : [command("Save Room", "save", "joshRoom.save")];
+  if (isCatalog && !isChild) {
+    for (const row of localCatalogChildren(root)) {
+      const state = catalogChildLocalState(root, marker, row);
+      const item = command(row.path, state === "missing" ? "cloud-download" : state === "restored" ? "folder-active" : "warning",
+        "joshRoom.enterChild", [row.path]);
+      item.description = { missing: "Not restored", restored: "Restored", occupied: "Folder occupied" }[state];
+      if (state === "occupied") delete item.command;
+      actions.push(item);
+    }
+  }
+  return [{ kind: "open-workspace", id: "open-workspace", label: "Open Workspace",
+    description: `${marker.display_name} · ${isChild ? "Child Room" : isCatalog ? "Catalog" : "Room"}`, children: actions }];
 }
 
 async function offerCatalogChildOnOpen(context) {
@@ -2397,27 +2458,7 @@ async function offerCatalogChildOnOpen(context) {
       || fs.existsSync(path.join(root, ".josh-room-split.json"))) return;
   const key = catalogPromptKey(root, marker);
   if (context.globalState.get(key)) return;
-  const manifestPath = path.join(root, ".josh-room-composition.json");
-  const stat = fs.lstatSync(manifestPath, { throwIfNoEntry: false });
-  if (!stat?.isFile() || stat.size > 64 * 1024) return;
-  let children;
-  try { children = JSON.parse(fs.readFileSync(manifestPath, "utf8")).children; } catch { return; }
-  if (!Array.isArray(children) || children.length > 32) return;
-  const pending = children.some(row => {
-    const child = row?.path;
-    if (typeof child !== "string" || /[\\\0]/.test(child)) return false;
-    const parts = child.split("/");
-    if (parts.some(part => !part || part === "." || part === "..")) return false;
-    let location = root;
-    for (const part of parts) {
-      location = path.join(location, part);
-      const entry = fs.lstatSync(location, { throwIfNoEntry: false });
-      if (!entry) return true;
-      if (!entry.isDirectory()) return false;
-    }
-    return false;
-  });
-  if (!pending) return;
+  if (!localCatalogChildren(root).some(row => catalogChildLocalState(root, marker, row) === "missing")) return;
   await context.globalState.update(key, true);
   const action = "Choose child Rooms";
   if (await vscode.window.showInformationMessage("This Catalog has child Rooms available to restore.", action) === action
@@ -3920,7 +3961,7 @@ function activate(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
-  register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.enterChild", childPath => enterChildRoom(false, childPath));
   register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
   register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
@@ -5167,6 +5208,16 @@ class HierarchyRoomsProvider {
   }
 
   getTreeItem(item) {
+    if (item.kind === "open-workspace" || item.kind === "workspace-action") {
+      const group = item.kind === "open-workspace";
+      const treeItem = new vscode.TreeItem(item.label, group
+        ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+      treeItem.id = `${item.kind}:${item.id}`;
+      treeItem.iconPath = new vscode.ThemeIcon(group ? "window" : item.icon);
+      treeItem.description = item.description;
+      treeItem.command = item.command;
+      return treeItem;
+    }
     if (item.kind === "runtime") {
       const treeItem = new vscode.TreeItem(item.label, vscode.TreeItemCollapsibleState.None);
       treeItem.description = item.description || "";
@@ -5294,6 +5345,10 @@ class HierarchyRoomsProvider {
 
   getChildren(item) {
     if (item) return item.children || [];
+    return [...openWorkspaceRows(), ...this.getStorageRows()];
+  }
+
+  getStorageRows() {
     if (runtimeLifecycle.state !== "RUNTIME_READY") {
       const idle = runtimeLifecycle.state === "UNINITIALIZED";
       if (idle) return [];
@@ -6398,7 +6453,7 @@ function activateNative(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
-  register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.enterChild", childPath => enterChildRoom(false, childPath));
   register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
   register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));

@@ -8403,7 +8403,17 @@ test("opening an exact Catalog parent only offers restoration once and makes no 
     workspace_signature: "0".repeat(64), capture_policy_sha256: "0".repeat(64),
     signature_algorithm: "josh-room-stat-v1", workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
   }));
-  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "a" }] }));
+  fs.mkdirSync(path.join(root, "b"));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "a" }, { path: "b" }] }));
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const [current] = provider.getChildren();
+  assert.equal(current.label, "Open Workspace");
+  assert.match(current.description, /Synthetic Catalog/);
+  const rows = provider.getChildren(current);
+  assert.equal(rows[0].command.command, "joshRoom.restoreCatalogChildren");
+  assert.deepEqual(rows.find(row => row.label === "a").command.arguments, ["a"]);
+  assert.equal(rows.find(row => row.label === "b").description, "Folder occupied");
+  assert.equal(rows.find(row => row.label === "b").command, undefined);
   const state = new Map();
   const context = { globalState: { get: key => state.get(key), update: async (key, value) => state.set(key, value) } };
   await extension.__test__.offerCatalogChildOnOpen(context);

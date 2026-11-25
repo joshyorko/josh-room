@@ -294,21 +294,34 @@ async function hydratePinnedChild(root, marker, row, enter) {
   return { result, target };
 }
 
-async function enterChild(vscode, { root, marker, listChildren, enter, open, childPath }) {
+async function enterChild(vscode, { root, marker, listChildren, enter, open, childPath, localState = () => "missing" }) {
   const row = await chooseChild(vscode, marker, listChildren, false, childPath);
   if (!row) return "cancelled";
+  const state = localState(row);
+  if (state === "restored") {
+    const target = path.resolve(root, row.path);
+    relativeSource(root, target);
+    await open(target);
+    return "opened";
+  }
+  if (state === "occupied") throw new Error("The child folder is occupied. Choose a new Catalog restore location.");
   const { result, target } = await hydratePinnedChild(root, marker, row, enter);
   await vscode.window.showInformationMessage(`Child Room verified at exact recovery point ${result.snapshot_id}.`);
   await open(target);
   return result;
 }
 
-async function hydrateChildren(vscode, { root, marker, listChildren, enter, childPaths }) {
+async function hydrateChildren(vscode, { root, marker, listChildren, enter, childPaths, localState = () => "missing" }) {
   const { choices } = await pinnedChildChoices(marker, listChildren, false);
-  const selected = childPaths ?? (await vscode.window.showQuickPick(choices, { canPickMany: true,
-    title: "Restore Catalog child Rooms", placeHolder: "Check the child Rooms to restore, or use Select All." }))?.map(choice => choice.label);
+  const missing = choices.filter(choice => localState(choice.row) === "missing");
+  if (childPaths === undefined && !missing.length) {
+    void vscode.window.showInformationMessage("No child Rooms are available to restore here. Check Open Workspace for folder status.");
+    return "cancelled";
+  }
+  const selected = childPaths ?? (await vscode.window.showQuickPick(missing, { canPickMany: true,
+    title: "Restore Catalog child Rooms", placeHolder: "Check the missing child Rooms to restore, or use Select All." }))?.map(choice => choice.label);
   if (!selected?.length) return "cancelled";
-  const pinned = [...new Set(selected)].map(label => choices.find(choice => choice.label === label));
+  const pinned = [...new Set(selected)].map(label => missing.find(choice => choice.label === label));
   if (pinned.some(choice => !choice)) throw new Error("A selected child is unavailable at this Catalog recovery point.");
   const restored = [];
   for (const choice of pinned) {

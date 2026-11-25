@@ -433,4 +433,16 @@ test("Catalog hydration restores only the explicitly checked children at their p
   assert.deepEqual(all.restored.map(row => row.snapshot_id), ["jat-a", "jat-b", "jat-c"]);
   vscode.window.showQuickPick = async () => undefined;
   assert.equal(await hydrateChildren(vscode, { ...callbacks, enter: assert.fail }), "cancelled");
+  const localState = row => row.path === "a" ? "restored" : row.path === "b" ? "occupied" : "missing";
+  vscode.window.showQuickPick = async rows => {
+    assert.deepEqual(rows.map(row => row.label), ["c"]);
+    return rows;
+  };
+  assert.equal((await hydrateChildren(vscode, { ...callbacks, localState })).restored[0].snapshot_id, "jat-c");
+  await assert.rejects(hydrateChildren(vscode, { ...callbacks, localState, childPaths: ["c", "b"], enter: assert.fail }),
+    /selected child is unavailable/);
+  let opened;
+  assert.equal(await enterChild(vscode, { ...callbacks, childPath: "a", localState, enter: assert.fail,
+    open: async target => { opened = target; } }), "opened");
+  assert.equal(opened, require("node:path").resolve(callbacks.root, "a"));
 });

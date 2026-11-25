@@ -134,7 +134,10 @@ open, choose a new folder to restore that parent first. To restore several
 children, use **Restore Catalog Child Rooms…** from the recovery point's
 context menu, check the folders you want, or use **Select All**. Open a dated
 point to choose one child, several children, or just the parent before choosing
-the destination. When an existing Catalog parent opens with a child that is not
+the destination. **Open Workspace** at the top of **Rooms** shows the open
+Catalog, child folder status and actions to restore missing children or refresh
+pins. Select a restored child to open it, or select a missing child to restore
+and open it. The bulk picker lists missing children only. When an existing Catalog parent opens with a child that is not
 yet on disk, Josh Room offers the checkbox picker once for that folder and
 recovery point. Each restore requires an explicit choice and never overwrites
 an occupied child. If discovery is marked incomplete, the receipt and CLI
