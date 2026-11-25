@@ -444,33 +444,23 @@
       "view/title": [
         {
           "command": "joshRoom.new",
-          "when": "view == joshRoom.rooms",
+          "when": "view == joshRoom.rooms && joshRoom.workspaceKind == folder",
           "group": "navigation@1"
+        },
+        {
+          "command": "joshRoom.new",
+          "when": "view == joshRoom.rooms && joshRoom.workspaceKind =~ /^(room|catalog|child)$/",
+          "group": "workspace@1"
         },
         {
           "command": "joshRoom.addStorage",
           "when": "view == joshRoom.rooms",
-          "group": "navigation@2"
-        },
-        {
-          "command": "joshRoom.save",
-          "when": "view == joshRoom.rooms",
-          "group": "navigation@2"
+          "group": "storage@1"
         },
         {
           "command": "joshRoom.refresh",
           "when": "view == joshRoom.rooms",
           "group": "navigation@3"
-        },
-        {
-          "command": "joshRoom.saveCatalog",
-          "when": "view == joshRoom.rooms",
-          "group": "navigation@4"
-        },
-        {
-          "command": "joshRoom.restoreCatalog",
-          "when": "view == joshRoom.rooms",
-          "group": "2_catalog@1"
         },
         {
           "command": "joshRoom.prepare",
@@ -671,7 +661,7 @@
         },
         {
           "command": "joshRoom.explore3D",
-          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room || viewItem == open-catalog-workspace || viewItem == open-room-workspace || viewItem == catalog-parent || viewItem == catalog-parent-deletable || viewItem == catalog-child-room)",
+          "when": "view == joshRoom.rooms && (viewItem == current-room || viewItem == open-catalog-workspace || viewItem == open-room-workspace)",
           "group": "room@1"
         }
       ]

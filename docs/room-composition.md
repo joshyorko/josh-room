@@ -145,6 +145,9 @@ folder status. **Refresh Catalog Child Pins** is in the workspace row menu.
 **Save Catalog** in the open workspace creates a recovery point in the same
 Catalog for changes to its files. It keeps the child pins. Save each child
 from its own workspace to capture changes inside that child.
+The open workspace shows the Save action for its type. Use **New Room** in
+the Rooms toolbar when opening an unbound folder, or in the toolbar's menu
+when a Room or Catalog is open.
 Use **Explore Room in 3D** on an open workspace or its matching Catalog row.
 On a Catalog or child recovery point, the usual **Inspect Logical JAT**,
 **Extract**, **Export Portable JAT**, and **Serve** actions use that point's

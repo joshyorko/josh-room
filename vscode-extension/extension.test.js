@@ -8460,6 +8460,40 @@ test("opening an exact Catalog parent only offers restoration once and makes no 
   assert.deepEqual(calls, [["This Catalog has child Rooms available to restore.", "Choose child Rooms"]]);
 });
 
+test("Rooms shows workspace actions for the current binding and saved tools on their own rows", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-workspace-actions-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode, executeCalls } = createVscodeMock(root);
+  vscode.workspace.isTrusted = true;
+  const extension = loadExtension(vscode, () => assert.fail("local action visibility must not start the controller"));
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const markerFile = path.join(root, ".josh-room.json");
+  const marker = {
+    format_version: 3, project_id: "room", display_name: "Synthetic Room", snapshot_id: "jat-point",
+    dimension_id: "synthetic", encryption_domain_id: "domain", workspace_signature: "0".repeat(64),
+    capture_policy_sha256: "0".repeat(64), signature_algorithm: "josh-room-stat-v1",
+    workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
+  };
+  const assertWorkspace = async (kind, expectedRows) => {
+    await provider.setCatalog({ dimensions: [] });
+    const context = executeCalls.filter(call => call[0] === "setContext" && call[1] === "joshRoom.workspaceKind").at(-1);
+    assert.equal(context[2], kind);
+    const row = provider.getChildren().find(item => item.kind === "open-workspace");
+    assert.deepEqual(row?.children.map(item => item.label) || [], expectedRows);
+  };
+  await assertWorkspace("folder", []);
+  fs.writeFileSync(markerFile, JSON.stringify(marker));
+  await assertWorkspace("room", ["Save Room"]);
+  fs.writeFileSync(markerFile, JSON.stringify({ ...marker, format_version: 4, composition_namespace: "1".repeat(32) }));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "missing" }] }));
+  await assertWorkspace("catalog", ["Save Catalog", "Restore missing children…", "Child Rooms"]);
+  fs.rmSync(path.join(root, ".josh-room-composition.json"));
+  fs.writeFileSync(path.join(root, ".josh-room-split.json"), "{}");
+  await assertWorkspace("child", ["Save Child Room"]);
+  const title = require("./package.json").contributes.menus["view/title"];
+  assert.ok(!title.some(item => ["joshRoom.save", "joshRoom.saveCatalog", "joshRoom.restoreCatalog"].includes(item.command)));
+});
+
 test("Catalog sidebar deletion shows dependencies and applies only the previewed approved target", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-delete-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

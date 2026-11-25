@@ -1648,6 +1648,7 @@ function sameRoomBinding(marker, item) {
 }
 
 function refreshRoomStatus() {
+  refreshWorkspaceActions();
   let marker;
   try {
     marker = currentRoom(activeWorkspace());
@@ -2552,20 +2553,40 @@ function catalogChildLocalState(root, marker, row) {
   }
 }
 
-function openWorkspaceRows() {
+function openWorkspaceBinding() {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root || vscode.workspace.isTrusted !== true) return [];
+  if (!root || vscode.workspace.isTrusted !== true) return { kind: "none" };
   const marker = currentRoom(root);
-  if (!marker?.workspace_path_sha256 || marker.workspace_path_sha256 !== realWorkspacePathSha256(root)) return [];
-  const isCatalog = Boolean(marker.composition_namespace);
-  const isChild = isCatalog && fs.existsSync(path.join(root, ".josh-room-split.json"));
+  if (!marker?.workspace_path_sha256 || marker.workspace_path_sha256 !== realWorkspacePathSha256(root)) {
+    return { kind: "folder" };
+  }
+  const kind = !marker.composition_namespace ? "room"
+    : fs.existsSync(path.join(root, ".josh-room-split.json")) ? "child"
+      : fs.existsSync(path.join(root, ".josh-room-composition.json")) ? "catalog" : "folder";
+  return kind === "folder" ? { kind } : { kind, root, marker };
+}
+
+let currentWorkspaceKind;
+
+function refreshWorkspaceActions() {
+  const { kind } = openWorkspaceBinding();
+  if (currentWorkspaceKind === kind) return;
+  currentWorkspaceKind = kind;
+  void vscode.commands.executeCommand("setContext", "joshRoom.workspaceKind", kind);
+}
+
+function openWorkspaceRows() {
+  const { kind, root, marker } = openWorkspaceBinding();
+  if (!marker) return [];
+  const isCatalog = kind === "catalog";
+  const isChild = kind === "child";
   const command = (label, icon, id, args = []) => ({ kind: "workspace-action", id: [id, ...args].join(":"),
     label, icon, command: { command: id, title: label, arguments: args } });
   const actions = isChild ? [command("Save Child Room", "save", "joshRoom.saveChild")]
     : isCatalog ? []
       : [command("Save Room", "save", "joshRoom.save")];
   let description = `${marker.display_name} · ${isChild ? "Child Room" : "Room"}`;
-  if (isCatalog && !isChild) {
+  if (isCatalog) {
     const children = [];
     let missing = 0;
     let restored = 0;
@@ -2585,7 +2606,7 @@ function openWorkspaceRows() {
     if (children.length) actions.push({ kind: "workspace-children", id: "open-workspace-children", label: "Child Rooms", children });
   }
   return [{ kind: "open-workspace", id: "open-workspace", label: "Open Workspace",
-    contextValue: isCatalog && !isChild ? "open-catalog-workspace" : "open-room-workspace",
+    contextValue: isCatalog ? "open-catalog-workspace" : "open-room-workspace",
     project: marker, description, children: actions }];
 }
 
@@ -5551,6 +5572,7 @@ class HierarchyRoomsProvider {
     this.roots = nativeRegistry.buildProviderTree(catalog || {});
     this.state = "ready";
     await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", this.roots.length === 0);
+    refreshWorkspaceActions();
     this.emitter.fire(undefined);
   }
 
@@ -6627,6 +6649,7 @@ function activateNative(context) {
   setStatus("$(archive) Josh Room");
   statusItem.show();
   roomsProvider = new HierarchyRoomsProvider();
+  refreshWorkspaceActions();
   void vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", true);
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", {
     treeDataProvider: roomsProvider,
@@ -6705,7 +6728,19 @@ function activateNative(context) {
   register(context, "joshRoom.explore3D", item => exploreRoom3D(item));
   register(context, "joshRoom.stopRoomView", () => stopRoomView());
   context.subscriptions.push({ dispose: () => { void stopRoomView(); } });
-  if (vscode.workspace.onDidChangeWorkspaceFolders) context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => { void stopRoomView(); }));
+  if (vscode.workspace.onDidChangeWorkspaceFolders) {
+    context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void stopRoomView();
+      refreshWorkspaceActions();
+      roomsProvider?.emitter.fire(undefined);
+    }));
+  }
+  if (vscode.workspace.onDidGrantWorkspaceTrust) {
+    context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      refreshWorkspaceActions();
+      roomsProvider?.emitter.fire(undefined);
+    }));
+  }
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.agentSessionsStatus", agentSessionsStatus);
   register(context, "joshRoom.agentRecoveryStatus", agentRecoveryStatus);
