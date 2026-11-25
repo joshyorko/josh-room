@@ -2297,7 +2297,7 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
   if (!selection) return "cancelled";
   const { dimension, catalog, point, child } = selection;
   const id = dimension?.id || dimension?.dimension_id;
-  if (!["catalog-point", "catalog-child"].includes(selection.kind) || !id || !/^[a-f0-9]{32}$/.test(catalog?.namespace)
+  if (!["catalog-point", "catalog-child", "catalog-child-room"].includes(selection.kind) || !id || !/^[a-f0-9]{32}$/.test(catalog?.namespace)
       || !catalog?.parent_room_id || !/^jat-[a-z0-9-]+$/.test(point?.snapshot_id)) {
     throw new Error("Choose an exact Catalog recovery point from Rooms.");
   }
@@ -5375,6 +5375,9 @@ class HierarchyRoomsProvider {
     }
     if (["catalog-child-history", "catalog-child-room", "catalog-child-point"].includes(item.kind)) {
       treeItem.iconPath = new vscode.ThemeIcon({ "catalog-child-history": "folder-library", "catalog-child-room": "folder", "catalog-child-point": "history" }[item.kind]);
+      if (item.kind === "catalog-child-room" && item.point) {
+        treeItem.command = { command: "joshRoom.restoreCatalog", title: "Enter Child Room", arguments: [item] };
+      }
     }
     if (item.kind === "catalog-partial") treeItem.iconPath = new vscode.ThemeIcon("warning");
     if (item.kind === "dimension") {

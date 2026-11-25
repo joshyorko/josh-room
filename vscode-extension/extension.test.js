@@ -8387,6 +8387,14 @@ test("registered Catalog restore submits the selected exact pin and only opens a
   assert.equal((await restore(point)).snapshot_id, "jat-older");
   assert.equal(calls, 2);
   assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 1);
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const childRow = { ...point, kind: "catalog-child-room", label: "a", child: "a",
+    room: { room_id: "child" }, children: [{ kind: "catalog-child-point" }] };
+  const item = provider.getTreeItem(childRow);
+  assert.equal(item.command.title, "Enter Child Room");
+  vscode.window.showQuickPick = async () => assert.fail("direct child entry skips the scope picker");
+  vscode.window.showSaveDialog = async () => undefined;
+  assert.equal(await restore(...item.command.arguments), "cancelled");
 });
 
 test("opening an exact Catalog parent only offers restoration once and makes no storage calls", async t => {

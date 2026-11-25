@@ -128,9 +128,10 @@ In a restored Catalog parent, **Enter Child Room** lets you choose a saved child
 **Refresh Catalog Child Pins** lets you choose a child and a particular saved
 version. The controller verifies the parent's membership and exact recovery points.
 On an enrolled machine, reload **Rooms** and expand the storage bucket. Saved
-Catalog parents appear by name and save date. Expand a dated recovery point
-and select a pinned child to enter it directly. If the exact parent is not
-open, choose a new folder to restore that parent first. To restore several
+Catalog parents appear by name and save date. Select a folder under
+**Child Rooms** to enter it from its newest listed Catalog pin. Expand the
+folder to see its own recovery points. If the exact parent is not open,
+choose a new folder to restore that parent first. To restore several
 children, use **Restore Catalog Child Rooms…** from the recovery point's
 context menu, check the folders you want, or use **Select All**. Open a dated
 point to choose one child, several children, or just the parent before choosing
