@@ -53,6 +53,21 @@ baseline stays source-only. Recovering Git history requires a new capture from a
 repository that still has the objects and refs. Old parents retain their exact
 child points across updates and explicit parent refreshes.
 
+
+## Save an open Catalog
+
+Choose **Save Catalog** in the Rooms sidebar to review changes to the Catalog
+root and its entered child Rooms. The review lists which child pins will
+advance. Child Rooms that have yet to be restored keep their pinned recovery
+points. To save a child without advancing the parent, open that child and use
+**Save**. Whole-Catalog Save publishes child recovery points before publishing
+the parent. If the parent step fails, a child recovery point can already exist.
+
+The Rooms sidebar marks changes against each local Room's saved baseline,
+including terminal edits and changes found after reopening VS Code. Check
+**Activity** in the Josh Room sidebar for running operations, live steps,
+available cancellation, and recent results.
+
 ## CLI
 
 Use `composition plan-child-save` with `--dimension`, `--namespace`, `--room`,

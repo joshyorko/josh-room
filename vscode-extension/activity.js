@@ -36,18 +36,26 @@ class ActivityProvider {
     const cancellation = options.cancellable && vscode.CancellationTokenSource
       ? new vscode.CancellationTokenSource() : undefined;
     const operation = { id: String(++this.sequence), label: options.title.replace(/[.…]+$/, ""),
-      state: "running", started: Date.now(), steps: [], cancellation, retry: options.retry };
+      state: "running", started: Date.now(), steps: [], cancellation, retry: options.retry, lastUpdate: Date.now() };
     this.operations.unshift(operation);
     this.operations = this.operations.filter((row, index) => index < 10 || row.state === "running");
     this.refresh();
     try {
       const result = await vscode.window.withProgress({ ...options, location: { viewId: VIEW_ID }, cancellable: false },
         (progress, token) => task({
-          activity: true,
-          report: ({ message }) => {
-            if (!message || operation.steps.at(-1)?.label === message) return;
-            operation.steps.push({ id: `${operation.id}:${++this.sequence}`, label: message, step: true });
-            if (operation.steps.length > 24) operation.steps.shift();
+          report: ({ message, detail }) => {
+            if (!message) return;
+            const last = operation.steps.at(-1);
+            if (last?.label === message) {
+              if (last.detail === detail) return;
+              last.detail = detail;
+            } else {
+              if (last) last.finished = Date.now();
+              operation.steps.push({ id: `${operation.id}:${++this.sequence}`, label: message, detail,
+                operation, started: Date.now() });
+              if (operation.steps.length > 24) operation.steps.shift();
+            }
+            operation.lastUpdate = Date.now();
             progress.report({ message });
             this.refresh(operation);
           },
@@ -60,6 +68,8 @@ class ActivityProvider {
       throw error;
     } finally {
       operation.finished = Date.now();
+      const last = operation.steps.at(-1);
+      if (last) last.finished = operation.finished;
       cancellation?.dispose();
       operation.cancellation = undefined;
       this.refresh();
@@ -76,16 +86,25 @@ class ActivityProvider {
       ? row.state === "running" ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
       : vscode.TreeItemCollapsibleState.None);
     item.id = row.id;
-    item.iconPath = new vscode.ThemeIcon(row.step ? "circle-small-filled" : {
+    const elapsed = Math.floor(((row.finished || Date.now()) - row.started) / 1000);
+    if (row.operation) {
+      const isLast = row.operation.steps.at(-1) === row;
+      const phase = isLast ? row.operation.state : "done";
+      item.iconPath = new vscode.ThemeIcon({ running: "loading~spin", done: "check", failed: "error", cancelled: "circle-slash" }[phase]);
+      item.description = [row.detail, `${elapsed}s`].filter(Boolean).join(" · ");
+      item.accessibilityInformation = { label: `${row.label}. ${item.description}` };
+      return item;
+    }
+    item.iconPath = new vscode.ThemeIcon({
       running: "loading~spin", done: "check", failed: "error", cancelled: "circle-slash",
     }[row.state]);
-    if (!row.step) {
-      const states = { running: "Running", done: "Completed", failed: "Failed", cancelled: "Cancelled" };
-      item.description = `${states[row.state]} · ${Math.floor(((row.finished || Date.now()) - row.started) / 1000)}s`;
-      item.accessibilityInformation = { label: `${row.label}. ${item.description}` };
-      item.contextValue = row.cancellation ? "activity-cancellable"
-        : row.state === "failed" && row.retry ? "activity-retry" : "activity-operation";
-    }
+    const states = { running: "Running", done: "Completed", failed: "Failed", cancelled: "Cancelled" };
+    const quiet = Math.floor((Date.now() - row.lastUpdate) / 1000);
+    const waiting = row.state === "running" && quiet >= 30 ? ` · No update for ${quiet}s` : "";
+    item.description = `${states[row.state]} · ${elapsed}s${waiting}`;
+    item.accessibilityInformation = { label: `${row.label}. ${item.description}` };
+    item.contextValue = row.cancellation ? "activity-cancellable"
+      : row.state === "failed" && row.retry ? "activity-retry" : "activity-operation";
     return item;
   }
 

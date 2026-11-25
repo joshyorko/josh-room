@@ -7,13 +7,7 @@ const vscode = require("vscode");
 const { WorkspaceBaseline, isRoomMarker, loadCapturePolicy, shouldMarkDirty } = require("./dirty");
 const { ActivityProvider, VIEW_ID: ACTIVITY_VIEW_ID } = require("./activity");
 const managedRuntime = require("./runtime");
-const {
-  createProgressTracker,
-  followProgressFile,
-  formatProgressDisplay,
-  formatBytes,
-  operationKind,
-} = require("./progress");
+const { followProgressFile, progressDetail } = require("./progress");
 const { followLogFile, stageForLog, waitForServeStartup, validateServeStartup, verifiedPull, probeRegistry, readServeJson } = require("./registry");
 const providerTools = require("./provider");
 
@@ -21,7 +15,6 @@ let outputChannel;
 let roomsProvider;
 let activityProvider;
 let statusItem;
-let activeOperationId = 0;
 let extensionContext;
 let roomStatus = Object.freeze({ kind: "unknown" });
 let workspaceBaseline;
@@ -64,6 +57,7 @@ function setStatus(text, tooltip = "Open Josh Room") {
   if (!statusItem) return;
   statusItem.text = text;
   statusItem.tooltip = tooltip;
+  statusItem.accessibilityInformation = { label: text.replace(/\$\([^)]+\)\s*/g, "") };
 }
 
 function activeWorkspace() {
@@ -597,7 +591,7 @@ function runtimeProgressOptions(progressReporter, cancellationToken) {
 
 async function initializeManagedRuntime(context, progressReporter, cancellationToken) {
   const manifest = managedRuntime.readManifest();
-  setStatus("$(sync~spin) Josh Room", "Preparing managed runtime…");
+  if (!activityProvider) setStatus("$(sync~spin) Josh Room", "Preparing managed runtime…");
   progressReporter?.event({ stage: "runtime", message: "Resolving managed RCC" });
   const options = runtimeProgressOptions(progressReporter, cancellationToken);
   const rcc = await managedRuntime.ensureManagedRcc(context, manifest, options);
@@ -1451,12 +1445,11 @@ function withRoomProgress(options, task) {
 
 function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionMaterial, dimension, timeoutMs, cancellationToken, progressReporter } = {}) {
   if (progressReporter) return runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin, { encryptionMaterial, timeoutMs });
-  const operationId = ++activeOperationId;
   const displayTitle = title.replace(/…$/, "");
   return withRoomProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable },
     async (progress, token) => {
-      const reporter = createVisualReporter(displayTitle, operationKind(args), progress, operationId);
+      const reporter = createVisualReporter(displayTitle, progress);
       try {
         const result = await runJoshRoom(args, cwd, token, reporter, stdin, {
           encryptionMaterial: encryptionMaterial || (dimension && await readEncryptionMaterial(dimension)),
@@ -1472,83 +1465,23 @@ function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionM
   );
 }
 
-function createVisualReporter(title, kind, progress, operationId = ++activeOperationId) {
-  if (progress.activity) {
-    return {
-      event: event => {
-        const safe = sanitizeProgressEvent(event);
-        const bytes = ["upload", "download"].includes(safe.stage) && Number.isFinite(safe.current)
-          && Number.isFinite(safe.total) && safe.total > 0;
-        const message = bytes ? `${safe.message} · ${formatBytes(safe.current)} / ${formatBytes(safe.total)}` : safe.message;
-        progress.report({ message });
-        outputChannel?.info(message);
-      },
-      finish() {},
-      fail: error => {
-        if (!isCancellationError(error)) outputChannel?.error(`FAILED · ${title} · ${sanitizeControllerText(error.message)}`);
-      },
-      dispose() {},
-    };
-  }
-  const tracker = createProgressTracker(kind);
-  let lastPercent = 0;
-  let latestState;
-  let frame = 0;
-  const startedAt = Date.now();
-  let animation;
-  const updateStatus = () => {
-    if (!latestState) return;
-    const animated = formatProgressDisplay(title, kind, latestState, frame, Date.now() - startedAt);
-    frame += 1;
-    const tooltip = new vscode.MarkdownString();
-    tooltip.appendCodeblock(animated.tooltip);
-    tooltip.appendMarkdown("\nFull details: **Output → Josh Room**");
-    setStatus(animated.statusText, tooltip);
-  };
-  const stopAnimation = () => {
-    if (animation) clearInterval(animation);
-    animation = undefined;
-  };
-  const publish = (event) => {
-    event = sanitizeProgressEvent(event);
-    const state = tracker.update(event);
-    latestState = state;
-    const display = formatProgressDisplay(title, kind, state, 0, Date.now() - startedAt);
-    const increment = state.percent === undefined ? undefined : Math.max(0, state.percent - lastPercent);
-    if (state.percent !== undefined) lastPercent = state.percent;
-    progress.report({ message: display.notification, ...(increment ? { increment } : {}) });
-    updateStatus();
-    if (state.percent === 100) stopAnimation();
-    else if (!animation) {
-      animation = setInterval(updateStatus, 140);
-      animation.unref?.();
-    }
-    outputChannel?.info(display.logLine);
-  };
+function createVisualReporter(title, progress) {
+  let lastMessage;
   return {
-    event: (event) => publish(event.stage === "complete" ? { ...event, stage: "subtask-complete" } : event),
-    finish: () => {
-      publish({ stage: "complete", message: "Complete" });
-      stopAnimation();
-      if (activeOperationId === operationId) {
-        setStatus(`$(pass-filled) ${title} 100%`, "Completed successfully");
-        setTimeout(() => {
-          if (activeOperationId === operationId) refreshRoomStatus();
-        }, 2500);
+    event: event => {
+      const safe = sanitizeProgressEvent(event);
+      const detail = progressDetail(safe);
+      progress.report({ message: safe.message, detail });
+      if (safe.message !== lastMessage) outputChannel?.info(safe.message);
+      lastMessage = safe.message;
+    },
+    finish() {},
+    fail: error => {
+      if (!isCancellationError(error)) {
+        outputChannel?.error(`FAILED · ${title} · ${sanitizeControllerText(error?.message || String(error))}`);
       }
     },
-    fail: (error) => {
-      stopAnimation();
-      if (isCancellationError(error)) {
-        if (activeOperationId === operationId) setStatus("$(archive) Josh Room", `${title} cancelled`);
-        return;
-      }
-      const rawMessage = sanitizeControllerText(error?.message || String(error));
-      const message = userFacingError(error);
-      outputChannel?.error(`FAILED · ${title} · ${rawMessage}`);
-      if (activeOperationId === operationId) setStatus(`$(error) ${title} failed`, message);
-    },
-    dispose: stopAnimation,
+    dispose() {},
   };
 }
 
@@ -1674,6 +1607,7 @@ function sameRoomBinding(marker, item) {
 
 function refreshRoomStatus() {
   refreshWorkspaceActions();
+  if (activityProvider?.operations.some(row => row.state === "running")) return;
   let marker;
   try {
     marker = currentRoom(activeWorkspace());
@@ -4130,7 +4064,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         cancellable: false,
       },
       async (progress) => {
-        progressReporter = createVisualReporter(title, "serve", progress);
+        progressReporter = createVisualReporter(title, progress);
         progressActive = true;
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
         terminal.sendText(launch.command, true);
@@ -4523,7 +4457,7 @@ async function authorizeCloudflareBroker(cwd, { timeoutMs = 600000, targetDimens
       async (progress, parentToken) => {
         const controller = createCancellationController(parentToken);
         attempt.controller = controller;
-        const reporter = createVisualReporter(title, operationKind(["auth", "start"]), progress);
+        const reporter = createVisualReporter(title, progress);
         let sessionId;
         try {
           let started = await runJoshRoom(
@@ -5759,7 +5693,7 @@ class HierarchyRoomsProvider {
     this.loading = withRoomProgress(
       { location: vscode.ProgressLocation.Notification, title: "Loading Josh Room storage…", cancellable: true, retry: () => this.reload() },
       async (progress, cancellationToken) => {
-        const progressReporter = createVisualReporter("Loading Josh Room storage", operationKind(["dimensions", "list"]), progress);
+        const progressReporter = createVisualReporter("Loading Josh Room storage", progress);
         try {
           const catalog = await loadCatalog(cwd, "Loading Josh Room storage…", { cancellationToken, progressReporter });
           if (cancellationToken.isCancellationRequested) throw cancellationError();
