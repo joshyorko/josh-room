@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { isRoomMarker } = require("./dirty");
+const { confirmDestructive } = require("./messaging");
 
 function readLocalBinding(root, name) {
   const fd = fs.openSync(path.join(root, name), fs.constants.O_RDONLY
@@ -113,4 +114,4 @@ async function browseRecovery(vscode, context, run, workspace) {
     }
   }
 }
-module.exports = { browseRecovery, currentChildPin, isChildSnapshotId };
+module.exports = { browseRecovery, currentChildPin, isChildSnapshotId, confirmDestructive };
