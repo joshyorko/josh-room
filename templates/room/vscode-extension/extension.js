@@ -5,11 +5,13 @@ const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
 const { WorkspaceBaseline, isRoomMarker, loadCapturePolicy, shouldMarkDirty } = require("./dirty");
+const { ActivityProvider, VIEW_ID: ACTIVITY_VIEW_ID } = require("./activity");
 const managedRuntime = require("./runtime");
 const {
   createProgressTracker,
   followProgressFile,
   formatProgressDisplay,
+  formatBytes,
   operationKind,
 } = require("./progress");
 const { followLogFile, stageForLog, waitForServeStartup, validateServeStartup, verifiedPull, probeRegistry, readServeJson } = require("./registry");
@@ -17,6 +19,7 @@ const providerTools = require("./provider");
 
 let outputChannel;
 let roomsProvider;
+let activityProvider;
 let statusItem;
 let activeOperationId = 0;
 let extensionContext;
@@ -1442,11 +1445,15 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
   }
 }
 
+function withRoomProgress(options, task) {
+  return activityProvider ? activityProvider.run(options, task) : vscode.window.withProgress(options, task);
+}
+
 function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionMaterial, dimension, timeoutMs, cancellationToken, progressReporter } = {}) {
   if (progressReporter) return runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin, { encryptionMaterial, timeoutMs });
   const operationId = ++activeOperationId;
   const displayTitle = title.replace(/…$/, "");
-  return vscode.window.withProgress(
+  return withRoomProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable },
     async (progress, token) => {
       const reporter = createVisualReporter(displayTitle, operationKind(args), progress, operationId);
@@ -1466,6 +1473,23 @@ function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionM
 }
 
 function createVisualReporter(title, kind, progress, operationId = ++activeOperationId) {
+  if (progress.activity) {
+    return {
+      event: event => {
+        const safe = sanitizeProgressEvent(event);
+        const bytes = ["upload", "download"].includes(safe.stage) && Number.isFinite(safe.current)
+          && Number.isFinite(safe.total) && safe.total > 0;
+        const message = bytes ? `${safe.message} · ${formatBytes(safe.current)} / ${formatBytes(safe.total)}` : safe.message;
+        progress.report({ message });
+        outputChannel?.info(message);
+      },
+      finish() {},
+      fail: error => {
+        if (!isCancellationError(error)) outputChannel?.error(`FAILED · ${title} · ${sanitizeControllerText(error.message)}`);
+      },
+      dispose() {},
+    };
+  }
   const tracker = createProgressTracker(kind);
   let lastPercent = 0;
   let latestState;
@@ -3120,7 +3144,7 @@ async function enterRoom(preferredProject) {
         await vscode.window.showInformationMessage(`“${selected.label}” is already open.`);
         return "current";
       }
-      await vscode.window.withProgress(
+      await withRoomProgress(
         { location: vscode.ProgressLocation.Notification, title: `Opening existing ${selected.label}…`, cancellable: false },
         () => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(existing.path), false),
       );
@@ -4099,7 +4123,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
   setStatus("$(sync~spin) Starting serve endpoints", title);
   terminal.show(true);
   try {
-    const outcome = await vscode.window.withProgress(
+    const outcome = await withRoomProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title,
@@ -4490,7 +4514,7 @@ async function authorizeCloudflareBroker(cwd, { timeoutMs = 600000, targetDimens
   };
   activeAuthAttempt = attempt;
   try {
-    return await vscode.window.withProgress(
+    return await withRoomProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title: `${title}...`,
@@ -5732,8 +5756,8 @@ class HierarchyRoomsProvider {
     const cwd = activeWorkspace();
     this.state = "loading";
     this.emitter.fire(undefined);
-    this.loading = vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "Loading Josh Room storage…", cancellable: true },
+    this.loading = withRoomProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Loading Josh Room storage…", cancellable: true, retry: () => this.reload() },
       async (progress, cancellationToken) => {
         const progressReporter = createVisualReporter("Loading Josh Room storage", operationKind(["dimensions", "list"]), progress);
         try {
@@ -6680,7 +6704,7 @@ async function exploreRoom3D(item, { launch = require("./room-view").launchRoomV
       await roomViewSession.dispose();
       assertCurrent();
     }
-    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Opening Room in 3D", cancellable: true }, async (progress, progressToken) => {
+    await withRoomProgress({ location: vscode.ProgressLocation.Notification, title: "Opening Room in 3D", cancellable: true }, async (progress, progressToken) => {
       assertCurrent();
       const cancellation = operationCancellation;
       const token = cancellation?.token || progressToken;
@@ -6764,6 +6788,14 @@ function activateNative(context) {
   setStatus("$(archive) Josh Room");
   statusItem.show();
   roomsProvider = new HierarchyRoomsProvider();
+  activityProvider = new ActivityProvider(vscode, operation => {
+    if (!operation) {
+      refreshRoomStatus();
+      return;
+    }
+    statusItem.command = "joshRoom.openActivity";
+    setStatus(`$(loading~spin) ${operation.label} · ${Math.floor((Date.now() - operation.started) / 1000)}s`, "Open Josh Room Activity");
+  });
   refreshWorkspaceActions();
   context.subscriptions.push({ dispose: () => clearTimeout(workspaceDiskCheckTimer) });
   if (vscode.window.onDidChangeWindowState) {
@@ -6783,7 +6815,11 @@ function activateNative(context) {
   const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", {
     treeDataProvider: new JatToolsProvider(),
   });
-  context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
+  activityProvider.view = vscode.window.createTreeView(ACTIVITY_VIEW_ID, { treeDataProvider: activityProvider });
+  context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView, activityProvider.view, activityProvider);
+  register(context, "joshRoom.openActivity", () => vscode.commands.executeCommand(`${ACTIVITY_VIEW_ID}.focus`));
+  register(context, "joshRoom.cancelActivity", row => row?.cancellation?.cancel());
+  register(context, "joshRoom.retryActivity", row => row?.retry?.());
   if (context.secrets?.onDidChange) {
     context.subscriptions.push(context.secrets.onDidChange((event) => {
       if (!event?.key || event.key.startsWith(ENCRYPTION_SECRET_PREFIX) || event.key.startsWith(RECOVERY_SECRET_PREFIX)) {
