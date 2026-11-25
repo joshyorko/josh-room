@@ -8494,7 +8494,7 @@ test("Rooms shows workspace actions for the current binding and saved tools on t
   assert.ok(!title.some(item => ["joshRoom.save", "joshRoom.saveCatalog", "joshRoom.restoreCatalog"].includes(item.command)));
 });
 
-test("Open Workspace marks a Catalog root edit without marking its child edits", async t => {
+test("Rooms marks edits on the Catalog root or the exact restored child row", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-dirty-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const { vscode } = createVscodeMock(root);
@@ -8503,21 +8503,37 @@ test("Open Workspace marks a Catalog root edit without marking its child edits",
   let created;
   vscode.workspace.onDidCreateFiles = callback => { created = callback; return { dispose() {} }; };
   const extension = loadExtension(vscode, () => assert.fail("workspace change indicators are local"));
-  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify({
+  const marker = {
     format_version: 4, project_id: "parent", display_name: "Synthetic Catalog", snapshot_id: "jat-parent",
     dimension_id: "synthetic", composition_namespace: "1".repeat(32), encryption_domain_id: "domain",
     workspace_signature: "0".repeat(64), capture_policy_sha256: "0".repeat(64),
     signature_algorithm: "josh-room-stat-v1", workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
+  };
+  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify(marker));
+  const childRoot = path.join(root, "child");
+  fs.mkdirSync(childRoot);
+  fs.writeFileSync(path.join(childRoot, ".josh-room.json"), JSON.stringify({
+    ...marker, project_id: "child", snapshot_id: "jat-child",
+    workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(childRoot)).digest("hex"),
   }));
-  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "child" }] }));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({
+    children: [{ path: "child", room_id: "child", snapshot_id: "jat-child" }],
+  }));
   fs.writeFileSync(path.join(root, ".josh-roomignore"), "ignored.txt\n");
   extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [] });
   const provider = new extension.__test__.HierarchyRoomsProvider();
   extension.__test__.setRoomsProvider(provider);
   const item = () => provider.getTreeItem(provider.getChildren()[0]);
-  created({ files: ["child/note.txt", "ignored.txt"].map(name => vscode.Uri.file(path.join(root, name))) });
+  const childItem = () => provider.getTreeItem(provider.getChildren()[0].children
+    .find(row => row.kind === "workspace-children").children[0]);
+  const uri = name => ({ scheme: "file", fsPath: path.join(root, name) });
+  created({ files: [uri("ignored.txt"), uri("child/.josh-room.json")] });
+  assert.doesNotMatch(childItem().description, /Changes to save/);
+  created({ files: [uri("child/note.txt")] });
   assert.doesNotMatch(item().description, /Changes to save/);
-  created({ files: [vscode.Uri.file(path.join(root, "root-edit.txt"))] });
+  assert.match(childItem().description, /Changes to save/);
+  assert.equal(childItem().iconPath.id, "circle-filled");
+  created({ files: [uri("root-edit.txt")] });
   assert.match(item().description, /Changes to save/);
   assert.equal(item().iconPath.id, "circle-filled");
 });

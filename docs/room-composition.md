@@ -152,7 +152,8 @@ The open workspace shows the Save action for its type. Use **New Room** in
 the Rooms toolbar when opening an unbound folder, or in the toolbar's menu
 when a Room or Catalog is open.
 **Open Workspace** marks eligible file changes made through VS Code as
-**Changes to save**. In the Catalog parent, this tracks files at its root.
+**Changes to save**. Root edits mark the Catalog. Edits inside a restored
+child mark that child Room.
 Use **Explore Room in 3D** on an open workspace or its matching Catalog row.
 On a Catalog or child recovery point, the usual **Inspect Logical JAT**,
 **Extract**, **Export Portable JAT**, and **Serve** actions use that point's
@@ -162,7 +163,11 @@ Select a restored child to open it, or select a missing child to restore
 and open it. The bulk picker lists missing children only. When an existing Catalog parent opens with a child that is not
 yet on disk, Josh Room offers the checkbox picker once for that folder and
 recovery point. Each restore requires an explicit choice and never overwrites
-an occupied child. If discovery is marked incomplete, the receipt and CLI
+an occupied child. Unrelated edits to the Catalog parent can stay in place
+while restoring missing children. Restore still verifies the parent binding,
+manifest and capture policy. If files change after a child is promoted,
+Josh Room reports the restore and the local changes separately.
+If discovery is marked incomplete, the receipt and CLI
 still allow restoring a known exact recovery point.
 
 In **Rooms**, use **Delete Catalog…** on the Catalog row and confirm the
@@ -516,7 +521,13 @@ The v2 writer requires the live/private/restored effective policy digest to matc
 the exact authenticated baseline through publication, including for fresh/no-op
 operations. Policy changes require reconciliation, which remains unsupported.
 
-A full Git child requires Git to inspect its index. Catalog capture refuses an index that tracks the generated child policy, guard, or marker at its root, even when the working copy of that file is missing. Sparse directory indexes, split indexes requiring an external base, and submodule gitlinks are unsupported. Save such a repository as one ordinary Room. The same checks apply before a subsequent child Save.
+A full Git child requires Git to inspect its index. A portable sparse index
+and a split index with its local shared base can be preserved. Gitlinks
+without submodule configuration are preserved as index entries, alongside
+the existing working files. Configured submodules and missing Git objects
+still block full Git capture. Catalog capture also refuses an index that
+tracks the generated child policy, guard, or marker at its root. The same
+checks apply before a subsequent child Save.
 A standalone `.gitmodules` file without sibling Git metadata is ordinary source
 content and does not make a copied folder a submodule repository.
 An enabled `extensions.worktreeConfig` flag is supported when the repository has

@@ -513,7 +513,9 @@ def test_stale_approval_and_unassigned_capture_are_zero_provider_writes(runtime)
     assert r.transport.writes == 0
 
 
-def test_dirty_parent_and_wrong_namespace_never_create_child(runtime):
+def test_restore_after_parent_edit_keeps_edits_and_checks_manifest(runtime, monkeypatch):
+    from josh_room import composition_lifecycle as lifecycle
+
     r = runtime
     result = save(r)
     target = r.tmp / "entered-parent"
@@ -528,19 +530,24 @@ def test_dirty_parent_and_wrong_namespace_never_create_child(runtime):
         r.private,
     )
     (target / "notes.txt").write_text("unsaved changes")
-    with pytest.raises(ValueError, match="parent has changed"):
-        hydrate_composition(
-            r.dimension,
-            NAMESPACE,
-            "parent",
-            result["parent_snapshot_id"],
-            target,
-            r.authority,
-            r.factory,
-            r.private,
-            child_path="a",
-        )
-    assert not (target / "a").exists()
+    original_scan = lifecycle.scan_workspace_for_status
+    def scan_after_editor_write(workspace):
+        if workspace == target / "a":
+            (workspace / "editor.txt").write_text("edit after promotion")
+        return original_scan(workspace)
+    monkeypatch.setattr(lifecycle, "scan_workspace_for_status", scan_after_editor_write)
+    args = (r.dimension, NAMESPACE, "parent", result["parent_snapshot_id"],
+            target, r.authority, r.factory, r.private)
+    receipt = hydrate_composition(*args, child_paths=["a"])
+    assert receipt["status"] == "hydrated"
+    assert receipt["restored"][0]["local_changes"]
+    assert receipt["restored"][0]["marker_verified"]
+    assert (target / "notes.txt").read_text() == "unsaved changes"
+    assert (target / "a/editor.txt").read_text() == "edit after promotion"
+    (target / ".josh-room-composition.json").write_text("{}")
+    with pytest.raises(ValueError, match="manifest, or capture policy changed"):
+        hydrate_composition(*args, child_path="b")
+    assert not (target / "b").exists()
     other = CompositionAuthority(
         SimpleNamespace(client=r.transport),
         r.dimension,

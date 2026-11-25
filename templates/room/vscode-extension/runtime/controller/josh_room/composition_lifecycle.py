@@ -274,7 +274,6 @@ def _child_inventory(source, child, root_policy, selection):
             "Catalog capture requires complete Git history; partial and shallow clones are unsupported",
             "Catalog capture requires complete Git history; partial clones are unsupported",
             "Catalog capture cannot verify this Git repository extension",
-            "Catalog children with submodule gitlinks or sparse directory indexes are unsupported",
         }:
             raise CompositionAdmissionError("composition-child-git-files-only", str(error), child=child) from None
         raise
@@ -1493,8 +1492,17 @@ def _restore(
         os.close(parent_fd)
     result = context_status(destination)
     scan = scan_workspace_for_status(destination)
-    if not result["ok"] or result.get("workspace_signature") != scan.signature:
+    if (not result["ok"] or not result.get("path_matches")
+            or result.get("project_id") != metadata["room_id"]
+            or result.get("snapshot_id") != metadata["logical_jat_id"]
+            or result.get("dimension_id") != dimension.dimension_id
+            or result.get("encryption_domain_id") != metadata["encryption_domain_id"]
+            or result.get("composition_namespace") != (namespace or child_namespace)
+            or result.get("capture_policy_sha256") != scan.capture_policy_sha256
+            or scan.capture_policy_sha256 != metadata["capture_policy_sha256"]):
         raise ValueError("restored marker is unverified; preserve destination")
+    if result.get("workspace_signature") != scan.signature:
+        result["local_changes"] = True
     return result
 
 
@@ -1591,6 +1599,7 @@ def _hydrate_pinned_child(dimension, namespace, root, authority, store, reposito
         "snapshot_id": result["snapshot_id"],
         "marker_verified": True,
         "unit": "whole-child",
+        **({"local_changes": True} if result.get("local_changes") else {}),
     }
 
 
@@ -1663,7 +1672,10 @@ def hydrate_composition(
         else:
             root = Path(os.path.abspath(destination))
             fd = _directory(root)
-            os.close(fd)
+            try:
+                root_stat = os.fstat(fd)
+            finally:
+                os.close(fd)
             original = context_status(root)
             if (
                 not original["ok"]
@@ -1676,21 +1688,22 @@ def hydrate_composition(
             ):
                 raise ValueError("parent marker does not match selected immutable pin")
 
-            def parent_current(transient=None):
+            def parent_current(_transient=None):
+                from .composition_updates import _read_regular
+
                 current = context_status(root)
-                policy = load_capture_policy(root)
-                if transient is not None:
-                    policy = replace(
-                        policy,
-                        active_runtime_relative=transient.resolve()
-                        .relative_to(root.resolve())
-                        .as_posix(),
-                    )
-                scan = _scan_workspace(root, policy)
-                if current != original or scan.signature != original.get(
-                    "workspace_signature"
-                ):
-                    raise ValueError("parent has changed; no child was promoted")
+                parent_fd = _directory(root)
+                try:
+                    info = os.fstat(parent_fd)
+                    policy = load_capture_policy(root, directory_fd=parent_fd)
+                    local_manifest = _read_regular(parent_fd, MANIFEST, 1024 * 1024)
+                finally:
+                    os.close(parent_fd)
+                if (current != original or (info.st_dev, info.st_ino) != (root_stat.st_dev, root_stat.st_ino)
+                        or policy.sha256 != parent_descriptor.to_dict()["capture_policy_sha256"]
+                        or hashlib.sha256(local_manifest).hexdigest() != operation["manifest_sha256"]):
+                    raise CompositionAdmissionError("composition-parent-binding-changed",
+                        "The Catalog folder, manifest, or capture policy changed. No child was promoted.")
 
             parent_current()
             # Recover the manifest from the authenticated immutable parent, then
@@ -1737,11 +1750,19 @@ def hydrate_composition(
                 try:
                     loaded = _hydrate_pinned_child(dimension, namespace, root, authority, store, repository,
                                                   private, catalog, state, child, pin, parent_current)
-                except (BotoCoreError, ClientError, OSError, RuntimeError, ValueError):
+                except (BotoCoreError, ClientError, OSError, RuntimeError, ValueError) as error:
                     if not batch:
                         raise
+                    reason = "child-validation-failed"
+                    if isinstance(error, FileExistsError) or (root / child["path"]).exists():
+                        reason = "child-destination-present"
+                    if isinstance(error, OSError) and error.errno == errno.ENOSPC:
+                        reason = "child-insufficient-space"
+                    if isinstance(error, CompositionAdmissionError) and error.result["error_code"] == "composition-parent-binding-changed":
+                        reason = "parent-binding-changed"
                     return {"ok": True, "status": "partial", "namespace": namespace,
-                            "parent_snapshot_id": snapshot, "restored": restored, "failed_index": index}
+                            "parent_snapshot_id": snapshot, "restored": restored, "failed_index": index,
+                            "failure": reason}
                 if not batch:
                     return loaded
                 restored.append(loaded)
@@ -1756,4 +1777,5 @@ def hydrate_composition(
             "snapshot_id": result["snapshot_id"],
             "marker_verified": True,
             "unit": "parent",
+            **({"local_changes": True} if result.get("local_changes") else {}),
         }

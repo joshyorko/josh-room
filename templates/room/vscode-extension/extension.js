@@ -1747,6 +1747,7 @@ function handleCapturePolicyChange(root) {
 }
 
 async function markWorkspaceChange(uri) {
+  if (markCatalogChildChange(uri)) return;
   let root;
   try {
     root = activeWorkspace();
@@ -2569,11 +2570,42 @@ function openWorkspaceBinding() {
 
 let currentWorkspaceKind;
 let workspaceActionsRoot;
+const changedCatalogChildren = new Set();
+
+function catalogChildChangeKey(marker, row) {
+  return JSON.stringify([marker.composition_namespace, row.room_id, row.snapshot_id]);
+}
+
+function markCatalogChildChange(uri, opened = false) {
+  if (uri?.scheme !== "file") return false;
+  const { kind, root, marker } = openWorkspaceBinding();
+  if (kind !== "catalog") return false;
+  const relative = path.relative(root, uri.fsPath).split(path.sep).join("/");
+  if (!relative.includes("/") || relative.startsWith("../")) return false;
+  const row = localCatalogChildren(root).find(child => relative.startsWith(child.path + "/"));
+  if (!row || catalogChildLocalState(root, marker, row) !== "restored") return false;
+  const childRoot = path.join(root, row.path);
+  const file = relative.slice(row.path.length + 1);
+  if (CONTROLLER_MARKER_TEMP.test(file)) return true;
+  try {
+    if (!shouldMarkDirty(file, loadCapturePolicy(childRoot))) return true;
+    if (opened && fs.statSync(uri.fsPath).mtimeMs <= fs.statSync(path.join(childRoot, ".josh-room.json")).mtimeMs) return true;
+  } catch {
+    return true;
+  }
+  const key = catalogChildChangeKey(marker, row);
+  if (!changedCatalogChildren.has(key)) {
+    changedCatalogChildren.add(key);
+    roomsProvider?.emitter.fire(undefined);
+  }
+  return true;
+}
 
 function refreshWorkspaceActions() {
   const { kind, root } = openWorkspaceBinding();
   if (workspaceActionsRoot !== root) {
     workspaceActionsRoot = root;
+    changedCatalogChildren.clear();
     try {
       workspaceCapturePolicy = root ? loadCapturePolicy(root) : undefined;
     } catch {
@@ -2607,6 +2639,7 @@ function openWorkspaceRows() {
       const item = command(row.path, state === "missing" ? "cloud-download" : state === "restored" ? "folder-active" : "warning",
         "joshRoom.enterChild", [row.path]);
       item.description = { missing: "Not restored", restored: "Restored", occupied: "Folder occupied" }[state];
+      item.changed = state === "restored" && changedCatalogChildren.has(catalogChildChangeKey(marker, row));
       if (state === "occupied") delete item.command;
       children.push(item);
     }
@@ -5416,7 +5449,7 @@ class HierarchyRoomsProvider {
         ? vscode.TreeItemCollapsibleState.Expanded : group
           ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
       treeItem.id = `${item.kind}:${item.id}`;
-      treeItem.iconPath = workspace && item.changed
+      treeItem.iconPath = item.changed
         ? new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("gitDecoration.modifiedResourceForeground"))
         : new vscode.ThemeIcon(workspace ? "window" : group ? "folder-library" : item.icon);
       treeItem.contextValue = item.contextValue;
@@ -6668,6 +6701,10 @@ function activateNative(context) {
   statusItem.show();
   roomsProvider = new HierarchyRoomsProvider();
   refreshWorkspaceActions();
+  for (const document of vscode.workspace.textDocuments || []) markCatalogChildChange(document.uri, true);
+  if (vscode.workspace.onDidOpenTextDocument) {
+    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => markCatalogChildChange(document.uri, true)));
+  }
   void vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", true);
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", {
     treeDataProvider: roomsProvider,
@@ -6687,6 +6724,7 @@ function activateNative(context) {
     }));
   }
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
+    if (event.document.isDirty && markCatalogChildChange(event.document.uri)) return;
     const relative = relativeWorkspacePath(event.document.uri);
     if (!relative) return;
     workspaceEventGeneration += 1;
@@ -6695,6 +6733,7 @@ function activateNative(context) {
     if (event.document.isDirty) setRoomState("dirty");
   }));
   context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
+    if (markCatalogChildChange(document.uri)) return;
     const relative = relativeWorkspacePath(document.uri);
     if (!relative) return;
     dirtyBuffers.delete(relative);

@@ -310,7 +310,9 @@ async function enterChild(vscode, { root, marker, listChildren, enter, open, chi
   }
   if (state === "occupied") throw new Error("The child folder is occupied. Choose a new Catalog restore location.");
   const { result, target } = await hydratePinnedChild(root, marker, row, enter);
-  void vscode.window.showInformationMessage(`Child Room verified at exact recovery point ${result.snapshot_id}.`);
+  void vscode.window.showInformationMessage(result.local_changes
+    ? "Child Room restored. Local files changed after restore."
+    : `Child Room verified at exact recovery point ${result.snapshot_id}.`);
   await open(target);
   return result;
 }
@@ -337,12 +339,22 @@ async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch,
     throw new Error("The controller could not verify the batch restore. Check Open Workspace for folder status.");
   }
   if (batch.status === "partial" && batch.failed_index === restored.length && restored.length < children.length) {
-    throw new Error(`Restored ${restored.length} of ${children.length} child Rooms. Restore stopped at ${children[batch.failed_index].path}.`);
+    const reason = {
+      "child-destination-present": "The folder already exists. Open it to check its contents.",
+      "child-insufficient-space": "There is insufficient disk space.",
+      "parent-binding-changed": "The Catalog binding or capture policy changed.",
+      "child-validation-failed": "The controller could not verify the child payload.",
+    }[batch.failure];
+    throw new Error(`Restored ${restored.length} of ${children.length} child Rooms. Restore stopped at ${children[batch.failed_index].path}.${reason ? ` ${reason}` : ""}`);
   }
   if (batch.status !== "hydrated" || restored.length !== children.length) {
     throw new Error("The controller returned an incomplete batch restore receipt. Check Open Workspace for folder status.");
   }
-  if (notify) void vscode.window.showInformationMessage(`Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`);
+  if (notify) {
+    const changed = restored.filter(result => result.local_changes === true).length;
+    const summary = `Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`;
+    void vscode.window.showInformationMessage(changed ? `${summary} Local files changed after restore in ${changed}.` : summary);
+  }
   return { ok: true, restored };
 }
 
