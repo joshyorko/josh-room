@@ -214,6 +214,7 @@ module.exports = {
   stageForLog,
   waitForFileserver,
   waitForRegistry,
+  flattenStorageRows,
 };
 
 const PROVIDER_LABELS = {
@@ -497,6 +498,53 @@ function buildProviderTree(catalog = {}) {
   return [...grouped.values()];
 }
 
+function recoveryPointLabel(timestamp) {
+  const date = new Date(timestamp);
+  return timestamp && Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date)
+    : "Date unavailable";
+}
+
+function flattenStorageRows(catalog = {}) {
+  const newest = row => Math.max(0, ...(row.children || []).map(point => Date.parse(
+    point.point?.created_at || point.snapshot?.created_at) || 0));
+  const displayPoint = (point, latest) => ({ ...point,
+    label: recoveryPointLabel(point.point?.created_at || point.snapshot?.created_at), latest });
+  return buildProviderTree(catalog).flatMap(provider => provider.children.flatMap(connection => {
+    const dimensions = connection.children || [];
+    if (!dimensions.length) return [connection];
+    return dimensions.map(dimension => {
+      const endpoint = dimension.dimension.endpoint || connection.connection?.endpoint;
+      let host;
+      try { host = new URL(endpoint).host; } catch {}
+      const providerName = { minio: "MinIO", r2: "R2", s3: "S3" }[provider.provider];
+      const disconnected = ["missing", "expired", "disconnected"].includes(connection.state);
+      const status = disconnected ? connection.state : dimension.state;
+      const description = [providerName, provider.provider !== "r2" && host,
+        ({ missing: "Connect", expired: "Reconnect", disconnected: "Reconnect", uninitialized: "Set up encryption",
+          insecure: "Set up encryption", legacy: "Migrate encryption", resumable: "Resume migration",
+          failed: "Unavailable", error: "Unavailable" })[status]].filter(Boolean).join(" · ");
+      const byDate = (a, b) => newest(b) - newest(a) || a.label.localeCompare(b.label);
+      const children = [...dimension.children].sort((a, b) =>
+        Number(b.kind === "catalog-parent") - Number(a.kind === "catalog-parent") || byDate(a, b)).map(row => {
+        if (row.kind === "room") return { ...row, children: row.children.map(point => displayPoint(point, point.id === row.project.latest)) };
+        if (row.kind !== "catalog-parent") return row.kind === "dimension-error" ? { ...row, label: "Couldn't load — Retry" } : row;
+        const points = row.children.filter(point => point.kind === "catalog-point").map((point, index) => displayPoint(point, index === 0));
+        const rooms = row.children.filter(group => group.kind === "catalog-child-history").flatMap(group => group.children.map(child => {
+          if (!child.children) return child;
+          const history = [...child.children].sort((a, b) => (Date.parse(b.point.created_at) || 0) - (Date.parse(a.point.created_at) || 0));
+          return { ...child, children: history.map((point, index) => displayPoint(point, index === 0)) };
+        }));
+        return { ...row, children: [...points, ...rooms] };
+      });
+      return { ...dimension, state: status, description, children, connection: connection.connection,
+        connectionState: connection.state,
+        action: disconnected ? { command: connection.state === "missing" ? "joshRoom.connectStorage" : "joshRoom.reconnectStorage",
+          title: connection.state === "missing" ? "Connect" : "Reconnect" } : dimension.action };
+    });
+  }));
+}
+
 function dimensionArgs(args, dimension) {
   const original = [...args];
   if (!dimension) return original;
@@ -522,6 +570,7 @@ function dimensionArgs(args, dimension) {
 }
 
 Object.assign(module.exports, {
+  flattenStorageRows,
   buildProviderTree,
   dimensionArgs,
   flattenDimensionRooms,

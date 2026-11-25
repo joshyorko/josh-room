@@ -266,7 +266,8 @@ function createVscodeMock(workspaceFolder, textDocuments = [], settings = {}) {
         },
       },
       workspace: {
-        workspaceFolders: workspaceFolder ? [{ uri: { fsPath: workspaceFolder } }] : [],
+        isTrusted: true,
+        workspaceFolders: workspaceFolder ? [{ uri: { scheme: "file", fsPath: workspaceFolder } }] : [],
         textDocuments,
         getConfiguration(section) {
           return { get(key, fallback) { return settings[`${section}.${key}`] ?? fallback; } };
@@ -1352,7 +1353,7 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
     assert.equal(provider.state, "error");
     assert.ok(warningCalls.some(([message]) => /saved.*refresh/i.test(message)));
   } else {
-    const room = provider.roots[0].children[0].children[0].children[0];
+    const room = provider.roots[0].children[0];
     assert.equal(room.id, "test-room");
     assert.equal(room.children[0].id, "new-jat");
   }
@@ -1452,7 +1453,7 @@ test("startup refuses to mark a copied workspace as Saved when path binding is s
   extension.__test__.setStatusItem(statusItem);
   await extension.__test__.startDirtyTracking({ subscriptions: [] });
 
-  assert.match(statusItem.text, /Save/);
+  assert.match(statusItem.tooltip, /Changes to save|Unsaved editors|Checking/);
   assert.doesNotMatch(statusItem.text, /Saved/);
 });
 
@@ -1480,7 +1481,7 @@ test("startup refuses to mark a workspace Saved when authoritative status is not
   extension.__test__.setStatusItem(statusItem);
   await extension.__test__.startDirtyTracking({ subscriptions: [] });
 
-  assert.match(statusItem.text, /Save/);
+  assert.match(statusItem.tooltip, /Changes to save|Unsaved editors|Checking/);
   assert.doesNotMatch(statusItem.text, /Saved/);
 });
 
@@ -1506,7 +1507,7 @@ test("v3 stat status starts unknown and uses one scan after extension restart", 
   await extension.__test__.startDirtyTracking({ subscriptions: [] });
 
   assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "status").length, 1);
-  assert.match(statusItem.text, /unknown|checking/i);
+  assert.equal(statusItem.tooltip, "Checking…");
   assert.doesNotMatch(statusItem.text, /Saved/);
   const state = extension.__test__.getRoomStatusForTests();
   assert.equal(state.kind, "unknown");
@@ -1576,7 +1577,7 @@ test("dirty tracking marks watcher changes immediately without rescanning each e
   watcherCallbacks[0].didChange({ fsPath: path.join(root, "src", "main.py") });
   await new Promise(setImmediate);
   assert.equal(statusCalls(), startupStatusCalls);
-  assert.match(statusItem.text, /Save/);
+  assert.match(statusItem.tooltip, /Changes to save|Unsaved editors|Checking/);
   assert.equal(cleanState.kind, "clean");
   assert.equal(Object.isFrozen(cleanState), true);
   assert.equal(extension.__test__.getRoomStatusForTests().kind, "dirty");
@@ -2223,8 +2224,7 @@ test("workspace events during native Save keep the new Room marked dirty", async
 
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved-but-dirty");
 
-  assert.match(fixture.statusItem.text, /Saved, changes remain/);
-  assert.match(fixture.statusItem.text, /Save/);
+  assert.equal(fixture.statusItem.tooltip, "Changes to save");
 });
 
 test("invalid or symlinked capture policy fails closed without starting workspace status", async () => {
@@ -2241,7 +2241,7 @@ test("invalid or symlinked capture policy fails closed without starting workspac
   await extension.__test__.startDirtyTracking({ subscriptions: [] });
 
   assert.equal(spawnHarness.calls.length, 0);
-  assert.match(statusItem.text, /Save/);
+  assert.match(statusItem.tooltip, /Changes to save|Unsaved editors|Checking/);
   assert.equal(watcherCallbacks.some((watcher) => watcher.pattern.pattern === ".josh-roomignore"), true);
 });
 
@@ -2292,7 +2292,7 @@ test("startup queues workspace changes that happen before the first authoritativ
   statusCall.child.closeWith(statusCall.child.statusPayload);
   await started;
 
-  assert.match(statusItem.text, /Save/);
+  assert.match(statusItem.tooltip, /Changes to save|Unsaved editors|Checking/);
   assert.doesNotMatch(statusItem.text, /Saved/);
 });
 
@@ -3048,7 +3048,7 @@ test("startup seeds dirtyBuffers from an already-open dirty editor", async () =>
   }).spawn);
   extension.__test__.setStatusItem(statusItem);
   await extension.__test__.startDirtyTracking({ subscriptions: [] });
-  assert.match(statusItem.text, /Save/);
+  assert.match(statusItem.tooltip, /Changes to save|Unsaved editors|Checking/);
 });
 
 test("a failed Dimension loader leaves the healthy Dimension usable", async () => {
@@ -3209,7 +3209,7 @@ test("recovery-point handler rejects a stale cross-Dimension row before any muta
   });
   assert.equal(result, "stale-target");
   assert.equal(spawnHarness.calls.some((entry) => ["rooms", "snapshots"].includes(entry.args[0]) && ["remove"].includes(entry.args[1])), false);
-  assert.match(errorCalls[0][0], /no longer present in that Dimension/);
+  assert.match(errorCalls[0][0], /no longer present in that Storage/);
 });
 
 function createDeletionFixture({ provider = "minio", ids = ["old", "latest"], outcome, reloadFailure = false, material = true } = {}) {
@@ -3284,7 +3284,7 @@ for (const [ids, selected, expectedMessage] of [
 ]) {
   test(`scoped recovery-point deletion reloads after deleting ${selected} from ${ids.length} points`, async () => {
     const f = createDeletionFixture({ ids });
-    f.warningResponses.push("Delete Snapshot");
+    f.warningResponses.push("Delete Recovery Point");
     assert.equal(await f.extension.__test__.deleteRecoveryPoint({ ...f.row, snapshot_id: selected }), "removed");
     assert.equal(f.quickPickCalls.length, 0);
     assert.equal(f.mutations.length, 1);
@@ -3302,14 +3302,14 @@ for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
     assert.equal(await f.extension.__test__[action](target), "cancelled");
     assert.equal(f.mutations.length, 0);
     writeMarker(f.root, { dimension_id: "delete-dimension", project_id: "delete-room", snapshot_id: "latest" });
-    f.warningResponses.push("Delete Room", "Delete Snapshot");
+    f.warningResponses.push("Delete Room", "Delete Recovery Point");
     assert.equal(await f.extension.__test__[action](target), "blocked");
     assert.equal(f.mutations.length, 0);
   });
   test(`${action} blocks an existing malformed workspace binding`, async () => {
     const f = createDeletionFixture();
     fs.writeFileSync(path.join(f.root, ".josh-room.json"), "{broken");
-    f.warningResponses.push("Delete Room", "Delete Snapshot");
+    f.warningResponses.push("Delete Room", "Delete Recovery Point");
     await assert.rejects(f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), /workspace binding.*invalid/i);
     assert.equal(f.mutations.length, 0);
   });
@@ -3320,7 +3320,7 @@ for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
     const f = createDeletionFixture();
     f.vscode.window.showWarningMessage = async () => {
       writeMarker(f.root, { dimension_id: "delete-dimension", project_id: "delete-room", snapshot_id: "latest" });
-      return action === "deleteRoom" ? "Delete Room" : "Delete Snapshot";
+      return action === "deleteRoom" ? "Delete Room" : "Delete Recovery Point";
     };
     assert.equal(await f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), "blocked");
     assert.equal(f.mutations.length, 0);
@@ -3330,7 +3330,7 @@ for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
 for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
   test(`${action} lets the controller resolve R2 authority without a MinIO SecretStorage cache`, async () => {
     const f = createDeletionFixture({ provider: "r2", material: false });
-    f.warningResponses.push(action === "deleteRoom" ? "Delete Room" : "Delete Snapshot");
+    f.warningResponses.push(action === "deleteRoom" ? "Delete Room" : "Delete Recovery Point");
     assert.equal(await f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), "removed");
     assert.equal(f.mutations.length, 1);
     assert.equal(f.mutations[0].hasMaterial, false);
@@ -3341,7 +3341,7 @@ for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
   test(`${action} propagates controller R2 authorization rejection without changing inventory`, async () => {
     const f = createDeletionFixture({ provider: "r2", material: false,
       outcome: { ok: false, error: "R2 authorization required", error_code: "r2-authorization-required" } });
-    f.warningResponses.push(action === "deleteRoom" ? "Delete Room" : "Delete Snapshot");
+    f.warningResponses.push(action === "deleteRoom" ? "Delete Room" : "Delete Recovery Point");
     await assert.rejects(f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), /R2 authorization required/);
     assert.equal(f.row.project.snapshots.length, 2);
     assert.equal(f.catalogReads, 1);
@@ -3351,7 +3351,7 @@ for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
 
 test("an explicit recovery point missing from the fresh inventory never mutates", async () => {
   const f = createDeletionFixture();
-  f.warningResponses.push("Delete Snapshot");
+  f.warningResponses.push("Delete Recovery Point");
   assert.equal(await f.extension.__test__.deleteRecoveryPoint({ ...f.row, snapshot_id: "stale" }), "stale-target");
   assert.equal(f.mutations.length, 0);
 });
@@ -3411,7 +3411,7 @@ for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
       let shown = false;
       f.vscode.window.showInformationMessage = () => { shown = true; return notification; };
       f.vscode.window.showWarningMessage = (...args) => {
-        if (args[1]?.modal) return Promise.resolve(action === "deleteRoom" ? "Delete Room" : "Delete Snapshot");
+        if (args[1]?.modal) return Promise.resolve(action === "deleteRoom" ? "Delete Room" : "Delete Recovery Point");
         shown = true;
         return notification;
       };
@@ -3762,12 +3762,11 @@ test("Cloudflare authorization refreshes the hierarchy and loads Rooms and JATs"
     dismissSuccess?.();
     await connecting;
   }
-  const connection = provider.roots[0].children[0];
-
-  assert.equal(connection.label, "Provider Connection");
-  assert.equal(provider.getTreeItem(connection).command, undefined);
-  assert.equal(connection.children[0].label, "Default");
-  assert.equal(connection.children[0].children[0].label, "Room A");
+  const storage = provider.roots[0];
+  assert.equal(storage.label, "Default");
+  assert.equal(storage.description, "R2");
+  assert.equal(provider.getTreeItem(storage).command, undefined);
+  assert.equal(storage.children[0].label, "Room A");
   assert.equal(openExternalCalls[0].value, "https://dash.cloudflare.example/oauth-2");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
@@ -3959,11 +3958,11 @@ test("registered prepare action starts once, reports sanitized runtime progress 
   release();
   await Promise.all([first, second]);
   assert.equal(spawnHarness.calls.length, 1);
-  assert.equal(provider.getChildren()[0].id, "minio");
+  assert.equal(provider.getChildren()[0].id, "minio-bucket");
   assert.equal(provider.state, "ready");
   await commandCallbacks.get("joshRoom.refresh")();
   assert.equal(spawnHarness.calls.length, 2);
-  const room = provider.getChildren()[0].children[0].children[0].children[0];
+  const room = provider.getChildren()[0].children[0];
   assert.equal(room.id, "new-room");
   assert.equal(room.children[0].id, "new-jat");
   await commandCallbacks.get("joshRoom.prepare")();
@@ -3992,19 +3991,19 @@ test("runtime failure and cancellation expose real retry actions without startin
   assert.equal(typeof prepare, "function");
   assert.equal(await prepare(), "failed");
   const provider = treeViewCalls[0].options.treeDataProvider;
-  assert.match(provider.getChildren()[0].label, /unavailable.*Retry/);
-  assert.equal(provider.getTreeItem(provider.getChildren()[0]).command.command, "joshRoom.prepare");
+  assert.deepEqual(provider.getChildren(), []);
+  assert.equal(provider.viewState, "failed");
   const cancelled = prepare();
   await new Promise((resolve) => setImmediate(resolve));
   progressCalls.at(-1).token.cancel();
   assert.equal(await cancelled, "cancelled");
   assert.equal(cancelObserved, true);
-  assert.match(provider.getChildren()[0].label, /cancelled.*Retry/i);
-  assert.notEqual(provider.getTreeItem(provider.getChildren()[0]).iconPath.id, "sync~spin");
+  assert.deepEqual(provider.getChildren(), []);
+  assert.equal(provider.viewState, "cancelled");
   assert.equal(spawnHarness.calls.length, 0);
   assert.equal(extras.errorCalls.length, 1);
   await prepare();
-  assert.equal(provider.getChildren()[0].id, "minio");
+  assert.equal(provider.getChildren()[0].id, "bucket");
 });
 
 test("cancelling one runtime consumer preserves preparation needed by another", async (t) => {
@@ -4511,8 +4510,7 @@ for (const action of ["add", "edit", "reconnect"]) {
     quickPickResponses.push({ provider: "minio" }, { bucket: "rooms" });
     await commandCallbacks.get(action === "add" ? "joshRoom.addStorage" : action === "edit" ? "joshRoom.editConnection" : "joshRoom.reconnectStorage")(connection);
     assert.equal(reloads, 1);
-    assert.deepEqual(provider.getChildren().map((node) => node.id), ["minio"]);
-    assert.equal(provider.getChildren()[0].children[0].children[0].id, "minio-synthetic-connection-rooms");
+    assert.deepEqual(provider.getChildren().map(node => node.id), ["minio-synthetic-connection-rooms"]);
   });
 }
 
@@ -4691,7 +4689,7 @@ test("native storage commands are understandable, distinct, and omit Use Dimensi
   const byId = new Map(commands.map((command) => [command.command, command]));
   assert.equal(byId.has("joshRoom.addDimension"), false);
   assert.equal(byId.has("joshRoom.openDimension"), false);
-  assert.equal(byId.get("joshRoom.addStorage").title, "Josh: Connect Storage");
+  assert.equal(byId.get("joshRoom.addStorage").title, "Connect Storage…");
   assert.equal(byId.get("joshRoom.addStorage").icon, "$(cloud)");
   assert.equal(byId.get("joshRoom.save").icon, "$(save-as)");
   assert.equal(byId.get("joshRoom.refresh").icon, "$(refresh)");
@@ -4879,7 +4877,7 @@ test("cancelling Cloudflare OAuth stops its child and a later Connect starts cle
   ), "connected");
   assert.equal(authStarts, 2);
   assert.equal(authPolls, 2);
-  assert.equal(relaunchedProvider.roots[0].children[0].children[0].children[0].label, "Room A");
+  assert.equal(relaunchedProvider.roots[0].children[0].label, "Room A");
   assert.equal(spawnHarness.calls.filter((entry) => entry.args[0] === "dimensions").length > 0, true);
 });
 
@@ -5214,11 +5212,12 @@ test("native logical JAT and Dimension lifecycle commands are contributed and re
     for (const id of ROOM_STORE_UI_COMMAND_IDS) assert.ok(commands.includes(id), id);
     const contexts = manifest.contributes.menus["view/item/context"];
     assert.ok(contexts.some((item) => item.command === "joshRoom.inspectLogicalSnapshot" && item.when.includes("logical-jat")));
-    assert.ok(contexts.some((item) => item.command === "joshRoom.exportPortableJat" && item.when.includes("logical-jat")));
-    assert.ok(contexts.some((item) => item.command === "joshRoom.extractLogicalSnapshot" && item.when.includes("logical-jat")));
-    assert.ok(contexts.some((item) => item.command === "joshRoom.verifyRoomStore" && item.when.includes("dimension")));
-    assert.ok(contexts.some((item) => item.command === "joshRoom.optimizeRoomStore" && item.when.includes("dimension")));
-    assert.ok(contexts.some((item) => item.command === "joshRoom.reconcileRoomStore" && item.when.includes("dimension")));
+    assert.ok(contexts.some(item => item.submenu === "joshRoom.export" && item.when.includes("logical-jat")));
+    assert.deepEqual(manifest.contributes.menus["joshRoom.export"].map(item => item.command),
+      ["joshRoom.exportPortableJat", "joshRoom.extractLogicalSnapshot", "joshRoom.serveLogicalSnapshot"]);
+    assert.ok(contexts.some(item => item.submenu === "joshRoom.maintenance" && item.when.includes("dimension")));
+    assert.deepEqual(manifest.contributes.menus["joshRoom.maintenance"].map(item => item.command),
+      ["joshRoom.verifyRoomStore", "joshRoom.optimizeRoomStore", "joshRoom.reconcileRoomStore"]);
   }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-lifecycle-command-registration-"));
   const { vscode, statusItem, commandCallbacks } = createVscodeMock(root);
@@ -5412,7 +5411,7 @@ test("registered JAT commands wrap controller failures into the error message UX
 
   assert.equal(await commandCallbacks.get("joshRoom.jatInspect")(), "failed");
   assert.deepEqual(spawnHarness.calls[0].args.slice(0, 4), ["jat", "inspect", "--haul", path.join(root, "capsule.haul.tar.zst")]);
-  assert.deepEqual(extras.errorCalls, [["boom", "Show Output Log"]]);
+  assert.deepEqual(extras.errorCalls, [["boom", "Show Logs"]]);
 });
 
 test("Pack Folder into JAT forwards every advanced capture input to the build controller", async () => {
@@ -7048,7 +7047,7 @@ test("current Room and recovery points expose current, latest and open state", (
   assert.match(open.description, /Open/);
   assert.match(newest.label, /2026/);
   assert.match(open.tooltip, /old/);
-  assert.match(open.tooltip, /Open · Portable/);
+  assert.match(open.tooltip, /Portable/);
   assert.match(roomItem.tooltip, /Current · Status unknown/);
   assert.match(roomItem.accessibilityInformation.label, /Demo Room · Current · Status unknown/);
 });
@@ -7076,7 +7075,7 @@ test("recovery tree identities distinguish Rooms sharing a snapshot ID and retai
       assert.match(point.tooltip, /Same Room name/);
       assert.ok(point.tooltip.includes(rooms[index].id));
       assert.match(point.tooltip, /shared-snapshot/);
-      assert.match(point.accessibilityInformation.label, /Latest · Portable/);
+      assert.match(point.accessibilityInformation.label, /Latest/);
       assert.equal(point.command.arguments[0], rooms[index].children[0]);
     }
   } finally {
@@ -7087,11 +7086,11 @@ test("recovery tree identities distinguish Rooms sharing a snapshot ID and retai
 test("Room actions keep Save and Enter inline and recovery actions contextual", () => {
   const manifest = require("./package.json");
   const menus = manifest.contributes.menus["view/item/context"];
-  assert.ok(menus.some((item) => item.command === "joshRoom.save" && item.when.includes("current-room") && item.group.startsWith("inline")));
+  assert.ok(menus.some((item) => item.command === "joshRoom.save" && item.when.includes("open-(room|catalog)-workspace") && item.group.startsWith("inline")));
   for (const command of ["joshRoom.link", "joshRoom.repair", "joshRoom.serve"]) {
     assert.ok(menus.filter((item) => item.command === command && item.when.includes("viewItem == room")).every((item) => !item.group.startsWith("inline")), command);
   }
-  assert.ok(menus.some((item) => item.command === "joshRoom.remove" && item.when.includes("viewItem == room") && item.group.startsWith("inline")));
+  assert.ok(!menus.some(item => /joshRoom\.(remove|delete)/.test(item.command || "") && item.group.startsWith("inline")));
   assert.ok(manifest.contributes.commands.some((item) => item.command === "joshRoom.saveFolderAs"));
 });
 
@@ -7346,8 +7345,8 @@ test("Room and Logical JAT serve commands expose honest content/fileserver label
   for (const manifestPath of ["vscode-extension/package.json", "templates/room/vscode-extension/package.json"]) {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifestPath), "utf8"));
     const commandsById = new Map(manifest.contributes.commands.map((cmd) => [cmd.command, cmd]));
-    assert.equal(commandsById.get("joshRoom.serve")?.title, "Josh: Serve Room Content\u2026");
-    assert.equal(commandsById.get("joshRoom.serveLogicalSnapshot")?.title, "Josh: Serve this Logical JAT\u2026");
+    assert.equal(commandsById.get("joshRoom.serve")?.title, "Serve Room Content…");
+    assert.equal(commandsById.get("joshRoom.serveLogicalSnapshot")?.title, "Serve Recovery Point…");
     assert.ok(manifest.activationEvents.includes("onCommand:joshRoom.serveLogicalSnapshot"));
     assert.equal(
       manifest.contributes.commands.some((cmd) => /Serve Room Images/i.test(cmd.title)),
@@ -7356,7 +7355,8 @@ test("Room and Logical JAT serve commands expose honest content/fileserver label
     );
     const contexts = manifest.contributes.menus["view/item/context"];
     assert.ok(contexts.some((item) => item.command === "joshRoom.serve" && item.when.includes("viewItem == room")));
-    assert.ok(contexts.some((item) => item.command === "joshRoom.serveLogicalSnapshot" && item.when.includes("viewItem == logical-jat")));
+    assert.ok(contexts.some(item => item.submenu === "joshRoom.export" && item.when.includes("logical-jat")));
+    assert.ok(manifest.contributes.menus["joshRoom.export"].some(item => item.command === "joshRoom.serveLogicalSnapshot"));
   }
 });
 
@@ -7722,7 +7722,8 @@ test("agent recovery commands are registered lazily on logical JAT rows", () => 
     assert.equal(typeof mock.commandCallbacks.get(id), "function");
     assert.ok(extensionPackageJson.activationEvents.includes(`onCommand:${id}`));
     assert.ok(extensionPackageJson.contributes.menus["view/item/context"]
-      .some((entry) => entry.command === id && entry.when === "view == joshRoom.rooms && viewItem == logical-jat"));
+      .some(entry => entry.submenu === "joshRoom.agentHistory" && entry.when.includes("logical-jat")));
+    assert.ok(extensionPackageJson.contributes.menus["joshRoom.agentHistory"].some(entry => entry.command === id));
   }
 });
 
@@ -8293,7 +8294,7 @@ for (const [command, provider, readiness, expected] of [
     secrets: { get: async key => provider === "minio" && key.startsWith("josh-room.encryption.v1:")
       ? JSON.stringify({ identity: "synthetic-identity" }) : undefined } });
   vscode.window.showInputBox = options => {
-    assert.equal(options.title, "Name the Catalog Room");
+    assert.equal(options.title, "Name the Catalog");
     return "Synthetic Projects";
   };
   if (command === "joshRoom.new") fixture.quickPickResponses.push({ id: "catalog" });
@@ -8458,16 +8459,12 @@ test("opening an exact Catalog parent only offers restoration once and makes no 
   fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "a" }, { path: "b" }] }));
   const provider = new extension.__test__.HierarchyRoomsProvider();
   const [current] = provider.getChildren();
-  assert.equal(current.label, "Open Workspace");
-  assert.match(current.description, /Synthetic Catalog/);
-  assert.match(current.description, /0 of 2 restored/);
-  const rows = provider.getChildren(current);
-  assert.deepEqual(rows.map(row => row.label), ["Save Catalog", "Restore missing children…", "Child Rooms"]);
+  assert.equal(current.label, "Synthetic Catalog");
+  assert.equal(current.description, "Checking…");
+  const children = provider.getChildren(current);
+  assert.deepEqual(children.map(row => row.label), ["a", "b"]);
   assert.equal(provider.getTreeItem(current).contextValue, "open-catalog-workspace");
-  assert.equal(provider.getTreeItem(rows[2]).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
-  assert.equal(rows[0].command.command, "joshRoom.save");
-  assert.equal(rows[1].command.command, "joshRoom.restoreCatalogChildren");
-  const children = provider.getChildren(rows[2]);
+  assert.equal(provider.getTreeItem(current).collapsibleState, vscode.TreeItemCollapsibleState.Expanded);
   assert.deepEqual(children.find(row => row.label === "a").command.arguments, ["a"]);
   assert.equal(children.find(row => row.label === "b").description, "Folder occupied");
   assert.equal(children.find(row => row.label === "b").command, undefined);
@@ -8501,13 +8498,13 @@ test("Rooms shows workspace actions for the current binding and saved tools on t
   };
   await assertWorkspace("folder", []);
   fs.writeFileSync(markerFile, JSON.stringify(marker));
-  await assertWorkspace("room", ["Save Room"]);
+  await assertWorkspace("room", []);
   fs.writeFileSync(markerFile, JSON.stringify({ ...marker, format_version: 4, composition_namespace: "1".repeat(32) }));
   fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "missing" }] }));
-  await assertWorkspace("catalog", ["Save Catalog", "Restore missing children…", "Child Rooms"]);
+  await assertWorkspace("catalog", ["missing"]);
   fs.rmSync(path.join(root, ".josh-room-composition.json"));
   fs.writeFileSync(path.join(root, ".josh-room-split.json"), "{}");
-  await assertWorkspace("child", ["Save Child Room"]);
+  await assertWorkspace("child", []);
   const title = require("./package.json").contributes.menus["view/title"];
   assert.ok(!title.some(item => ["joshRoom.save", "joshRoom.saveCatalog", "joshRoom.restoreCatalog"].includes(item.command)));
 });
@@ -8542,8 +8539,7 @@ test("Rooms marks edits on the Catalog root or the exact restored child row", as
   const provider = new extension.__test__.HierarchyRoomsProvider();
   extension.__test__.setRoomsProvider(provider);
   const item = () => provider.getTreeItem(provider.getChildren()[0]);
-  const childItem = () => provider.getTreeItem(provider.getChildren()[0].children
-    .find(row => row.kind === "workspace-children").children[0]);
+  const childItem = () => provider.getTreeItem(provider.getChildren()[0].children.find(row => row.kind === "workspace-child"));
   const uri = name => ({ scheme: "file", fsPath: path.join(root, name) });
   created({ files: [uri("ignored.txt"), uri("child/.josh-room.json")] });
   assert.doesNotMatch(childItem().description, /Changes to save/);
@@ -8630,18 +8626,18 @@ test("Delete Catalog confirms a whole Catalog once and updates the sidebar witho
   await provider.setCatalog({ dimensions: [{ ...dimension, catalogs: [catalog, other] }] });
   provider.reload = () => assert.fail("verified Catalog deletion must update the cached sidebar");
   extension.__test__.setRoomsProvider(provider);
-  const parentRows = () => provider.roots[0].children[0].children[0].children;
+  const parentRows = () => provider.roots[0].children;
   let confirmations = 0;
   vscode.window.showWarningMessage = async (message, options, action) => {
     confirmations += 1;
     assert.equal(message, "Delete Catalog “Synthetic Catalog”?");
-    assert.match(options.detail, /3 recovery points and 2 child Rooms/);
+    assert.match(options.detail, /3 Recovery Points and 2 Child Rooms/);
     return confirmations === 2 ? action : undefined;
   };
   const remove = fixture.commandCallbacks.get("joshRoom.manageCatalogDeletion");
-  assert.equal(await remove(parentRows()[0]), "cancelled");
+  assert.equal(await remove(parentRows().find(row => row.label === "Synthetic Catalog")), "cancelled");
   assert.equal(parentRows().length, 2);
-  assert.equal((await remove(parentRows()[0])).status, "retired");
+  assert.equal((await remove(parentRows().find(row => row.label === "Synthetic Catalog"))).status, "retired");
   assert.equal(confirmations, 2);
   assert.deepEqual(operations, ["retirement-batch-preview", "retirement-batch-preview", "retire-batch"]);
   assert.deepEqual(parentRows().map(row => row.label), ["Other Catalog"]);

@@ -13,8 +13,16 @@ function notifyError(vscode, action, safeNextStep, options = {}) {
   return vscode.window.showErrorMessage(message, ...actions);
 }
 
-function confirmDestructive(vscode, verb, subject) {
-  return vscode.window.showWarningMessage(`${verb} ${subject}?`, { modal: true }, verb);
+function requestDecision(vscode, message, ...actions) {
+  return vscode.window.showInformationMessage(message, ...actions);
 }
 
-module.exports = { notifyDone, notifyError, confirmDestructive };
+function notifyFailure(vscode, message, { retry = false, logs = false } = {}) {
+  return vscode.window.showErrorMessage(message, ...(retry ? ["Retry"] : []), ...(logs ? ["Show Logs"] : []));
+}
+
+function confirmDestructive(vscode, verb, subject, detail) {
+  return vscode.window.showWarningMessage(`${verb} ${subject}?`, { modal: true, ...(detail ? { detail } : {}) }, verb);
+}
+
+module.exports = { notifyDone, notifyError, notifyFailure, requestDecision, confirmDestructive };
