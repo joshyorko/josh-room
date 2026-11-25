@@ -3,12 +3,8 @@
 const BACK = Symbol("back");
 const CANCEL = Symbol("cancel");
 
-function stepTitle({ title, step, totalSteps }) {
-  return `${title} (${step}/${totalSteps})`;
-}
-
 function setup(vscode, input, options, value) {
-  input.title = stepTitle(options);
+  input.title = options.title;
   input.step = options.step;
   input.totalSteps = options.totalSteps;
   input.ignoreFocusOut = true;

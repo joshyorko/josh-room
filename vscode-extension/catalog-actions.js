@@ -75,7 +75,7 @@ function reviewCatalog(vscode, name, destination, children, preservation) {
     alwaysShow: true,
   };
   const picker = vscode.window.createQuickPick();
-  picker.title = `Review Catalog (4/4) · ${name} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
+  picker.title = `Review Catalog · ${name} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
   picker.step = 4;
   picker.totalSteps = 4;
   if (vscode.QuickInputButtons?.Back) picker.buttons = [vscode.QuickInputButtons.Back];
