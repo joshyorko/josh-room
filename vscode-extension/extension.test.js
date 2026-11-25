@@ -8663,8 +8663,8 @@ test("retiring one parent reloads shared Child Room pins and fences child deleti
       { snapshot_id: "jat-second", child_count: 1, children: ["child"], created_at: "2026-01-02T00:00:00Z" },
     ] };
   const data = catalogs => ({ dimensions: [{ ...dimension, catalogs }] });
-  const childPoint = () => provider.roots[0].children[0].children[0].children
-    .find(row => row.kind === "catalog-parent").children.find(row => row.kind === "catalog-child-history").children[0].children[0];
+  const childPoint = () => provider.roots[0].children
+    .find(row => row.kind === "catalog-parent").children.find(row => row.kind === "catalog-child-room").children[0];
   await provider.setCatalog(data([catalog]));
   let calls = 0;
   provider.reload = async () => {

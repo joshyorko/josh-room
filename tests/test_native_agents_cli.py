@@ -73,7 +73,11 @@ def test_extension_status_is_native_registered_and_packaged():
     package = json.loads((root / "vscode-extension/package.json").read_text())
     command = "joshRoom.agentSessionsStatus"
     assert f"onCommand:{command}" in package["activationEvents"]
-    assert any(item["command"] == command for item in package["contributes"]["menus"]["view/item/context"])
+    menus = package["contributes"]["menus"]
+    contexts = menus["view/item/context"]
+    submenu = next((item["submenu"] for item in contexts if item.get("submenu") == "joshRoom.agentHistory"), None)
+    rows = contexts if submenu is None else menus[submenu]
+    assert any(item.get("command") == command for item in rows)
     for name in ("extension.js", "package.json"):
         assert (root / "vscode-extension" / name).read_bytes() == (root / "templates/room/vscode-extension" / name).read_bytes()
 
