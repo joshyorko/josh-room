@@ -2452,6 +2452,10 @@ function enterCatalogChildAt(root, marker, dimension, childPath, multiple = fals
     enter: ({ namespace, child }) => runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
       "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
     dimension, { title: "Entering pinned child Room…", action: "enter a child Room" }),
+    enterBatch: children => runSelectedEncryption(["composition", "enter-children", "--workspace", root, "--dimension", marker.dimension_id,
+      "--namespace", marker.composition_namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id,
+      ...children.map(child => `--child-path=${child}`)], root, dimension,
+    { title: `Restoring ${children.length} child Rooms…`, action: "restore selected child Rooms" }),
     open: (target) => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(target), false),
   }).finally(() => roomsProvider?.emitter?.fire(undefined));
 }

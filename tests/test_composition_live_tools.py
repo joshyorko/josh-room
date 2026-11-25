@@ -331,6 +331,25 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     assert not (target / "b").exists()
     assert not (target / "local").exists()
 
+    args = (r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
+            target, r.authority, r.factory, r.private)
+    with pytest.raises(ValueError, match="not in the selected authority"):
+        hydrate_composition(*args, child_paths=["b", "absent"])
+    assert not (target / "b").exists()
+    (target / "b").mkdir()
+    (target / "b/user.txt").write_text("keep this")
+    partial = hydrate_composition(*args, child_paths=["a", "b"])
+    assert partial["status"] == "partial"
+    assert partial["failed_index"] == 1
+    assert partial["restored"] == [{**child, "status": "loaded"}]
+    assert (target / "b/user.txt").read_text() == "keep this"
+    (target / "b/user.txt").unlink()
+    (target / "b").rmdir()
+    batch = hydrate_composition(*args, child_paths=["a", "b"])
+    assert batch["status"] == "hydrated"
+    assert [row["status"] for row in batch["restored"]] == ["loaded", "hydrated"]
+    assert (target / "b").is_dir()
+
     from josh_room.composition_retirement import preview_retirement, retire
 
     backend = SimpleNamespace(client=r.transport)

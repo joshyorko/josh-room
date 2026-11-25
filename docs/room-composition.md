@@ -133,7 +133,9 @@ Catalog parents appear by name and save date. Select a folder under
 folder to see its own recovery points. If the exact parent is not open,
 choose a new folder to restore that parent first. To restore several
 children, use **Restore Catalog Child Rooms…** from the recovery point's
-context menu, check the folders you want, or use **Select All**. Open a dated
+context menu, check the folders you want, or use **Select All**. One restore
+job checks the parent and restores the selected children in order. If a child
+cannot be restored, the job stops and reports how many completed. Open a dated
 point to choose one child, several children, or just the parent before choosing
 the destination. **Open Workspace** at the top of **Rooms** shows the open
 Catalog, child folder status and actions to restore missing children or refresh

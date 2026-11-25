@@ -16,9 +16,12 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from .catalog import Catalog, corroborate_logical_snapshot
 from .composition import (
     MANIFEST,
+    MAX_CHILDREN,
     parse_manifest,
     portable_path,
     require_uncomposed_workspace,
@@ -43,6 +46,7 @@ from .composition_transaction import (
     reserve,
 )
 from .logical_jat import LogicalJat
+from .progress import report_progress
 from .room_store_operations import (
     RoomStoreOperations,
     _scan_workspace,
@@ -1429,6 +1433,102 @@ def _restore(
     return result
 
 
+def _hydrate_pinned_child(dimension, namespace, root, authority, store, repository,
+                          private, catalog, state, child, pin, parent_current):
+    policy = load_capture_policy(root)
+    if not policy.is_excluded(child["path"]):
+        raise ValueError("child payload is not excluded from parent capture")
+    target = root / child["path"]
+    fd = _directory(target.parent)
+    os.close(fd)
+    if target.is_symlink():
+        raise ValueError(
+            "child destination must be absent or an exact clean materialization"
+        )
+    record = catalog.resolve_snapshot(child["room_id"], child["snapshot_id"])
+    if record["ciphertext_sha256"] != pin["descriptor_sha256"]:
+        raise ValueError("child descriptor differs from historical pin")
+    descriptor = authority.descriptor(record)
+    corroborate_logical_snapshot(child["room_id"], record, descriptor)
+    _verify_descriptor_contract(state, descriptor)
+    if target.exists():
+        existing = context_status(target)
+        guard_fd = _directory(target)
+        try:
+            guard = os.open(
+                ".josh-room-split.json",
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=guard_fd,
+            )
+            try:
+                if not stat.S_ISREG(os.fstat(guard).st_mode):
+                    raise ValueError("child namespace guard is invalid")
+                guard_bytes = os.read(guard, 1025)
+            finally:
+                os.close(guard)
+        finally:
+            os.close(guard_fd)
+        expected_guard = canonical(
+            {
+                "namespace": namespace,
+                "room_id": child["room_id"],
+                "snapshot_id": child["snapshot_id"],
+            }
+        )
+        if (
+            guard_bytes != expected_guard
+            or existing.get("composition_namespace") != namespace
+        ):
+            raise ValueError(
+                "child namespace guard or marker differs; no ordinary Save is permitted"
+            )
+        scan = scan_workspace_for_status(target)
+        if (
+            not existing["ok"]
+            or existing.get("project_id") != child["room_id"]
+            or existing.get("snapshot_id") != child["snapshot_id"]
+            or existing.get("dimension_id") != dimension.dimension_id
+            or existing.get("encryption_domain_id")
+            != authority.binding["encryption_domain_id"]
+            or existing.get("workspace_signature") != scan.signature
+            or scan.capture_policy_sha256 != descriptor.to_dict()["capture_policy_sha256"]
+            or existing.get("capture_policy_sha256")
+            != scan.capture_policy_sha256
+        ):
+            raise ValueError(
+                "child destination has local changes or a different marker; no clobber or unload"
+            )
+        return {
+            "ok": True,
+            "status": "loaded",
+            "namespace": namespace,
+            "room_id": child["room_id"],
+            "snapshot_id": child["snapshot_id"],
+            "marker_verified": True,
+            "unit": "whole-child",
+        }
+    result = _restore(
+        store,
+        repository,
+        descriptor,
+        target,
+        private,
+        dimension,
+        "Child Room",
+        parent_current,
+        namespace,
+    )
+    return {
+        "ok": True,
+        "status": "hydrated",
+        "namespace": namespace,
+        "room_id": result["project_id"],
+        "snapshot_id": result["snapshot_id"],
+        "marker_verified": True,
+        "unit": "whole-child",
+    }
+
+
 def hydrate_composition(
     dimension,
     namespace,
@@ -1440,7 +1540,13 @@ def hydrate_composition(
     private,
     *,
     child_path=None,
+    child_paths=None,
 ):
+    batch = child_paths is not None
+    if batch and (child_path is not None or not 1 <= len(child_paths) <= MAX_CHILDREN):
+        raise ValueError("select between 1 and 32 child Rooms in a batch")
+    paths = child_paths if batch else [] if child_path is None else [child_path]
+    validate_paths(paths)
     if not sys.platform.startswith("linux"):
         raise ValueError("catalog entry is not yet qualified on this platform")
     if namespace != authority.namespace:
@@ -1478,7 +1584,7 @@ def hydrate_composition(
         repository = store.open_existing()
         if repository.repository_id != envelope["repository_id"]:
             raise ValueError("composition repository differs")
-        if child_path is None:
+        if not paths:
             result = _restore(
                 store,
                 repository,
@@ -1490,7 +1596,6 @@ def hydrate_composition(
                 namespace=namespace,
             )
         else:
-            portable_path(child_path)
             root = Path(os.path.abspath(destination))
             fd = _directory(root)
             os.close(fd)
@@ -1541,104 +1646,43 @@ def hydrate_composition(
             if local.is_symlink() or local.read_bytes() != raw:
                 raise ValueError("local parent manifest differs from saved parent")
             manifest = parse_manifest(raw)
-            child = next(
-                (row for row in manifest["children"] if row["path"] == child_path), None
-            )
-            if child is None or any(
-                child[k] != authority.binding[k]
-                for k in ("provider", "connection_id", "dimension_id")
-            ):
-                raise ValueError("child is not in the selected authority")
-            pin = operation["child_pins"].get(child_path)
-            if (
-                pin is None
-                or pin["room_id"] != child["room_id"]
-                or pin["logical_jat_id"] != child["snapshot_id"]
-            ):
-                raise ValueError("child pin differs from committed operation")
-            policy = load_capture_policy(root)
-            if not policy.is_excluded(child_path):
-                raise ValueError("child payload is not excluded from parent capture")
-            target = root / child_path
-            fd = _directory(target.parent)
-            os.close(fd)
-            if target.is_symlink():
-                raise ValueError(
-                    "child destination must be absent or an exact clean materialization"
-                )
-            record = catalog.resolve_snapshot(child["room_id"], child["snapshot_id"])
-            if record["ciphertext_sha256"] != pin["descriptor_sha256"]:
-                raise ValueError("child descriptor differs from historical pin")
-            descriptor = authority.descriptor(record)
-            corroborate_logical_snapshot(child["room_id"], record, descriptor)
-            _verify_descriptor_contract(state, descriptor)
-            if target.exists():
-                existing = context_status(target)
-                guard_fd = _directory(target)
+            manifest_by_path = {row["path"]: row for row in manifest["children"]}
+            selected = []
+            for path in paths:
+                child = manifest_by_path.get(path)
+                if child is None or any(
+                    child[k] != authority.binding[k]
+                    for k in ("provider", "connection_id", "dimension_id")
+                ):
+                    raise ValueError("child is not in the selected authority")
+                pin = operation["child_pins"].get(path)
+                if (
+                    pin is None
+                    or pin["room_id"] != child["room_id"]
+                    or pin["logical_jat_id"] != child["snapshot_id"]
+                ):
+                    raise ValueError("child pin differs from committed operation")
+                require_active(envelope, child["room_id"], child["snapshot_id"])
+                selected.append((child, pin))
+            restored = []
+            for index, (child, pin) in enumerate(selected):
+                if batch:
+                    report_progress("catalog-restore", f"Restoring child Room {index + 1} of {len(selected)}",
+                                    current=index, total=len(selected))
                 try:
-                    guard = os.open(
-                        ".josh-room-split.json",
-                        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                        dir_fd=guard_fd,
-                    )
-                    try:
-                        if not stat.S_ISREG(os.fstat(guard).st_mode):
-                            raise ValueError("child namespace guard is invalid")
-                        guard_bytes = os.read(guard, 1025)
-                    finally:
-                        os.close(guard)
-                finally:
-                    os.close(guard_fd)
-                expected_guard = canonical(
-                    {
-                        "namespace": namespace,
-                        "room_id": child["room_id"],
-                        "snapshot_id": child["snapshot_id"],
-                    }
-                )
-                if (
-                    guard_bytes != expected_guard
-                    or existing.get("composition_namespace") != namespace
-                ):
-                    raise ValueError(
-                        "child namespace guard or marker differs; no ordinary Save is permitted"
-                    )
-                scan = scan_workspace_for_status(target)
-                if (
-                    not existing["ok"]
-                    or existing.get("project_id") != child["room_id"]
-                    or existing.get("snapshot_id") != child["snapshot_id"]
-                    or existing.get("dimension_id") != dimension.dimension_id
-                    or existing.get("encryption_domain_id")
-                    != authority.binding["encryption_domain_id"]
-                    or existing.get("workspace_signature") != scan.signature
-                    or scan.capture_policy_sha256 != descriptor.to_dict()["capture_policy_sha256"]
-                    or existing.get("capture_policy_sha256")
-                    != scan.capture_policy_sha256
-                ):
-                    raise ValueError(
-                        "child destination has local changes or a different marker; no clobber or unload"
-                    )
-                return {
-                    "ok": True,
-                    "status": "loaded",
-                    "namespace": namespace,
-                    "room_id": child["room_id"],
-                    "snapshot_id": child["snapshot_id"],
-                    "marker_verified": True,
-                    "unit": "whole-child",
-                }
-            result = _restore(
-                store,
-                repository,
-                descriptor,
-                target,
-                private,
-                dimension,
-                "Child Room",
-                parent_current,
-                namespace,
-            )
+                    loaded = _hydrate_pinned_child(dimension, namespace, root, authority, store, repository,
+                                                  private, catalog, state, child, pin, parent_current)
+                except (BotoCoreError, ClientError, OSError, RuntimeError, ValueError):
+                    if not batch:
+                        raise
+                    return {"ok": True, "status": "partial", "namespace": namespace,
+                            "parent_snapshot_id": snapshot, "restored": restored, "failed_index": index}
+                if not batch:
+                    return loaded
+                restored.append(loaded)
+            report_progress("catalog-restore", "Child Rooms restored", current=len(selected), total=len(selected))
+            return {"ok": True, "status": "hydrated", "namespace": namespace,
+                    "parent_snapshot_id": snapshot, "restored": restored}
         return {
             "ok": True,
             "status": "hydrated",
@@ -1646,5 +1690,5 @@ def hydrate_composition(
             "room_id": result["project_id"],
             "snapshot_id": result["snapshot_id"],
             "marker_verified": True,
-            "unit": "whole-child" if child_path else "parent",
+            "unit": "parent",
         }

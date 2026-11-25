@@ -407,14 +407,18 @@ test("Catalog hydration restores only the explicitly checked children at their p
   const marker = { composition_namespace: "1".repeat(32), dimension_id: "synthetic",
     project_id: "parent", snapshot_id: "jat-parent" };
   const children = ["a", "b", "c"].map(path => ({ path, room_id: path, snapshot_id: `jat-${path}` }));
-  const entered = [];
+  const batches = [];
   const callbacks = { root: "/synthetic/root", marker,
     listChildren: async () => ({ ok: true, namespace: marker.composition_namespace, revision: 1,
       parent_room_id: "parent", parent_snapshot_id: "jat-parent", children, next_offset: null }),
     enter: async ({ child }) => {
-      entered.push(child);
       return { ok: true, marker_verified: true, namespace: marker.composition_namespace,
         room_id: child, snapshot_id: `jat-${child}` };
+    },
+    enterBatch: async paths => {
+      batches.push(paths);
+      return { ok: true, status: "hydrated", namespace: marker.composition_namespace, parent_snapshot_id: marker.snapshot_id,
+        restored: await Promise.all(paths.map(child => callbacks.enter({ child }))) };
     },
   };
   const vscode = { window: {
@@ -426,20 +430,25 @@ test("Catalog hydration restores only the explicitly checked children at their p
     showInformationMessage: async () => {},
   } };
   const result = await hydrateChildren(vscode, callbacks);
-  assert.deepEqual(entered, ["a", "c"]);
+  assert.deepEqual(batches, [["a", "c"]]);
   assert.deepEqual(result.restored.map(row => row.snapshot_id), ["jat-a", "jat-c"]);
   vscode.window.showQuickPick = async rows => rows;
   const all = await hydrateChildren(vscode, callbacks);
   assert.deepEqual(all.restored.map(row => row.snapshot_id), ["jat-a", "jat-b", "jat-c"]);
+  assert.deepEqual(batches, [["a", "c"], ["a", "b", "c"]]);
+  await assert.rejects(hydrateChildren(vscode, { ...callbacks, childPaths: ["a", "c"], enterBatch: async () => ({
+    ok: true, status: "partial", namespace: marker.composition_namespace, parent_snapshot_id: marker.snapshot_id,
+    restored: [await callbacks.enter({ child: "a" })], failed_index: 1,
+  }) }), /Restored 1 of 2 child Rooms.*stopped at c/);
   vscode.window.showQuickPick = async () => undefined;
-  assert.equal(await hydrateChildren(vscode, { ...callbacks, enter: assert.fail }), "cancelled");
+  assert.equal(await hydrateChildren(vscode, { ...callbacks, enterBatch: assert.fail }), "cancelled");
   const localState = row => row.path === "a" ? "restored" : row.path === "b" ? "occupied" : "missing";
   vscode.window.showQuickPick = async rows => {
     assert.deepEqual(rows.map(row => row.label), ["c"]);
     return rows;
   };
   assert.equal((await hydrateChildren(vscode, { ...callbacks, localState })).restored[0].snapshot_id, "jat-c");
-  await assert.rejects(hydrateChildren(vscode, { ...callbacks, localState, childPaths: ["c", "b"], enter: assert.fail }),
+  await assert.rejects(hydrateChildren(vscode, { ...callbacks, localState, childPaths: ["c", "b"], enterBatch: assert.fail }),
     /selected child is unavailable/);
   let opened;
   assert.equal(await enterChild(vscode, { ...callbacks, childPath: "a", localState, enter: assert.fail,

@@ -7,12 +7,14 @@ import os
 import stat
 from pathlib import Path
 
+from .composition import MANIFEST, SPLIT_GUARD
 from .workspace_policy import (
     _IGNORE_LIMIT,
     _read_ignore,
     _user_patterns,
     load_capture_policy,
 )
+from .workspace_state import MARKER_NAME
 
 STARTER = b"""# Josh Room exclusions: excluded files stay local but are not backed up.
 # Built-in defaults already exclude common environments and caches.
@@ -31,9 +33,50 @@ def initialize_workspace(workspace: Path, *, editor: str = "vscode", files=None)
     selected = tuple(EDITOR_FILES if files is None else files)
     if editor not in {"vscode", "none"} or not set(selected) <= set(EDITOR_FILES):
         raise ValueError("unsupported onboarding editor or file selection")
-    result = initialize_capture_policy(workspace)
-    result["onboarding"] = initialize_onboarding(Path(workspace).resolve(strict=True), editor, selected)
+    root = Path(workspace).resolve(strict=True)
+    result = initialize_capture_policy(root)
+    _ignore_room_markers(root)
+    result["onboarding"] = initialize_onboarding(root, editor, selected)
     return result
+
+
+def _ignore_room_markers(root: Path) -> None:
+    path = root / ".gitignore"
+    try:
+        expected = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(expected.st_mode) or expected.st_nlink != 1:
+        return
+    descriptor = os.open(path, os.O_RDWR | os.O_APPEND
+                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "r+b", buffering=0) as stream:
+        opened = os.fstat(stream.fileno())
+        if ((opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
+                or not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1):
+            raise ValueError(".gitignore changed during Room initialization")
+        before = stream.read()
+        lines = before.splitlines()
+        additions = []
+        for marker in (MARKER_NAME, MANIFEST, SPLIT_GUARD):
+            rule = marker.encode()
+            anchored = b"/" + rule
+            # An exact ignore after a negation takes precedence in Git.
+            if next((line for line in reversed(lines)
+                     if line in (rule, anchored, b"!" + rule, b"!" + anchored)), None) not in (rule, anchored):
+                additions.append(anchored)
+        if not additions:
+            return
+        latest = path.lstat()
+        if ((latest.st_dev, latest.st_ino, latest.st_size, latest.st_mtime_ns, latest.st_ctime_ns, latest.st_nlink)
+                != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns, opened.st_nlink)):
+            raise ValueError(".gitignore changed during Room initialization")
+        newline = b"\r\n" if b"\r\n" in before else b"\n"
+        prefix = newline if before and not before.endswith(b"\n") else b""
+        suffix = prefix + newline.join(additions) + newline
+        if stream.write(suffix) != len(suffix):
+            raise OSError("Room marker ignore append was incomplete")
+        os.fsync(stream.fileno())
 
 
 def initialize_capture_policy(workspace: Path) -> dict:

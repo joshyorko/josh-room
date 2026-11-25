@@ -498,7 +498,7 @@ def build_parser() -> argparse.ArgumentParser:
     composition_reconcile = composition_commands.add_parser("reconcile", help="inspect offline evidence; never repair")
     composition_reconcile.add_argument("--evidence-file", type=Path, required=True)
     _json_option(composition_reconcile)
-    for action in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'parent-children'):
+    for action in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'enter-children', 'parent-children'):
         operation = composition_commands.add_parser(action)
         operation.add_argument('--dimension', required=True)
         operation.add_argument('--namespace', required=True)
@@ -517,14 +517,16 @@ def build_parser() -> argparse.ArgumentParser:
         if action == 'save':
             operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
             operation.add_argument('--ack-local-only', action='store_true')
-        if action in ('restore-parent', 'enter-child', 'parent-children'):
+        if action in ('restore-parent', 'enter-child', 'enter-children', 'parent-children'):
             operation.add_argument('--parent-snapshot', required=True)
         if action == 'restore-parent':
             operation.add_argument('--destination', type=Path, required=True)
-        if action in ('enter-child', 'parent-children'):
+        if action in ('enter-child', 'enter-children', 'parent-children'):
             operation.add_argument('--workspace', type=Path, required=True)
         if action == 'enter-child':
             operation.add_argument('--child-path', required=True)
+        if action == 'enter-children':
+            operation.add_argument('--child-path', dest='child_paths', action='append', required=True)
         if action == 'parent-children':
             operation.add_argument('--child-path', help='list alternative exact recovery points for this child')
             operation.add_argument('--offset', type=int, default=0)
@@ -1902,7 +1904,7 @@ def dispatch(args, instance: Path) -> dict:
                             workspace=args.workspace)
             except Exception:  # noqa: BLE001 - bounded credential-free provider failure boundary.
                 raise ValueError('Composition update could not be verified; preserve source and retry the same operation ID') from None
-        if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'parent-children'):
+        if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'enter-children', 'parent-children'):
             from .composition_lifecycle import (
                 CompositionAdmissionError,
                 capture_plan,
@@ -1965,8 +1967,9 @@ def dispatch(args, instance: Path) -> dict:
                         return parent_children(args.workspace, authority, args.namespace, args.parent_room, args.parent_snapshot,
                                                child_path=args.child_path, offset=args.offset, revision=args.revision)
                     return hydrate_composition(dimension, args.namespace, args.parent_room, args.parent_snapshot,
-                                               args.workspace if args.composition_command == 'enter-child' else args.destination,
-                                               authority, factory, private, child_path=getattr(args, 'child_path', None))
+                                               args.destination if args.composition_command == 'restore-parent' else args.workspace,
+                                               authority, factory, private, child_path=getattr(args, 'child_path', None),
+                                               child_paths=getattr(args, 'child_paths', None))
             except (CLICancelled, CompositionAdmissionError):
                 raise
             except (BotoCoreError, ClientError):

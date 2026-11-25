@@ -287,11 +287,15 @@ async function hydratePinnedChild(root, marker, row, enter) {
   const target = path.resolve(root, row.path);
   relativeSource(root, target);
   const result = await enter({ namespace: marker.composition_namespace, child: row.path, marker });
-  if (!result?.ok || !result.marker_verified || result.namespace !== marker.composition_namespace
-      || result.room_id !== row.room_id || result.snapshot_id !== row.snapshot_id) {
+  if (!matchesPinnedChild(marker, row, result)) {
     throw new Error("Child entry did not verify the selected recovery point. Preserve the destination.");
   }
   return { result, target };
+}
+
+function matchesPinnedChild(marker, row, result) {
+  return result?.ok && result.marker_verified && result.namespace === marker.composition_namespace
+    && result.room_id === row.room_id && result.snapshot_id === row.snapshot_id;
 }
 
 async function enterChild(vscode, { root, marker, listChildren, enter, open, childPath, localState = () => "missing" }) {
@@ -311,7 +315,7 @@ async function enterChild(vscode, { root, marker, listChildren, enter, open, chi
   return result;
 }
 
-async function hydrateChildren(vscode, { root, marker, listChildren, enter, childPaths, localState = () => "missing" }) {
+async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch, childPaths, localState = () => "missing" }) {
   const { choices } = await pinnedChildChoices(marker, listChildren, false);
   const missing = choices.filter(choice => localState(choice.row) === "missing");
   if (childPaths === undefined && !missing.length) {
@@ -323,14 +327,20 @@ async function hydrateChildren(vscode, { root, marker, listChildren, enter, chil
   if (!selected?.length) return "cancelled";
   const pinned = [...new Set(selected)].map(label => missing.find(choice => choice.label === label));
   if (pinned.some(choice => !choice)) throw new Error("A selected child is unavailable at this Catalog recovery point.");
-  const restored = [];
-  for (const choice of pinned) {
-    try {
-      const { result } = await hydratePinnedChild(root, marker, choice.row, enter);
-      restored.push(result);
-    } catch (error) {
-      throw new Error(`Restored ${restored.length} of ${pinned.length} child Rooms. ${choice.label}: ${error.message}`);
-    }
+  const children = pinned.map(choice => choice.row);
+  for (const row of children) relativeSource(root, path.resolve(root, row.path));
+  const batch = await enterBatch(children.map(row => row.path));
+  const restored = batch?.restored;
+  if (!batch?.ok || batch.namespace !== marker.composition_namespace || batch.parent_snapshot_id !== marker.snapshot_id
+      || !Array.isArray(restored) || restored.length > children.length
+      || !restored.every((result, index) => matchesPinnedChild(marker, children[index], result))) {
+    throw new Error("The controller could not verify the batch restore. Check Open Workspace for folder status.");
+  }
+  if (batch.status === "partial" && batch.failed_index === restored.length && restored.length < children.length) {
+    throw new Error(`Restored ${restored.length} of ${children.length} child Rooms. Restore stopped at ${children[batch.failed_index].path}.`);
+  }
+  if (batch.status !== "hydrated" || restored.length !== children.length) {
+    throw new Error("The controller returned an incomplete batch restore receipt. Check Open Workspace for folder status.");
   }
   void vscode.window.showInformationMessage(`Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`);
   return { ok: true, restored };

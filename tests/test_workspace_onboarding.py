@@ -215,6 +215,34 @@ def test_exclusion_housekeeping_does_not_generate_onboarding(tmp_path):
     assert (tmp_path / '.josh-roomignore').is_file()
     assert not (tmp_path / 'AGENTS.md').exists()
     assert not (tmp_path / '.vscode').exists()
+    assert not (tmp_path / '.gitignore').exists()
+
+
+def test_init_ignores_room_markers_in_existing_gitignore(tmp_path):
+    ignore = tmp_path / '.gitignore'
+    original = b'# custom\r\n/node_modules/\r\n.josh-room.json\r\n!/.josh-room-split.json'
+    ignore.write_bytes(original)
+    initialize_workspace(tmp_path, editor='none')
+    after = ignore.read_bytes()
+    assert after == original + b'\r\n/.josh-room-composition.json\r\n/.josh-room-split.json\r\n'
+    modified = ignore.stat().st_mtime_ns
+    initialize_workspace(tmp_path, editor='none')
+    assert ignore.read_bytes() == after
+    assert ignore.stat().st_mtime_ns == modified
+
+
+def test_init_preserves_missing_and_symlinked_gitignore(tmp_path):
+    root = tmp_path / 'project'
+    root.mkdir()
+    initialize_workspace(root, editor='none')
+    ignore = root / '.gitignore'
+    assert not ignore.exists()
+    other = tmp_path / 'outside'
+    other.write_text('existing\n')
+    ignore.symlink_to(other)
+    initialize_workspace(root, editor='none')
+    assert ignore.is_symlink()
+    assert other.read_text() == 'existing\n'
 
 
 def test_symlinked_targets_and_external_discovery_are_not_followed(tmp_path):

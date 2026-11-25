@@ -121,6 +121,10 @@ josh-room workspace init --workspace ./selected-project --no-editor-files --json
 josh-room workspace-check --workspace ./selected-project --json
 ```
 
+Full initialization adds ignore rules for Josh Room's three JSON markers to
+an existing regular `.gitignore`. Repeating initialization keeps those rules
+in place without duplicating them.
+
 The JSON result reports onboarding artifact statuses and omissions, plus
 `onboarding.discovery`: `scope`, `complete`, `status`, `observed`, configured
 `caps`, and aggregated `omissions`. Stable reason codes are `project-cap`,
