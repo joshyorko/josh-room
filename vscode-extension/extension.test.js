@@ -8363,7 +8363,7 @@ test("registered Catalog restore submits the selected exact pin and only opens a
   extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
     secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
   const restore = fixture.commandCallbacks.get("joshRoom.restoreCatalog");
-  const point = { kind: "catalog-point", dimension, catalog: { namespace, parent_room_id: "parent" },
+  const point = { kind: "catalog-point", dimension, catalog: { namespace, parent_room_id: "parent", display_name: "Synthetic Catalog" },
     point: { snapshot_id: "jat-older", children: ["a", "b"] } };
   vscode.window.showSaveDialog = async () => assert.fail("scope cancellation must stop before choosing a destination");
   vscode.window.showQuickPick = async () => undefined;
@@ -8373,8 +8373,15 @@ test("registered Catalog restore submits the selected exact pin and only opens a
     assert.deepEqual(rows.map(row => row.label), ["a", "b"]);
     return [];
   };
-  vscode.window.showSaveDialog = async () => undefined;
+  vscode.window.showSaveDialog = async options => {
+    assert.equal(options.defaultUri.fsPath, path.join(root, "Synthetic Catalog"));
+    return undefined;
+  };
   assert.equal(await restore(point), "cancelled");
+  const parent = { ...point, kind: "catalog-parent", children: [point] };
+  vscode.window.showQuickPick = async (rows, options) => options.canPickMany ? rows : rows[0];
+  assert.equal(await restore(parent), "cancelled");
+  vscode.window.showQuickPick = async () => [];
   assert.equal(calls, 0);
   vscode.window.showSaveDialog = async () => ({ scheme: "file", fsPath: root });
   assert.equal(await restore(point), "failed");
@@ -8399,6 +8406,12 @@ test("registered Catalog restore submits the selected exact pin and only opens a
     return undefined;
   };
   assert.equal(await restore(...item.command.arguments), "cancelled");
+  vscode.window.showQuickPick = async () => [];
+  vscode.window.showSaveDialog = async options => {
+    assert.equal(options.defaultUri.fsPath, path.join(root, "_CON.repo - child"));
+    return undefined;
+  };
+  assert.equal(await restore({ ...point, catalog: { ...point.catalog, display_name: "CON.repo / child" } }), "cancelled");
 });
 
 test("opening an exact Catalog parent only offers restoration once and makes no storage calls", async t => {

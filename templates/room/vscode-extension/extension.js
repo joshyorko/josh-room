@@ -2318,11 +2318,13 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
     selectedChildren = scope.map(row => row.label);
   }
   const childName = child?.split("/").at(-1);
+  let folderName = (childName || catalog.display_name || "").trim()
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-").replace(/[. ]+$/, "");
+  if (/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(folderName)) folderName = `_${folderName}`;
   const destination = await vscode.window.showSaveDialog({
-    title: childName ? `Choose a restore folder for ${childName}` : "Restore Catalog Room to a new folder",
+    title: folderName ? `Choose a restore folder for ${folderName}` : "Restore Catalog Room to a new folder",
     saveLabel: childName ? "Enter Child Room" : "Restore Catalog",
-    defaultUri: vscode.Uri.file(path.join(root, childName && !/[\\/:\x00-\x1f]/.test(childName)
-      && ![".", ".."].includes(childName) ? childName : "Restored Catalog")),
+    defaultUri: vscode.Uri.file(path.join(root, folderName || "Restored Catalog")),
   });
   if (!destination) return "cancelled";
   if (destination.scheme !== "file" || fs.lstatSync(destination.fsPath, { throwIfNoEntry: false })) {
