@@ -478,6 +478,16 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(check)
     composition = commands.add_parser("composition", help="explicit catalog capture, pinned entry and offline discovery")
     composition_commands = composition.add_subparsers(dest="composition_command", required=True)
+    for action in ('retirement-preview', 'retire'):
+        operation = composition_commands.add_parser(action)
+        operation.add_argument('--dimension', required=True)
+        operation.add_argument('--namespace', required=True)
+        operation.add_argument('--kind', choices=('recovery-point', 'room', 'catalog'), required=True)
+        operation.add_argument('--room')
+        operation.add_argument('--snapshot')
+        if action == 'retire':
+            operation.add_argument('--approve', required=True)
+        _json_option(operation)
     composition_plan = composition_commands.add_parser("plan")
     composition_plan.add_argument("--workspace", type=Path, required=True)
     composition_plan.add_argument("--child", action="append", default=[])
@@ -1853,6 +1863,19 @@ def _composition_component_options(encoded):
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
+        if args.composition_command in ('retirement-preview', 'retire'):
+            from .composition_lifecycle import provider_runtime
+            from .composition_retirement import preview_retirement, retire
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
+                raise ValueError('retirement requires an explicit provider Dimension')
+            with sdk_error_boundary(dimension), provider_runtime(
+                    instance, dimension, getattr(args, '_selected_encryption_material', None),
+                    args.namespace, authority_only=True) as (authority, _factory, _private):
+                arguments = (authority, args.namespace, args.kind, args.room, args.snapshot)
+                if args.composition_command == 'retirement-preview':
+                    return preview_retirement(*arguments)
+                return retire(*arguments, approved_plan_sha256=args.approve)
         if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
             from .composition_lifecycle import provider_runtime
             from .composition_updates import refresh_parent, save_child
