@@ -171,6 +171,12 @@ def validate_intent_transition(previous, candidate, intent_id):
         raise ValueError("Catalog Save authority cannot be downgraded")
     old_receipts = previous.get("completed_saves", {})
     new_receipts = candidate.get("completed_saves", {})
+    if before is None and after is not None:
+        key = after["operation_id"]
+        if key in old_receipts or key in previous["state"]["operations"]:
+            raise ValueError("operation ID already belongs to a Catalog Save")
+    if before is not None and after is None and before["operation_id"] in old_receipts:
+        raise ValueError("completed Catalog Save approval is already recorded")
     expected_receipts = old_receipts if before is None or after is not None else {
         **old_receipts, before["operation_id"]: before["approval_sha256"],
     }
