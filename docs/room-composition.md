@@ -55,7 +55,10 @@ Choose a collection of independent directories. Save a cohesive root repository
 as one Room. Linked worktrees, borrowed object stores and unsupported Git
 layouts require another capture layout. The sealed manifest accepts one to 32
 child pins. Capture stages private copies outside the source and needs scratch
-space for the selected data. Optional child components use the selection below.
+space for the selected data. Save checks free staging space before publishing.
+If the configured location is too small, Save can use an owner-only temporary
+directory on another filesystem. Memory-backed staging also checks available
+memory. Optional child components use the selection below.
 
 Children are independently saved Logical JATs. The parent captures only its
 canonical pinned manifest, generated source-only policy, empty ancestor

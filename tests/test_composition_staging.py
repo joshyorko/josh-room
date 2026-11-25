@@ -31,6 +31,17 @@ def fixture(tmp_path):
     return source, dimension, assignments, preview
 
 
+def test_catalog_save_refuses_insufficient_staging_before_authority_access(tmp_path, monkeypatch):
+    from josh_room import composition_lifecycle as lifecycle
+
+    source, dimension, assignments, preview = fixture(tmp_path)
+    monkeypatch.setattr(lifecycle, "_staging_free", lambda _: 0)
+    with pytest.raises(lifecycle.CompositionAdmissionError) as error:
+        lifecycle.save_composition(source, dimension, "1" * 32, "parent", assignments,
+                                   preview["approval_sha256"], None, None, tmp_path)
+    assert error.value.result["error_code"] == "composition-staging-space"
+
+
 def test_late_child_file_never_enters_private_allowlist(tmp_path):
     source, _, _, preview = fixture(tmp_path)
     (source / "child/late.txt").write_text("not approved")

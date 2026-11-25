@@ -1972,8 +1972,11 @@ def dispatch(args, instance: Path) -> dict:
                 if preview['local_only_acknowledgement_required'] and not args.ack_local_only:
                     raise ValueError('explicit acknowledgement of unprotected local-only content is required')
             try:
+                staging = ({'capture_workspace': args.workspace, 'staging_bytes': preview['staging_bytes']}
+                           if args.composition_command == 'save' else {})
                 with provider_runtime(instance, dimension, material, args.namespace, authority_session=session,
-                                      authority_only=args.composition_command == 'parent-children') as (authority, factory, private):
+                                      authority_only=args.composition_command == 'parent-children',
+                                      **staging) as (authority, factory, private):
                     if args.composition_command == 'save':
                         return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
                                                 args.approve, authority, factory, private, **capture_options)

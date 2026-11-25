@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import fnmatch
 import hashlib
 import os
@@ -10,9 +11,10 @@ import secrets
 import shutil
 import stat
 import sys
+import tempfile
 import unicodedata
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -418,6 +420,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
     if not dimension.encryption_domain_id:
         raise ValueError("select an initialized encryption domain before planning")
     child_evidence = {}
+    staging_bytes = 2 * scan.logical_bytes
     if root_files_only:
         root_fd = _directory(workspace)
         try:
@@ -427,6 +430,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
             with _catalog_admission(root_fd, children, source_mount_id):
                 for row in rows:
                     child_scan, evidence, _ = _child_inventory(workspace, row["path"], policy, row.get("capture_mode"))
+                    staging_bytes += child_scan.logical_bytes
                     child = row["path"]
                     if child in component_options:
                         from .composition_components import component_plan
@@ -442,6 +446,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
         for row in rows:
             if row["outcome"] == "child":
                 child_scan, evidence, _ = _child_inventory(workspace, row["path"], policy, row.get("capture_mode"))
+                staging_bytes += child_scan.logical_bytes
                 child = row["path"]
                 if child in component_options:
                     from .composition_components import component_plan
@@ -496,6 +501,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
         "request": request,
         "approval_sha256": plan_digest(request),
         "child_count": len(children),
+        "staging_bytes": staging_bytes,
         "local_only_acknowledgement_required": (
             bool(set(opaque_directories) - set(children))
             if root_files_only else
@@ -595,8 +601,45 @@ def resolve_capture_destination(dimension, selected_material, *, expected_domain
     return replace(dimension, encryption_domain_id=domain), material, session
 
 
+def _staging_free(path):
+    free = shutil.disk_usage(path).free
+    fd = _directory(path)
+    try:
+        mount_id = _mount_id(fd)
+    finally:
+        os.close(fd)
+    mount_type = next((line.split(" - ", 1)[1].split()[0]
+                       for line in Path("/proc/self/mountinfo").read_text().splitlines()
+                       if line.split()[0] == str(mount_id)), None)
+    if mount_type not in ("tmpfs", "ramfs"):
+        return free
+    available = next(int(line.split()[1]) * 1024 for line in Path("/proc/meminfo").read_text().splitlines()
+                     if line.startswith("MemAvailable:"))
+    group = next((line.split(":", 2)[2] for line in Path("/proc/self/cgroup").read_text().splitlines()
+                  if line.startswith("0::")), "/")
+    root = Path("/sys/fs/cgroup")
+    scope = root / group.lstrip("/")
+    if not scope.is_dir():
+        scope = root
+    for directory in (scope, *scope.parents):
+        if directory != root and root not in directory.parents:
+            break
+        limit = directory / "memory.max"
+        if limit.is_file() and (value := limit.read_text().strip()) != "max":
+            available = min(available, int(value) - int((directory / "memory.current").read_text()))
+    return min(free, max(0, available * 3 // 4))
+
+
+def _staging_space_error(required, available):
+    gib = 1024 ** 3
+    return CompositionAdmissionError("composition-staging-space",
+        f"Catalog Save needs {required / gib:.2f} GiB of private staging space. "
+        f"The largest safe staging location has {available / gib:.2f} GiB free.")
+
+
 @contextmanager
-def provider_runtime(instance, dimension, material, namespace, *, authority_session=None, authority_only=False):
+def provider_runtime(instance, dimension, material, namespace, *, authority_session=None, authority_only=False,
+                     capture_workspace=None, staging_bytes=0):
     from .room_store_bridge import (
         _create_backend,
         _private_operation_directory,
@@ -617,7 +660,7 @@ def provider_runtime(instance, dimension, material, namespace, *, authority_sess
     legacy = _repository_locator(dimension)
     root = legacy.rsplit("/room-store/v1", 1)[0]
     repository = root + "/" + namespace_prefix(namespace) + "payload-restic-v1"
-    with _private_operation_directory() as private:
+    with _private_operation_directory() as private, ExitStack() as staging:
         authority = CompositionAuthority(
             _create_backend(dimension, instance),
             dimension,
@@ -628,6 +671,18 @@ def provider_runtime(instance, dimension, material, namespace, *, authority_sess
         if authority_only:
             yield authority, None, private
             return
+        payload = private
+        if capture_workspace is not None:
+            required = staging_bytes + 64 * 1024 ** 2
+            available = _staging_free(private)
+            if available < required:
+                alternative = Path(tempfile.gettempdir()).resolve()
+                source = Path(capture_workspace).resolve()
+                alternate_free = 0 if alternative.is_relative_to(source) else _staging_free(alternative)
+                if alternate_free < required:
+                    raise _staging_space_error(required, max(available, alternate_free))
+                payload = Path(staging.enter_context(tempfile.TemporaryDirectory(
+                    prefix="josh-room-catalog-", dir=alternative)))
         password = private / "password"
         cache = private / "cache"
         cache.mkdir(mode=0o700)
@@ -649,7 +704,7 @@ def provider_runtime(instance, dimension, material, namespace, *, authority_sess
             )
 
         try:
-            yield authority, store_factory, private
+            yield authority, store_factory, payload
         finally:
             password.unlink(missing_ok=True)
 
@@ -854,7 +909,13 @@ def _copy_paths(source, target, paths, *, source_fd=None, records=None):
                             or _record_stat(current) != records[relative]
                         ):
                             raise ValueError("capture file identity changed")
-                        shutil.copyfileobj(stream, output)
+                        try:
+                            shutil.copyfileobj(stream, output)
+                        except OSError as error:
+                            if error.errno != errno.ENOSPC:
+                                raise
+                            raise CompositionAdmissionError("composition-staging-space",
+                                "Private staging ran out of space during Catalog Save.") from None
                         final = os.fstat(stream.fileno())
                         if (
                             final.st_size,
@@ -1098,6 +1159,10 @@ def save_composition(
     request = preview["request"]
     if approval != preview["approval_sha256"]:
         raise CompositionAdmissionError("composition-approval-stale", "capture approval is stale or missing")
+    required = preview["staging_bytes"] + 64 * 1024 ** 2
+    available = _staging_free(private)
+    if available < required:
+        raise _staging_space_error(required, available)
     if authority.binding != request["destination_binding"]:
         raise CompositionAdmissionError("composition-destination-mismatch",
             "The selected physical destination differs from the approved binding")
