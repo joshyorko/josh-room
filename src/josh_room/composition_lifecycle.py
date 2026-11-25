@@ -775,7 +775,7 @@ def provider_runtime(instance, dimension, material, namespace, *, authority_sess
 
 
 def _commit(authority, envelope, etag, state):
-    _require_extension(envelope["state"], state.to_dict())
+    _require_extension(envelope["state"], state.to_dict(), retired_points=state._retired_points)
     updated = copy.deepcopy(envelope)
     updated["state"] = state.to_dict()
     etag = authority.put(updated, etag)
@@ -1332,7 +1332,7 @@ def save_composition(
             )
             state = reserve(Catalog.from_body(catalog), scope, namespace, plan)
             envelope, etag = _commit(authority, envelope, etag, state)
-        state = CompositionSafetyState.from_dict(envelope["state"])
+        state = CompositionSafetyState.from_envelope(envelope)
         operation = state.to_dict()["operations"][namespace]
         approved = operation["plan_sha256"]
 
@@ -1404,7 +1404,7 @@ def save_composition(
             candidate = state.to_dict()
             candidate["operations"][namespace]["phase"] = "children-recorded"
             candidate["revision"] += 1
-            state = CompositionSafetyState.from_dict(candidate)
+            state = state.replace(candidate)
             envelope, etag = _commit(authority, envelope, etag, state)
         manifest = manifest_for(state, namespace, approved)
         parent = private / ("parent-view-" + uuid.uuid4().hex)
@@ -1723,7 +1723,7 @@ def hydrate_composition(
         raise ValueError("composition namespace is unavailable")
     from .composition_retirement import require_active
     require_active(envelope, room, snapshot)
-    state = CompositionSafetyState.from_dict(envelope["state"])
+    state = CompositionSafetyState.from_envelope(envelope)
     body = state.to_dict()
     operation = next(
         (

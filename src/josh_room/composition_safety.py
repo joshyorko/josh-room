@@ -118,16 +118,55 @@ def _pin(pin, catalog, room_id, logical_id):
     return record
 
 
+def writable_latest(project, retired_points=()):
+    """Select the newest retained point without rewriting the immutable catalog."""
+    records = project.get("snapshots", {})
+    latest = project.get("latest")
+    if latest in records and latest not in retired_points:
+        return latest
+    return max((point for point in records if point not in retired_points),
+               key=lambda point: (records[point]["created_at"], point), default=None)
+
+
+def retired_recovery_points(envelope):
+    points = set()
+    for row in envelope.get("retirements", ()):
+        target = row.get("target") if isinstance(row, dict) else None
+        if not isinstance(target, dict):
+            raise ValueError("invalid retirement target")  # noqa: TRY004 - malformed authenticated data
+        if target.get("kind") == "recovery-point":
+            room, snapshot = target.get("room"), target.get("snapshot")
+            _identifier(room)
+            _identifier(snapshot)
+            points.add((room, snapshot))
+    return frozenset(points)
+
+
 @dataclass(frozen=True)
 class CompositionSafetyState:
     # Store canonical bytes, rather than retaining mutable caller-owned maps.
     _canonical: bytes
+    _retired_points: frozenset = frozenset()
 
     def to_dict(self):
         return json.loads(self._canonical)
 
     @classmethod
-    def from_dict(cls, body):
+    def from_envelope(cls, envelope):
+        return cls.from_dict(envelope["state"], retired_points=retired_recovery_points(envelope))
+
+    def replace(self, body):
+        return self.from_dict(body, retired_points=self._retired_points)
+
+    @classmethod
+    def from_dict(cls, body, *, retired_points=frozenset()):
+        retired_by_room = {}
+        for room, snapshot in retired_points:
+            retired_by_room.setdefault(room, set()).add(snapshot)
+
+        def latest(room):
+            return writable_latest(inner["projects"].get(room, {}), retired_by_room.get(room, ()))
+
         version2 = isinstance(body, dict) and body.get('contract') in _CONTRACTS[1:]
         _object(body, "format_version contract scope revision dimension_catalog operations" + (' child_updates' if version2 else ''))
         if type(body["format_version"]) is not int or body["format_version"] != 4 or body["contract"] not in _CONTRACTS:
@@ -222,7 +261,9 @@ class CompositionSafetyState:
             parent_records = inner["projects"].get(plan["parent_room_id"], {}).get("snapshots", {})
             if phase != "committed" and plan["parent_logical_jat_id"] in parent_records:
                 raise ValueError("parent output appeared before atomic commit")
-            parent_latest = inner["projects"].get(plan["parent_room_id"], {}).get("latest")
+            parent_latest = latest(plan["parent_room_id"])
+            if phase != "committed" and baseline in retired_by_room.get(plan["parent_room_id"], ()):
+                raise ValueError("parent baseline is retired")
             if phase != "committed" and baseline != parent_latest:
                 raise ValueError("composition baseline differs from current parent")
             involved = rooms | {plan["parent_room_id"]}
@@ -298,7 +339,9 @@ class CompositionSafetyState:
                 outputs.add((room, output))
                 baseline_record = catalog.resolve_snapshot(room, baseline)
                 if update['phase'] == 'reserved':
-                    if update['pin'] is not None or output in inner['projects'][room]['snapshots'] or inner['projects'][room]['latest'] != baseline:
+                    if baseline in retired_by_room.get(room, ()):
+                        raise ValueError('child baseline is retired')
+                    if update['pin'] is not None or output in inner['projects'][room]['snapshots'] or latest(room) != baseline:
                         raise ValueError('uncommitted child output or stale baseline')
                     if room in pending or any(room in rooms and phase != 'committed' for rooms, phase, _ in used):
                         raise ValueError('overlapping incomplete child updates')
@@ -319,7 +362,7 @@ class CompositionSafetyState:
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         if len(canonical) > MAX_BYTES:
             raise ValueError("composition state exceeds size limit")
-        return cls(canonical)
+        return cls(canonical, retired_points)
 
 
 def reconcile(state, descriptors, repository, inventory, *, expected_scope):

@@ -2493,6 +2493,10 @@ async function deleteCatalogItem(item) {
     return "blocked";
   };
   if (isOpen()) return blocked();
+  if (item.kind.startsWith("catalog-child-") && roomsProvider?.catalogPinsPending?.(dimensionId, namespace)) {
+    void vscode.window.showWarningMessage("Child Room deletion needs a verified Catalog refresh. Load Storage and try again.");
+    return "blocked";
+  }
   const args = ["--dimension", dimensionId, "--namespace", namespace, "--kind", kind,
     ...(target.room ? ["--room", target.room] : []), ...(target.snapshot ? ["--snapshot", target.snapshot] : [])];
   const matches = row => row?.kind === kind && row.room === target.room && row.snapshot === target.snapshot;
@@ -2511,6 +2515,10 @@ async function deleteCatalogItem(item) {
   }, action);
   if (answer !== action) return "cancelled";
   if (isOpen()) return blocked();
+  if (item.kind.startsWith("catalog-child-") && roomsProvider?.catalogPinsPending?.(dimensionId, namespace)) {
+    void vscode.window.showWarningMessage("Child Room deletion needs a verified Catalog refresh. Load Storage and try again.");
+    return "blocked";
+  }
   const result = await runSelectedEncryption(["composition", "retire", ...args, "--approve", preview.approval_sha256],
     root, dimension, { title: `Deleting ${unit}…`, action: "delete a Catalog item",
       operation: { verb: "delete", target: { dimension: dimensionId, namespace, room: target.room, snapshot: target.snapshot } } });
@@ -5588,6 +5596,7 @@ class HierarchyRoomsProvider {
   constructor() {
     this.roots = undefined;
     this.state = "initial";
+    this.pendingCatalogPins = new Map();
     this.emitter = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.emitter.event;
   }
@@ -5696,6 +5705,11 @@ class HierarchyRoomsProvider {
         treeItem.command = { command: "joshRoom.restoreCatalog", title: "Enter Child Room", arguments: [item] };
       }
     }
+    if (["catalog-child-point", "catalog-child-room"].includes(item.kind)
+        && this.catalogPinsPending(dimensionId(item), item.catalog?.namespace)) {
+      treeItem.contextValue = `${item.kind}-pins-unverified`;
+      treeItem.description = [treeItem.description, "Pins need refresh"].filter(Boolean).join(" · ");
+    }
     if (item.kind === "catalog-partial") treeItem.iconPath = new vscode.ThemeIcon("warning");
     if (item.kind === "dimension") {
       treeItem.command = item.action
@@ -5764,7 +5778,22 @@ class HierarchyRoomsProvider {
     return this.roots || [];
   }
 
-  async setCatalog(catalog) {
+  catalogPinsPending(id, namespace) {
+    return this.pendingCatalogPins.has(JSON.stringify([id, namespace]));
+  }
+
+  async setCatalog(catalog, { authoritative = false } = {}) {
+    if (authoritative) {
+      for (const [key, retired] of this.pendingCatalogPins) {
+        const [id, namespace] = JSON.parse(key);
+        const storage = dimensionList(catalog).find(row => (row.id || row.dimension_id) === id);
+        const parent = storage?.catalogs?.find(row => row.namespace === namespace);
+        if (storage?.catalog_discovery_partial !== true && Array.isArray(parent?.child_recovery_points)
+            && Array.isArray(parent?.recovery_points) && parent.recovery_points.every(point => !retired.has(point.snapshot_id))) {
+          this.pendingCatalogPins.delete(key);
+        }
+      }
+    }
     lastKnownCatalog = catalog;
     this.roots = nativeRegistry.buildProviderTree(catalog || {});
     this.state = "ready";
@@ -5776,6 +5805,7 @@ class HierarchyRoomsProvider {
   async applyCatalogDeletion(id, namespace, { kind, room, snapshot }) {
     if (this.loading) await this.loading.catch(() => {});
     if (!lastKnownCatalog) return;
+    let reloadPins = false;
     const dimensions = dimensionList(lastKnownCatalog).map(dimension => {
       if ((dimension.id || dimension.dimension_id) !== id || !Array.isArray(dimension.catalogs)) return dimension;
       const catalogs = dimension.catalogs.flatMap(catalog => {
@@ -5786,9 +5816,12 @@ class HierarchyRoomsProvider {
         }
         if (room === catalog.parent_room_id) {
           const recoveryPoints = catalog.recovery_points.filter(point => point.snapshot_id !== snapshot);
-          // The previously reported pin may have come from the deleted parent.
-          const childPoints = catalog.child_recovery_points?.map(point => ({ ...point, pinned: false }));
-          return [{ ...catalog, recovery_points: recoveryPoints, child_recovery_points: childPoints }];
+          const key = JSON.stringify([id, namespace]);
+          const retired = this.pendingCatalogPins.get(key) || new Set();
+          retired.add(snapshot);
+          this.pendingCatalogPins.set(key, retired);
+          reloadPins = true;
+          return [{ ...catalog, recovery_points: recoveryPoints }];
         }
         return [{ ...catalog, child_recovery_points: catalog.child_recovery_points?.filter(point =>
           point.room_id !== room || point.snapshot_id !== snapshot) }];
@@ -5796,6 +5829,14 @@ class HierarchyRoomsProvider {
       return { ...dimension, catalogs };
     });
     await this.setCatalog({ ...lastKnownCatalog, dimensions });
+    if (reloadPins) {
+      try { await this.reload(); }
+      catch {
+        this.state = "ready";
+        this.emitter.fire(undefined);
+        void vscode.window.showWarningMessage("Recovery Point deleted. Load Storage to verify remaining Child Room pins.");
+      }
+    }
   }
 
   async refresh() {
@@ -5821,7 +5862,7 @@ class HierarchyRoomsProvider {
         try {
           const catalog = await loadCatalog(cwd, "Loading Josh Room storage…", { cancellationToken, progressReporter });
           if (cancellationToken.isCancellationRequested) throw cancellationError();
-          await this.setCatalog(catalog);
+          await this.setCatalog(catalog, { authoritative: true });
           progressReporter.finish();
           return catalog;
         } catch (error) {
@@ -6078,7 +6119,7 @@ function catalogSnapshotContext(item) {
   const exactId = id => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)
     && id.toLowerCase() !== "latest";
   if (!/^[a-f0-9]{32}$/.test(namespace) || !exactId(projectId) || !exactId(snapshot)
-      || !/^[a-z0-9][a-z0-9._-]*$/.test(dimensionId)) {
+      || typeof dimensionId !== "string" || !/^[a-z0-9][a-z0-9._-]*$/.test(dimensionId)) {
     throw new Error("Choose an exact Catalog recovery point from Rooms.");
   }
   return { project_id: projectId, snapshot_id: snapshot, namespace, dimension, dimension_id: dimensionId,

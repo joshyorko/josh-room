@@ -98,6 +98,11 @@ def test_unchanged_catalog_save_rebinds_root_without_publishing(runtime):
     root = r.tmp / 'unchanged-catalog'
     hydrate_composition(r.dimension, NAMESPACE, 'parent', baseline, root,
                         r.authority, r.factory, r.private)
+    hydrate_composition(r.dimension, NAMESPACE, "parent", baseline, root,
+                        r.authority, r.factory, r.private, child_path="a")
+    unchanged_child = root / "a/file.txt"
+    unchanged_child.write_bytes(unchanged_child.read_bytes())
+    assert local_status(root / "a")["state"] == "changed"
     (root / 'notes.txt').write_text('parent note\n')
     assert local_status(root)['state'] == 'changed'
     args = (root, r.dimension, NAMESPACE, 'parent', baseline, 'rebind', r.authority, r.factory, r.private)
@@ -107,6 +112,7 @@ def test_unchanged_catalog_save_rebinds_root_without_publishing(runtime):
     assert save_catalog_workspace(*args, approval=review['approval_sha256'])['status'] == 'unchanged'
     assert r.transport.writes == writes
     assert local_status(root)['state'] == 'clean'
+    assert local_status(root / 'a')['state'] == 'clean'
 
 
 def update(r, target, child, operation='update', approval=None):
@@ -613,3 +619,98 @@ def test_preservation_catalog_keeps_nested_repository_and_optional_child(runtime
                             r.authority, r.factory, r.private, child_path='b')
         assert (restored / 'b/new.txt').read_text() == 'retained child edit'
         assert r.authority.read()[0]['state']['contract'] == 'composition-safety-v5'
+
+
+@pytest.mark.parametrize("occupancy", ["folder", "file", "symlink", "corrupt", "wrong-binding"])
+def test_occupied_child_aborts_catalog_save_without_committing_a_child(runtime, occupancy):
+    from josh_room.composition_updates import save_catalog_workspace
+
+    r = runtime
+    baseline, root, _ = entered(r)
+    (root / "a/new.txt").write_text("must not commit")
+    args = (root, r.dimension, NAMESPACE, "parent", baseline, "occupancy", r.authority, r.factory, r.private)
+    preview = save_catalog_workspace(*args)
+    assert preview["retained_missing_children"] == ["b"]
+    blocked = root / "b"
+    if occupancy == "file":
+        blocked.write_text("occupied")
+    elif occupancy == "symlink":
+        blocked.symlink_to(root / "a", target_is_directory=True)
+    else:
+        blocked.mkdir()
+        if occupancy == "corrupt":
+            (blocked / ".josh-room.json").write_text("{invalid")
+        elif occupancy == "wrong-binding":
+            shutil.copyfile(root / "a/.josh-room.json", blocked / ".josh-room.json")
+    writes = r.transport.writes
+    for approval in (None, preview["approval_sha256"]):
+        with pytest.raises(ValueError, match="occupied"):
+            save_catalog_workspace(*args, approval=approval)
+    assert r.transport.writes == writes
+    envelope, _ = r.authority.read()
+    assert not envelope["state"].get("child_updates")
+    assert not envelope.get("save_intent")
+
+
+def test_aggregate_intent_blocks_other_writers_and_survives_child_publication(runtime, monkeypatch):
+    from josh_room import composition_updates as updates
+
+    r = runtime
+    baseline, root, child = entered(r)
+    (root / "a/new.txt").write_text("edited during aggregate Save")
+    args = (root, r.dimension, NAMESPACE, "parent", baseline, "recover-intent", r.authority, r.factory, r.private)
+    approval = updates.save_catalog_workspace(*args)["approval_sha256"]
+    original = updates.refresh_parent
+
+    def interrupt(*args, **kwargs):
+        if kwargs.get("approval"):
+            raise RuntimeError("synthetic interruption before parent publication")
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as crashed:
+        crashed.setattr(updates, "refresh_parent", interrupt)
+        with pytest.raises(ValueError, match="Catalog Save stopped"):
+            updates.save_catalog_workspace(*args, approval=approval)
+    pending = updates.inspect_catalog_save(r.authority, NAMESPACE)
+    assert pending["status"] == "pending-save"
+    assert pending["intent"]["approval_sha256"] == approval
+    assert pending["children"][0]["status"] == "committed"
+    assert pending["intent"]["retained_missing_children"] == ["b"]
+    writes = r.transport.writes
+    with pytest.raises(ValueError, match="another Catalog Save intent"):
+        save_child(root / "a", r.dimension, NAMESPACE, child["room_id"], pending["children"][0]["snapshot_id"],
+                   "other-writer", r.authority, r.factory, r.private, approval="0" * 64)
+    assert r.transport.writes == writes
+    recovered = updates.save_catalog_workspace(*args, approval=approval)
+    assert recovered["marker_verified"]
+    assert recovered["retained_missing_children"] == ["b"]
+    assert updates.inspect_catalog_save(r.authority, NAMESPACE)["status"] == "no-pending-save"
+    envelope, _ = r.authority.read()
+    assert len(envelope["state"]["child_updates"]) == 1
+
+
+def test_retiring_latest_parent_and_child_leaves_active_baselines_writable(runtime):
+    from josh_room.composition_retirement import preview_retirement, retire
+    from josh_room.composition_updates import save_catalog_workspace
+
+    r = runtime
+    baseline, root, child = entered(r)
+    (root / "notes.txt").write_text("new parent bytes")
+    (root / "a/new.txt").write_text("new child bytes")
+    args = (root, r.dimension, NAMESPACE, "parent", baseline, "first-save", r.authority, r.factory, r.private)
+    first = save_catalog_workspace(*args, approval=save_catalog_workspace(*args)["approval_sha256"])
+    latest_child = context_status(root / "a")["snapshot_id"]
+    for room, point in (("parent", first["snapshot_id"]), (child["room_id"], latest_child)):
+        preview = preview_retirement(r.authority, NAMESPACE, "recovery-point", room, point)
+        assert preview["can_apply"]
+        retire(r.authority, NAMESPACE, "recovery-point", room, point, approved_plan_sha256=preview["approval_sha256"])
+    with pytest.raises(ValueError, match="retired"):
+        save_child(root / "a", r.dimension, NAMESPACE, child["room_id"], latest_child,
+                   "retired", r.authority, r.factory, r.private)
+    cold = r.tmp / "active-baselines"
+    hydrate_composition(r.dimension, NAMESPACE, "parent", baseline, cold, r.authority, r.factory, r.private)
+    hydrate_composition(r.dimension, NAMESPACE, "parent", baseline, cold, r.authority, r.factory, r.private, child_path="a")
+    (cold / "notes.txt").write_text("save from retained parent")
+    (cold / "a/new.txt").write_text("save from retained child")
+    args = (cold, r.dimension, NAMESPACE, "parent", baseline, "second-save", r.authority, r.factory, r.private)
+    assert save_catalog_workspace(*args, approval=save_catalog_workspace(*args)["approval_sha256"])["marker_verified"]
