@@ -213,3 +213,4 @@ def verify_oci_archive(path, references, *, producer_output=False):
         reached.add(identity)
     if reached != set(blobs):
         raise ValueError("OCI archive contains unreferenced payload")
+    return approved_index["manifests"]

@@ -142,6 +142,14 @@ workspaces or **Stay Here** to continue where you are. **Open Workspace** at
 the top of **Rooms** shows the current Catalog and its restored child count.
 Use **Restore missing children…** or expand **Child Rooms** for individual
 folder status. **Refresh Catalog Child Pins** is in the workspace row menu.
+**Save Catalog** in the open workspace creates a recovery point in the same
+Catalog for changes to its files. It keeps the child pins. Save each child
+from its own workspace to capture changes inside that child.
+Use **Explore Room in 3D** on an open workspace or its matching Catalog row.
+On a Catalog or child recovery point, the usual **Inspect Logical JAT**,
+**Extract**, **Export Portable JAT**, and **Serve** actions use that point's
+Catalog repository. OCI and Hauler content is attached to the child that
+captured it.
 Select a restored child to open it, or select a missing child to restore
 and open it. The bulk picker lists missing children only. When an existing Catalog parent opens with a child that is not
 yet on disk, Josh Room offers the checkbox picker once for that folder and

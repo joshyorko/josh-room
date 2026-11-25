@@ -350,6 +350,37 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     assert [row["status"] for row in batch["restored"]] == ["loaded", "hydrated"]
     assert (target / "b").is_dir()
 
+    from josh_room.composition_updates import open_catalog_snapshot, refresh_parent
+    from josh_room.room_store_lifecycle import inspect_catalog_room_store
+
+    (target / "root-edit.txt").write_text("catalog edit\n")
+    (target / "local-only").mkdir()
+    (target / "local-only/private.txt").write_text("local only\n")
+    (target / "a/README.md").write_text("independent child edit\n")
+    parent_save = (r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"], "catalog-save",
+                   {}, r.authority, r.factory, r.private)
+    save_options = {"workspace": target, "save_root": True}
+    preview = refresh_parent(*parent_save, **save_options)
+    (target / "root-edit.txt").write_text("changed after review\n")
+    writes = r.transport.writes
+    with pytest.raises(ValueError, match="approval differs"):
+        refresh_parent(*parent_save, **save_options, approval=preview["approval_sha256"])
+    assert r.transport.writes == writes
+    (target / "root-edit.txt").write_text("catalog edit\n")
+    updated = refresh_parent(*parent_save, **save_options, approval=preview["approval_sha256"])
+    assert updated["marker_verified"]
+    assert json.loads((target / ".josh-room.json").read_text())["snapshot_id"] == updated["snapshot_id"]
+    recovered = r.tmp / "updated-catalog"
+    hydrate_composition(r.dimension, NAMESPACE, "parent", updated["snapshot_id"],
+                        recovered, r.authority, r.factory, r.private)
+    assert (recovered / "root-edit.txt").read_text() == "catalog edit\n"
+    assert (recovered / ".josh-room-composition.json").read_bytes() == (target / ".josh-room-composition.json").read_bytes()
+    assert not (recovered / "a").exists()
+    assert not (recovered / "local-only").exists()
+    with open_catalog_snapshot(r.dimension, NAMESPACE, child["room_id"], child["snapshot_id"],
+                               r.authority, r.factory, r.private) as context:
+        assert inspect_catalog_room_store(context)["logical_jat_id"] == child["snapshot_id"]
+
     from josh_room.composition_retirement import preview_retirement, retire
 
     backend = SimpleNamespace(client=r.transport)
@@ -370,6 +401,7 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
         return retire(*args, approved_plan_sha256=preview["approval_sha256"])
 
     remove("recovery-point", "parent", saved["parent_snapshot_id"])
+    remove("recovery-point", "parent", updated["snapshot_id"])
     catalog = discover_catalogs(backend, r.dimension, r.authority.material)["catalogs"][0]
     assert catalog["recovery_points"] == []
     assert len(catalog["child_rooms"]) == 2
@@ -383,6 +415,10 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
         remove("room", room["room_id"])
     remove("catalog")
     assert discover_catalogs(backend, r.dimension, r.authority.material)["catalogs"] == []
+    with (pytest.raises(ValueError, match="retired"),
+          open_catalog_snapshot(r.dimension, NAMESPACE, child["room_id"], child["snapshot_id"],
+                                r.authority, r.factory, r.private)):
+        pytest.fail("retired Catalog point exposed a store")
 
 
 def test_git_only_child_update_and_historical_cold_hydration(runtime):

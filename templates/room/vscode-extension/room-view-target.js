@@ -42,8 +42,11 @@ function roomViewTargets(folders = []) {
 
 function matchingRoomViewTargets(targets, item) {
   if (!item) return targets;
-  if (item.kind && !["room", "current-room"].includes(item.kind)) return [];
-  const project = item.project || item;
+  if (item.kind && !["room", "current-room", "open-workspace", "catalog-parent", "catalog-child-room"].includes(item.kind)) return [];
+  const project = item.catalog ? {
+    project_id: item.room?.room_id || item.catalog.parent_room_id,
+    composition_namespace: item.catalog.namespace,
+  } : item.project || item;
   const dimension = item.dimension || project.dimension;
   const dimensionId = project.dimension_id || dimension?.id || dimension?.dimension_id;
   const id = project.project_id || project.id;

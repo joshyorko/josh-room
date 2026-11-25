@@ -379,16 +379,25 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
   }
   const preview = await plan(ticket);
   if (ticket.approval && ticket.approval !== preview.approval_sha256) throw new Error("Pending approval changed. Preserve the operation receipt; do not start a blind retry.");
-  const action = kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
+  const action = kind === "catalog" ? "Save Catalog" : kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
+  if (kind === "catalog" && !preview.changed && !pending) {
+    void vscode.window.showInformationMessage("Catalog is already saved.");
+    return { ok: true, status: "unchanged" };
+  }
   const approved = await vscode.window.showWarningMessage(`${action}?`, { modal: true,
-    detail: `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. ${describeComponents(preview.request?.plan, ticket.component_options)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
+    detail: kind === "catalog" ? "Save the Catalog’s files as a new recovery point. It will keep the current child Room pins."
+      : `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. ${describeComponents(preview.request?.plan, ticket.component_options)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
   if (approved !== action) return "cancelled";
   ticket = { ...ticket, approval: preview.approval_sha256, output: preview.snapshot_id };
   const { component_options, ...retryTicket } = ticket;
   await remember(retryTicket);
   const result = await save(ticket);
-  if (!result?.ok || (kind === "child" && !result.marker_verified)) throw new Error("Composition update was not verified. Retain the pending operation for retry.");
+  if (!result?.ok || (kind !== "parent" && !result.marker_verified)) throw new Error("Composition update was not verified. Retain the pending operation for retry.");
   await remember(undefined);
+  if (kind === "catalog") {
+    void vscode.window.showInformationMessage("Catalog saved.");
+    return result;
+  }
   await vscode.window.showInformationMessage(`${kind === "child" ? "Child saved; parent pins unchanged" : "Parent pin published; working folders unchanged"}. Exact recovery point ${result.snapshot_id}.${kind === "child" ? ` ${savedComponents(result.components)}.` : ""}`);
   return result;
 }

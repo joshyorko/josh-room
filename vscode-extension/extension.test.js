@@ -8444,11 +8444,12 @@ test("opening an exact Catalog parent only offers restoration once and makes no 
   assert.match(current.description, /Synthetic Catalog/);
   assert.match(current.description, /0 of 2 restored/);
   const rows = provider.getChildren(current);
-  assert.deepEqual(rows.map(row => row.label), ["Restore missing children…", "Child Rooms"]);
+  assert.deepEqual(rows.map(row => row.label), ["Save Catalog", "Restore missing children…", "Child Rooms"]);
   assert.equal(provider.getTreeItem(current).contextValue, "open-catalog-workspace");
-  assert.equal(provider.getTreeItem(rows[1]).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
-  assert.equal(rows[0].command.command, "joshRoom.restoreCatalogChildren");
-  const children = provider.getChildren(rows[1]);
+  assert.equal(provider.getTreeItem(rows[2]).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+  assert.equal(rows[0].command.command, "joshRoom.save");
+  assert.equal(rows[1].command.command, "joshRoom.restoreCatalogChildren");
+  const children = provider.getChildren(rows[2]);
   assert.deepEqual(children.find(row => row.label === "a").command.arguments, ["a"]);
   assert.equal(children.find(row => row.label === "b").description, "Folder occupied");
   assert.equal(children.find(row => row.label === "b").command, undefined);

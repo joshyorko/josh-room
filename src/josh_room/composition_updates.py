@@ -11,7 +11,9 @@ import os
 import stat
 import sys
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 from .catalog import Catalog, corroborate_logical_snapshot
 from .composition import (
@@ -30,6 +32,7 @@ from .composition_lifecycle import (
     CompositionAdmissionError,
     _admitted_source,
     _capture,
+    _catalog_root_scan,
     _commit,
     _content_digest,
     _copy_paths,
@@ -81,6 +84,28 @@ def _descriptor(authority, state, room, snapshot):
         raise ValueError('descriptor repository differs from namespace')
     _verify_descriptor_contract(state, descriptor)
     return record, descriptor
+
+
+@contextmanager
+def open_catalog_snapshot(dimension, namespace, room, snapshot, authority, store_factory, private):
+    """Resolve a committed Catalog recovery point in its own encrypted repository."""
+    _identifier(snapshot)
+    envelope, _, state = _open(authority, namespace)
+    body = state.to_dict()
+    pins = [pin for op in body['operations'].values() if op['phase'] == 'committed'
+            for pin in (op['parent_pin'], *op['child_pins'].values())]
+    pins.extend(op['pin'] for op in body.get('child_updates', {}).values() if op['phase'] == 'committed')
+    record, descriptor = _descriptor(authority, state, room, snapshot)
+    if not any((pin['room_id'], pin['logical_jat_id'], pin['descriptor_sha256'])
+               == (room, snapshot, record['ciphertext_sha256']) for pin in pins):
+        raise ValueError('selected Catalog recovery point is not committed')
+    with store_factory(envelope['secret']) as store:
+        repository = store.open_existing()
+        if repository.repository_id != envelope['repository_id']:
+            raise ValueError('Catalog snapshot repository differs')
+        yield SimpleNamespace(project_id=room, catalog=Catalog.from_body(body['dimension_catalog']),
+            store=store, private_dir=private, material=authority.material, dimension=dimension,
+            repository_info=repository, selected_record=record, selected_descriptor=descriptor)
 
 
 def _proof(store, descriptor, private):
@@ -444,8 +469,40 @@ def _picker_page(result, key, rows, offset):
     return {**result, key: page, 'next_offset': end if end < len(rows) else None}
 
 
+def _parent_save_view(workspace, private, manifest, policy_sha256, root_files_only):
+    fd = _directory(workspace)
+    try:
+        policy = load_capture_policy(workspace, directory_fd=fd)
+        if policy.sha256 != policy_sha256 or policy.capture_mode != 'source-only' or any(
+            not policy.is_excluded(row['path']) for row in manifest['children']
+        ):
+            raise ValueError('Catalog capture policy differs from the saved parent')
+        if _read_regular(fd, MANIFEST, MAX_BYTES) != canonical(manifest):
+            raise ValueError('local Catalog manifest differs from the saved parent')
+        scan = _catalog_root_scan(policy, fd, []) if root_files_only else scan_workspace_for_status(workspace)
+        records = _records(workspace, scan.paths, fd)
+        paths = set(scan.paths) - {MANIFEST, '.josh-roomignore'}
+        if root_files_only:
+            paths = {path for path in paths if stat.S_ISREG(records[path][2])}
+        for path in paths:
+            validate_payload_path(path)
+        view = private / ('parent-save-view-' + uuid.uuid4().hex)
+        view.mkdir(mode=0o700)
+        ignore, modes = _copy_paths(workspace, view, paths, source_fd=fd, records=records)
+        (view / '.josh-roomignore').write_text(ignore)
+        (view / MANIFEST).write_bytes(canonical(manifest))
+        _finish_view(view, paths | {'.josh-roomignore', MANIFEST}, modes)
+        if load_capture_policy(view).sha256 != policy_sha256:
+            raise ValueError('staged Catalog capture policy differs')
+        if _records(workspace, scan.paths, fd) != records:
+            raise ValueError('Catalog source changed during staging')
+        return view
+    finally:
+        os.close(fd)
+
+
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
-                   authority, store_factory, private, *, approval=None, workspace=None):
+                   authority, store_factory, private, *, approval=None, workspace=None, save_root=False):
     """Publish a new immutable parent from saved bytes and explicitly selected pins."""
     _identifier(operation_id)
     envelope, etag, state = _open(authority, namespace)
@@ -454,17 +511,20 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
         and op['parent_pin']['room_id'] == room and op['parent_pin']['logical_jat_id'] == baseline), None)
     if previous_op is None:
         raise ValueError('parent baseline is not committed')
-    if workspace is not None:
-        _verify_parent_workspace(workspace, authority, room, baseline, previous_op)
     old = body['operations'].get(operation_id)
-    output = 'jat-' + _slot(namespace, 'parent-refresh:' + operation_id)
+    action = 'save-catalog-root' if save_root else 'refresh-parent'
+    output = 'jat-' + _slot(namespace, ('parent-save:' if save_root else 'parent-refresh:') + operation_id)
     if old and (old['plan']['expected_parent_logical_jat_id'], old['plan']['parent_logical_jat_id']) != (baseline, output):
         raise ValueError('operation ID already binds another parent refresh')
+    if workspace is not None:
+        marker_snapshot = context_status(workspace).get('snapshot_id')
+        accepted = output if save_root and old and old['phase'] == 'committed' and marker_snapshot == output else baseline
+        _verify_parent_workspace(workspace, authority, room, accepted, previous_op)
     latest = body['dimension_catalog']['projects'][room]['latest']
     if latest != baseline and not (old and old['phase'] == 'committed' and latest == output):
         raise ValueError('parent latest advanced; select its exact baseline')
     _, previous = _descriptor(authority, state, room, baseline)
-    if not isinstance(pins, dict) or not pins:
+    if not isinstance(pins, dict) or (save_root and (pins or workspace is None)) or (not save_root and not pins):
         raise ValueError('select at least one exact child pin')
     with store_factory(envelope['secret']) as store:
         _repository(store, envelope)
@@ -487,8 +547,17 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
             rows[path]['snapshot_id'] = snapshot
         manifest = validate_manifest(manifest)
         changed = canonical(manifest) != raw
-        request = {'action': 'refresh-parent', 'namespace': namespace, 'binding': authority.binding,
+        request = {'action': action, 'namespace': namespace, 'binding': authority.binding,
                    'operation_id': operation_id, 'room_id': room, 'baseline': baseline, 'pins': pins}
+        if save_root:
+            root_files_only = envelope['request'].get('root_files_only', False)
+            policy_sha256 = previous.to_dict()['capture_policy_sha256']
+            workspace = Path(workspace).resolve(strict=True)
+            saved_content = _content_digest(view)
+            view = _parent_save_view(workspace, private, manifest, policy_sha256, root_files_only)
+            request['content_sha256'] = _content_digest(view)
+            request['workspace_sha256'] = hashlib.sha256(os.fsencode(workspace)).hexdigest()
+            changed = request['content_sha256'] != saved_content
         digest = plan_digest(request)
         if approval is None:
             return {'ok': True, 'status': 'approval-required', 'request': request, 'approval_sha256': digest,
@@ -496,7 +565,8 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
         if approval != digest:
             raise ValueError('parent refresh approval differs')
         if not changed and old is None:
-            return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline, 'catalog_writes': False}
+            return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline, 'catalog_writes': False,
+                    **({'marker_verified': True} if save_root else {})}
         (view / MANIFEST).write_bytes(canonical(manifest))
         scan = scan_workspace_for_status(view)
         plan = {'source_path_sha256': plan_digest(request), 'capture_policy_sha256': scan.capture_policy_sha256,
@@ -542,5 +612,26 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
             _, committed = _descriptor(authority, state, room, output)
             if _content_digest(_proof(store, committed, private)) != _content_digest(view):
                 raise ValueError('committed parent output differs; preserve history')
+        if save_root:
+            fd = _directory(workspace)
+            try:
+                opened = os.fstat(fd)
+                scan = scan_workspace_for_status(workspace)
+                live = _parent_save_view(workspace, private, manifest, policy_sha256, root_files_only)
+                after = scan_workspace_for_status(workspace)
+                _verify_parent_workspace(workspace, authority, room, accepted, previous_op)
+                current = workspace.lstat()
+                if (scan.signature != after.signature or after.capture_policy_sha256 != policy_sha256
+                        or _content_digest(live) != request['content_sha256']
+                        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)):
+                    raise ValueError('Catalog was saved, but its local files changed before the marker could be updated')
+                write_stat_workspace_marker(Path(f'/proc/{os.getpid()}/fd/{fd}'), dimension_id=dimension.dimension_id,
+                    encryption_domain_id=authority.binding['encryption_domain_id'], project_id=room, snapshot_id=output,
+                    display_name=state.to_dict()['dimension_catalog']['projects'][room]['display_name'],
+                    workspace_signature=after.signature, signature_algorithm=after.signature_algorithm,
+                    capture_policy_sha256=after.capture_policy_sha256, path_binding=workspace, composition_namespace=namespace)
+            finally:
+                os.close(fd)
         return {'ok': True, 'status': 'saved', 'namespace': namespace, 'room_id': room,
-                'snapshot_id': output, 'workspace_modified': False, 'previous_parent_snapshot_id': baseline}
+                'snapshot_id': output, 'workspace_modified': save_root, 'previous_parent_snapshot_id': baseline,
+                **({'marker_verified': context_status(workspace).get('snapshot_id') == output} if save_root else {})}

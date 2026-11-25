@@ -601,7 +601,7 @@
         },
         {
           "command": "joshRoom.inspectLogicalSnapshot",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@1"
         },
         {
@@ -621,17 +621,17 @@
         },
         {
           "command": "joshRoom.exportPortableJat",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@2"
         },
         {
           "command": "joshRoom.extractLogicalSnapshot",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@3"
         },
         {
           "command": "joshRoom.serveLogicalSnapshot",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@4"
         },
         {
@@ -671,7 +671,7 @@
         },
         {
           "command": "joshRoom.explore3D",
-          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room || viewItem == open-catalog-workspace || viewItem == open-room-workspace || viewItem == catalog-parent || viewItem == catalog-parent-deletable || viewItem == catalog-child-room)",
           "group": "room@1"
         }
       ]

@@ -533,7 +533,8 @@ def build_parser() -> argparse.ArgumentParser:
             operation.add_argument('--offset', type=int, default=0)
             operation.add_argument('--revision', type=int, help='namespace revision from the child list')
         _json_option(operation)
-    for action in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
+    for action in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins',
+                   'plan-catalog-save', 'save-catalog-root'):
         operation = composition_commands.add_parser(action)
         operation.add_argument('--dimension', required=True)
         operation.add_argument('--namespace', required=True)
@@ -546,9 +547,11 @@ def build_parser() -> argparse.ArgumentParser:
         else:
             operation.add_argument('--parent-room', required=True)
             operation.add_argument('--parent-snapshot', required=True)
-            operation.add_argument('--workspace', type=Path, help='verify the entered parent marker and manifest')
-            operation.add_argument('--set-child', action='append', required=True, help='relative-path=exact-logical-snapshot')
-        if action in ('save-child', 'refresh-parent-pins'):
+            operation.add_argument('--workspace', type=Path, required=action in ('plan-catalog-save', 'save-catalog-root'),
+                                   help='verify the entered parent marker and manifest')
+            if action in ('plan-parent-refresh', 'refresh-parent-pins'):
+                operation.add_argument('--set-child', action='append', required=True, help='relative-path=exact-logical-snapshot')
+        if action in ('save-child', 'refresh-parent-pins', 'save-catalog-root'):
             operation.add_argument('--approve', required=True)
         _json_option(operation)
     context = commands.add_parser("context", help="read offline workspace linkage context")
@@ -658,6 +661,7 @@ def build_parser() -> argparse.ArgumentParser:
         snapshot_action.add_argument("--snapshot", default="latest")
         snapshot_action.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
         snapshot_action.add_argument("--dimension")
+        snapshot_action.add_argument("--namespace", help="authenticated Catalog namespace for this exact recovery point")
         if action == "export":
             snapshot_action.add_argument("--output", type=Path, required=True)
         elif action == "serve":
@@ -1889,7 +1893,8 @@ def dispatch(args, instance: Path) -> dict:
                 if args.composition_command == 'retirement-preview':
                     return preview_retirement(*arguments)
                 return retire(*arguments, approved_plan_sha256=args.approve)
-        if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
+        if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins',
+                                        'plan-catalog-save', 'save-catalog-root'):
             from .composition_lifecycle import provider_runtime
             from .composition_updates import refresh_parent, save_child
             dimension = _effective_dimension(args)
@@ -1904,14 +1909,14 @@ def dispatch(args, instance: Path) -> dict:
                             args.operation_id, authority, factory, private, approval=getattr(args, 'approve', None),
                             component_options=options)
                     pins = {}
-                    for value in args.set_child:
+                    for value in getattr(args, 'set_child', []):
                         path, separator, snapshot = value.rpartition('=')
                         if not separator or path in pins:
                             raise ValueError('select distinct child-path=exact-pin entries')
                         pins[path] = snapshot
                     return refresh_parent(dimension, args.namespace, args.parent_room, args.parent_snapshot,
                         args.operation_id, pins, authority, factory, private, approval=getattr(args, 'approve', None),
-                            workspace=args.workspace)
+                            workspace=args.workspace, save_root=args.composition_command in ('plan-catalog-save', 'save-catalog-root'))
             except Exception:  # noqa: BLE001 - bounded credential-free provider failure boundary.
                 raise ValueError('Composition update could not be verified; preserve source and retry the same operation ID') from None
         if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'enter-children', 'parent-children'):
@@ -2645,21 +2650,37 @@ def dispatch(args, instance: Path) -> dict:
                     return export_archive(material.brew_archive, args.output)
         if args.snapshot_command in {"inspect", "export", "serve", "extract"}:
             jat_root = _jat_root()
-            with _open_room_store_context(
-                args,
-                instance,
-                project_id=args.project,
-                snapshot_id=args.snapshot,
-            ) as context:
+            namespace = getattr(args, 'namespace', None)
+            with ExitStack() as stack:
+                if namespace:
+                    from .composition_lifecycle import provider_runtime
+                    from .composition_updates import open_catalog_snapshot
+
+                    dimension = _effective_dimension(args)
+                    if dimension is None or dimension.provider not in {'r2', 'minio', 's3'}:
+                        raise ValueError('Catalog recovery requires an explicit provider Dimension')
+                    stack.enter_context(sdk_error_boundary(dimension))
+                    authority, factory, private = stack.enter_context(provider_runtime(
+                        instance, dimension, getattr(args, '_selected_encryption_material', None), namespace))
+                    context = stack.enter_context(open_catalog_snapshot(
+                        dimension, namespace, args.project, args.snapshot, authority, factory, private))
+                else:
+                    context = stack.enter_context(_open_room_store_context(
+                        args, instance, project_id=args.project, snapshot_id=args.snapshot))
                 if context.selected_record is None or context.selected_descriptor is None:
                     raise ValueError("selected recovery point is not a native logical JAT")
                 if args.snapshot_command == "inspect":
+                    if namespace:
+                        from .room_store_lifecycle import inspect_catalog_room_store
+
+                        return {"ok": True, **inspect_catalog_room_store(context)}
                     return {"ok": True, **inspect_logical_jat(context.selected_record, context.selected_descriptor)}
                 if args.snapshot_command == "export":
                     return export_logical_jat(
                         context,
                         jat_root=jat_root,
                         output=args.output,
+                        **({"include_agent_recovery": False} if namespace else {}),
                     )
                 if args.snapshot_command == "serve":
                     return serve_logical_jat(context, jat_root=jat_root, mode=args.mode, **_serve_options(args))

@@ -2192,7 +2192,7 @@ async function newRoom() {
     { label: "Configure Catalog Room", id: "catalog" },
   ], { title: "New Room", placeHolder: "Save one Room is the default" });
   if (!choice) return "cancelled";
-  return choice.id === "catalog" ? saveCatalogRoom() : saveRoom({ forceCreate: true });
+  return choice.id === "catalog" ? saveCatalogRoom({ forceCreate: true }) : saveRoom({ forceCreate: true });
 }
 
 async function chooseCatalogComponents(root, label, updating) {
@@ -2243,8 +2243,12 @@ async function prepareCatalogDestination(root, dimension) {
   return initialize === "Initialize Encryption" && await connectEncryption({ dimension }) === "initialized";
 }
 
-async function saveCatalogRoom() {
+async function saveCatalogRoom({ forceCreate = false } = {}) {
   assertWorkspaceTrusted("save a Catalog Room");
+  const current = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!forceCreate && current && currentRoom(current)?.composition_namespace && fs.existsSync(path.join(current, ".josh-room-composition.json"))) {
+    return updateCompositionRoom("catalog");
+  }
   const argsFor = (selection, command) => ["composition", command, "--root-files-only", "--workspace", selection.root,
     "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
     "--parent-room", selection.parentRoom, `--parent-name=${selection.name}`, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
@@ -2576,11 +2580,13 @@ function openWorkspaceRows() {
       children.push(item);
     }
     description = children.length ? `${marker.display_name} · ${restored} of ${children.length} restored` : marker.display_name;
+    actions.push(command("Save Catalog", "save", "joshRoom.save"));
     if (missing) actions.push(command("Restore missing children…", "cloud-download", "joshRoom.restoreCatalogChildren"));
     if (children.length) actions.push({ kind: "workspace-children", id: "open-workspace-children", label: "Child Rooms", children });
   }
   return [{ kind: "open-workspace", id: "open-workspace", label: "Open Workspace",
-    contextValue: isCatalog && !isChild ? "open-catalog-workspace" : undefined, description, children: actions }];
+    contextValue: isCatalog && !isChild ? "open-catalog-workspace" : "open-room-workspace",
+    project: marker, description, children: actions }];
 }
 
 async function offerCatalogChildOnOpen(context) {
@@ -2608,28 +2614,33 @@ async function updateCompositionRoom(kind) {
   if (!marker?.composition_namespace) throw new Error("Open a namespace Room first.");
   const isChild = fs.existsSync(path.join(root, ".josh-room-split.json"));
   if ((kind === "child") !== isChild) throw new Error("Select the child Save or parent pin refresh action for this Room.");
-  if (kind === "child" && (vscode.workspace.textDocuments || []).some((document) => {
+  if (kind !== "parent" && (vscode.workspace.textDocuments || []).some((document) => {
     if (!document.isDirty || document.uri?.scheme !== "file") return false;
     const relative = path.relative(root, document.uri.fsPath);
     return relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-  })) throw new Error("Save the child Room's editor files before capturing its disk content.");
+  })) throw new Error("Save the editor files before creating a recovery point.");
   if (!extensionContext?.workspaceState) throw new Error("The extension operation store is unavailable.");
   const key = `composition.${kind}.${marker.composition_namespace}.${marker.project_id}`;
   const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
   const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
   if (!dimension) throw new Error("The namespace Dimension is not configured.");
   const invoke = (ticket, apply) => {
-    const command = kind === "child" ? (apply ? "save-child" : "plan-child-save") : (apply ? "refresh-parent-pins" : "plan-parent-refresh");
+    const command = kind === "child" ? (apply ? "save-child" : "plan-child-save")
+      : kind === "catalog" ? (apply ? "save-catalog-root" : "plan-catalog-save")
+      : (apply ? "refresh-parent-pins" : "plan-parent-refresh");
     const args = ["composition", command, "--dimension", marker.dimension_id, "--namespace", ticket.namespace, "--operation-id", ticket.operationId,
       ...(kind === "child" ? ["--room", ticket.room, "--child-snapshot", ticket.baseline, "--workspace", root]
-        : ["--workspace", root, "--parent-room", ticket.room, "--parent-snapshot", ticket.baseline, "--set-child", `${ticket.child}=${ticket.pin}`]),
+        : ["--workspace", root, "--parent-room", ticket.room, "--parent-snapshot", ticket.baseline,
+          ...(kind === "parent" ? ["--set-child", `${ticket.child}=${ticket.pin}`] : [])]),
       ...(ticket.component_options ? ["--component-options", JSON.stringify(ticket.component_options)] : []),
       ...(apply ? ["--approve", ticket.approval] : [])];
     return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
   };
-  return require("./catalog-actions").updateRoom(vscode, { marker, kind, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
+  const result = await require("./catalog-actions").updateRoom(vscode, { marker, kind, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     chooseComponents: () => chooseCatalogComponents(root, marker.project_id, true), pending: extensionContext.workspaceState.get(key),
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
+  if (result?.status === "saved" && kind === "catalog") void roomsProvider?.reload().catch(error => outputChannel?.warn(sanitizeControllerText(error.message)));
+  return result;
 }
 
 function agentPartialMatchesReview(receipt, plan, source, dimension, project, domain) {
@@ -2667,8 +2678,7 @@ async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
   if (currentRoom(cwd)?.composition_namespace) {
-    if (options.current && fs.existsSync(path.join(cwd, ".josh-room-split.json"))) return updateCompositionRoom("child");
-    throw new Error("This Room belongs to a composition namespace. Use explicit parent pin refresh; ordinary Save cannot update it.");
+    if (options.current) return updateCompositionRoom(fs.existsSync(path.join(cwd, ".josh-room-split.json")) ? "child" : "catalog");
   }
   const currentMarker = options.current ? currentRoom(cwd) : undefined;
   if (options.current && !currentMarker) {
@@ -3205,6 +3215,25 @@ async function removeSnapshot(preferredProject) {
 async function serveRoom(preferredProject, { startRegistry = startRegistryTerminal } = {}) {
   assertWorkspaceTrusted("serve a Room");
   const cwd = activeWorkspace();
+  const catalogPoint = catalogSnapshotContext(preferredProject);
+  if (catalogPoint) {
+    const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
+      title: `Serve ${catalogPoint.display_name}`, placeHolder: "Choose what to serve", ignoreFocusOut: true,
+    });
+    if (!chosen) return "cancelled";
+    let encryptionMaterial;
+    const dimension = catalogPoint.dimension;
+    if (usesNativeEncryption(dimension.provider)) {
+      const status = await runJoshRoom(["encryption", "status", "--dimension", catalogPoint.dimension_id], cwd);
+      encryptionMaterial = await readEncryptionMaterial({ ...dimension, ...status });
+    }
+    return startRegistry({
+      cwd, title: `Serving ${catalogPoint.display_name}`, terminalName: `JAT: ${catalogPoint.display_name}`,
+      args: logicalSnapshotActionArgs("serve", catalogPoint, ["--mode", chosen.mode]),
+      mode: chosen.mode, encryptionMaterial,
+      retry: () => vscode.commands.executeCommand("joshRoom.serve", preferredProject),
+    });
+  }
   const marker = currentRoom(cwd);
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
@@ -5820,6 +5849,21 @@ function contextSnapshot(context) {
   return snapshots.find((snapshot) => (snapshot.snapshot_id || snapshot.id) === context.snapshot_id);
 }
 
+function catalogSnapshotContext(item) {
+  if (!["catalog-point", "catalog-child-point"].includes(item?.kind)) return undefined;
+  const { catalog, dimension, point, room } = item;
+  const namespace = catalog?.namespace;
+  const projectId = room?.room_id || catalog?.parent_room_id;
+  const snapshot = point?.snapshot_id;
+  const dimensionId = dimension?.id || dimension?.dimension_id;
+  if (!/^[a-f0-9]{32}$/.test(namespace) || !/^[a-z0-9-]+$/.test(projectId) || !/^jat-[a-z0-9-]+$/.test(snapshot)
+      || !/^[a-z0-9][a-z0-9._-]*$/.test(dimensionId)) {
+    throw new Error("Choose an exact Catalog recovery point from Rooms.");
+  }
+  return { project_id: projectId, snapshot_id: snapshot, namespace, dimension, dimension_id: dimensionId,
+    display_name: room?.path || catalog.display_name || "Catalog Room" };
+}
+
 async function selectedLogicalSnapshot(preselected, title, { selectedRowOnly = false } = {}) {
   if (selectedRowOnly) {
     const project = roomProject(preselected);
@@ -5834,9 +5878,9 @@ async function selectedLogicalSnapshot(preselected, title, { selectedRowOnly = f
     }
     return { ...project, project_id: project.id, dimension_id: dimension, snapshot_id: snapshotId };
   }
-  const context = await explicitRoomContext(preselected, title);
+  const context = catalogSnapshotContext(preselected) || await explicitRoomContext(preselected, title);
   if (!context) return undefined;
-  if (contextSnapshot(context)?.payload_kind !== "room-store-v1") {
+  if (!context.namespace && contextSnapshot(context)?.payload_kind !== "room-store-v1") {
     throw new Error("Select a logical Room Store JAT for this action.");
   }
   return context;
@@ -5850,7 +5894,8 @@ function logicalSnapshotActionArgs(action, context, extra = []) {
     throw new Error("Select a trusted Room, Dimension, and JAT.");
   }
   return nativeRegistry.dimensionArgs(
-    ["snapshot", action, projectId, ...extra, "--snapshot", snapshotId],
+    ["snapshot", action, projectId, ...extra, "--snapshot", snapshotId,
+      ...(context.namespace ? ["--namespace", context.namespace] : [])],
     dimension,
   );
 }
