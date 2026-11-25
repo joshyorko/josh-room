@@ -306,7 +306,7 @@ async function enterChild(vscode, { root, marker, listChildren, enter, open, chi
   }
   if (state === "occupied") throw new Error("The child folder is occupied. Choose a new Catalog restore location.");
   const { result, target } = await hydratePinnedChild(root, marker, row, enter);
-  await vscode.window.showInformationMessage(`Child Room verified at exact recovery point ${result.snapshot_id}.`);
+  void vscode.window.showInformationMessage(`Child Room verified at exact recovery point ${result.snapshot_id}.`);
   await open(target);
   return result;
 }

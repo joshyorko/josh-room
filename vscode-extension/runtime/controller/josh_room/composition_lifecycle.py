@@ -1098,6 +1098,9 @@ def save_composition(
         raise CompositionAdmissionError("composition-destination-mismatch",
             "The selected physical destination differs from the approved binding")
     envelope, etag = authority.read()
+    if envelope is not None:
+        from .composition_retirement import require_active
+        require_active(envelope, parent_room)
     if envelope is None:
         envelope = {
             "format": "composition-authority-v1",
@@ -1448,6 +1451,8 @@ def hydrate_composition(
     envelope, _etag = authority.read()
     if envelope is None or envelope["state"] is None:
         raise ValueError("composition namespace is unavailable")
+    from .composition_retirement import require_active
+    require_active(envelope, room, snapshot)
     state = CompositionSafetyState.from_dict(envelope["state"])
     body = state.to_dict()
     operation = next(

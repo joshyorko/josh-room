@@ -331,6 +331,34 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     assert not (target / "b").exists()
     assert not (target / "local").exists()
 
+    from josh_room.composition_retirement import preview_retirement, retire
+
+    backend = SimpleNamespace(client=r.transport)
+    catalog = discovery["catalogs"][0]
+    assert [room["path"] for room in catalog["child_rooms"]] == ["a", "b"]
+    assert all(room["recovery_points"][0]["pinned"] for room in catalog["child_rooms"])
+
+    def remove(kind, room=None, snapshot=None):
+        args = r.authority, NAMESPACE, kind, room, snapshot
+        preview = preview_retirement(*args)
+        assert preview["can_apply"]
+        return retire(*args, approved_plan_sha256=preview["approval_sha256"])
+
+    remove("recovery-point", "parent", saved["parent_snapshot_id"])
+    catalog = discover_catalogs(backend, r.dimension, r.authority.material)["catalogs"][0]
+    assert catalog["recovery_points"] == []
+    assert len(catalog["child_rooms"]) == 2
+    with pytest.raises(ValueError, match="retired"):
+        hydrate_composition(r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
+                            r.tmp / "retired-parent", r.authority, r.factory, r.private)
+    for room in catalog["child_rooms"]:
+        for point in room["recovery_points"]:
+            assert not point["pinned"]
+            remove("recovery-point", room["room_id"], point["snapshot_id"])
+        remove("room", room["room_id"])
+    remove("catalog")
+    assert discover_catalogs(backend, r.dimension, r.authority.material)["catalogs"] == []
+
 
 def test_git_only_child_update_and_historical_cold_hydration(runtime):
     from josh_room.composition_updates import refresh_parent, save_child

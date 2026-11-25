@@ -457,3 +457,18 @@ test("Catalog parents and exact points are separate from ordinary Rooms", () => 
   assert.deepEqual(parent.children[0].children.map(row => [row.kind, row.child, row.point.snapshot_id]),
     [["catalog-child", "a", "jat-new"], ["catalog-child", "b", "jat-new"], ["catalog-child", "c", "jat-new"]]);
 });
+
+test("a Catalog with no parent points keeps its child Rooms visible for deletion", () => {
+  const rows = buildProviderTree({ dimensions: [{ id: "synthetic", provider: "minio",
+    catalogs: [{ namespace: "1".repeat(32), parent_room_id: "parent", display_name: "Example",
+      recovery_points: [], child_rooms: [{ room_id: "child", path: "one", recovery_points: [
+        { snapshot_id: "jat-child", created_at: "2026-01-02T00:00:00Z", pinned: false },
+      ] }] }],
+  }] });
+  const parent = rows[0].children[0].children[0].children[0];
+  assert.equal(parent.label, "Example");
+  assert.equal(parent.description, "No recovery points");
+  const [room] = parent.children[0].children;
+  assert.equal(room.label, "one");
+  assert.equal(room.children[0].point.snapshot_id, "jat-child");
+});

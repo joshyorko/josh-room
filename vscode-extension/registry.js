@@ -291,23 +291,37 @@ function catalogNodes(dimension) {
     const points = records(catalog.recovery_points, "snapshot_id").filter(point => /^jat-[a-z0-9-]+$/.test(point.snapshot_id)
       && Number.isFinite(Date.parse(point.created_at)))
       .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-    if (!points.length) return [];
+    const children = records(catalog.child_rooms, "room_id");
+    const retirement = Array.isArray(catalog.child_rooms);
+    if (!points.length && !retirement) return [];
     const parent = {
       kind: "catalog-parent", id: `${catalog.namespace}:${catalog.parent_room_id}`,
       label: catalog.display_name || "Catalog Room",
-      description: new Date(points[0].created_at).toLocaleString(),
-      catalog, dimension,
+      description: points.length ? new Date(points[0].created_at).toLocaleString() : "No recovery points",
+      catalog, dimension, retirement,
     };
     parent.children = points.map(point => {
       const entry = {
         kind: "catalog-point", id: `${parent.id}:${point.snapshot_id}`,
         label: new Date(point.created_at).toLocaleString(),
         description: `${point.child_count} child ${point.child_count === 1 ? "Room" : "Rooms"}`,
-        catalog, point, dimension,
+        catalog, point, dimension, retirement,
       };
       entry.children = (Array.isArray(point.children) ? point.children : []).filter(child => typeof child === "string")
         .map(child => ({ kind: "catalog-child", id: `${entry.id}:${child}`, label: child, catalog, point, dimension, child }));
       return entry;
+    });
+    if (children.length) parent.children.push({
+      kind: "catalog-child-history", id: `${parent.id}:history`, label: "Child Rooms", description: String(children.length),
+      children: children.map(room => ({
+        kind: "catalog-child-room", id: `${parent.id}:room:${room.room_id}`, label: room.path,
+        description: `${room.recovery_points.length} recovery points`, catalog, dimension, room,
+        children: room.recovery_points.map(point => ({
+          kind: "catalog-child-point", id: `${parent.id}:${room.room_id}:${point.snapshot_id}`,
+          label: new Date(point.created_at).toLocaleString(), description: point.pinned ? "Pinned" : "",
+          catalog, dimension, room, point,
+        })),
+      })),
     });
     return [parent];
   });

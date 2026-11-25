@@ -143,6 +143,16 @@ recovery point. Each restore requires an explicit choice and never overwrites
 an occupied child. If discovery is marked incomplete, the receipt and CLI
 still allow restoring a known exact recovery point.
 
+In **Rooms**, use **Delete…** on the exact Catalog recovery point, child
+recovery point, child Room, or Catalog. Every saved Catalog recovery point
+protects the child recovery points it pins. Delete the parent recovery points
+to release those pins. Then delete child recovery points and their empty
+Rooms. The Catalog can be deleted after its last child Room and recovery
+point are gone. Deletion removes the selected item from discovery and blocks
+future restores of it. Existing local folders and encrypted payloads remain
+in place. After deleting the newest point, you can restore older points.
+Save and pin refresh still require the recorded baseline.
+
 ## Selecting child components
 
 The initial default is workspace only. For a selected child, Catalog Save can

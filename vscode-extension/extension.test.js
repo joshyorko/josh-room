@@ -8420,3 +8420,47 @@ test("opening an exact Catalog parent only offers restoration once and makes no 
   await extension.__test__.offerCatalogChildOnOpen(context);
   assert.deepEqual(calls, [["This Catalog has child Rooms available to restore.", "Choose child Rooms"]]);
 });
+
+test("Catalog sidebar deletion shows dependencies and applies only the previewed approved target", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-delete-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode } = fixture;
+  const namespace = "1".repeat(32);
+  const dimension = { id: "fixture", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" };
+  const target = { kind: "recovery-point", room: "child", snapshot: "jat-exact" };
+  const approval = "b".repeat(64);
+  const expected = ["--dimension", dimension.id, "--namespace", namespace, "--kind", target.kind,
+    "--room", target.room, "--snapshot", target.snapshot];
+  const operations = [];
+  let canApply = false;
+  const harness = createSpawnHarness(({ args }) => {
+    if (args[0] === "encryption") return { stdout: JSON.stringify({ ok: true, ...dimension, key_generation: 1 }) };
+    if (args[0] !== "composition") return { stdout: JSON.stringify({ ok: true, dimensions: [] }) };
+    operations.push(args[1]);
+    if (args[1] === "retirement-preview") {
+      assert.deepEqual(args.slice(2), [...expected, "--json"]);
+      return { stdout: JSON.stringify({ ok: true, can_apply: canApply, approval_sha256: approval, physical_deletion: false,
+        plan: { namespace, binding: { dimension_id: dimension.id }, target, blockers: [{ reason: "retained-parent-pin" }] } }) };
+    }
+    assert.deepEqual(args.slice(2), [...expected, "--approve", approval, "--json"]);
+    return { stdout: JSON.stringify({ ok: true, status: "retired", namespace, target, physical_deletion: false }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
+  const remove = fixture.commandCallbacks.get("joshRoom.deleteCatalogItem");
+  const item = { kind: "catalog-child-point", dimension, catalog: { namespace, parent_room_id: "parent" },
+    point: { snapshot_id: target.snapshot }, room: { room_id: target.room }, label: "Synthetic point" };
+  vscode.window.showWarningMessage = async message => assert.match(message, /still pins/);
+  assert.equal(await remove(item), "blocked");
+  canApply = true;
+  vscode.window.showWarningMessage = async () => undefined;
+  assert.equal(await remove(item), "cancelled");
+  vscode.window.showWarningMessage = async (_, options, action) => {
+    assert.match(options.detail, /Encrypted payloads remain/);
+    return action;
+  };
+  assert.equal((await remove(item)).status, "retired");
+  assert.deepEqual(operations, ["retirement-preview", "retirement-preview", "retirement-preview", "retire"]);
+});

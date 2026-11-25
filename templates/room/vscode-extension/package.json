@@ -70,6 +70,7 @@
     "onCommand:joshRoom.splitWorkspace",
     "onCommand:joshRoom.saveCatalog",
     "onCommand:joshRoom.restoreCatalog",
+    "onCommand:joshRoom.deleteCatalogItem",
     "onCommand:joshRoom.restoreCatalogChildren",
     "onCommand:joshRoom.enterChild",
     "onCommand:joshRoom.saveChild",
@@ -334,6 +335,11 @@
         "title": "Josh: Restore Catalog Room"
       },
       {
+        "command": "joshRoom.deleteCatalogItem",
+        "title": "Delete…",
+        "icon": "$(trash)"
+      },
+      {
         "command": "joshRoom.restoreCatalogChildren",
         "title": "Josh: Restore Catalog Child Rooms…"
       },
@@ -466,10 +472,21 @@
           "group": "4_load"
         }
       ],
+      "commandPalette": [
+        {
+          "command": "joshRoom.deleteCatalogItem",
+          "when": "false"
+        }
+      ],
       "view/item/context": [
         {
+          "command": "joshRoom.deleteCatalogItem",
+          "when": "view == joshRoom.rooms && (viewItem == catalog-parent-deletable || viewItem == catalog-point-deletable || viewItem == catalog-child-room || viewItem == catalog-child-point)",
+          "group": "catalog@2"
+        },
+        {
           "command": "joshRoom.restoreCatalogChildren",
-          "when": "view == joshRoom.rooms && (viewItem == catalog-parent || viewItem == catalog-point)",
+          "when": "view == joshRoom.rooms && (viewItem == catalog-parent || viewItem == catalog-point || viewItem == catalog-parent-deletable || viewItem == catalog-point-deletable)",
           "group": "catalog@1"
         },
         {

@@ -2250,7 +2250,7 @@ async function saveCatalogRoom() {
     "--parent-room", selection.parentRoom, `--parent-name=${selection.name}`, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
       ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : []),
       ...(row.component_options ? ["--child-components", row.path, JSON.stringify(row.component_options)] : [])])];
-  const result = await require("./catalog-actions").saveCatalog(vscode, {
+  return require("./catalog-actions").saveCatalog(vscode, {
     selectChildren: root => require("./catalog-selection").selectCatalogChildren(vscode, root),
     chooseComponents: async sources => {
       const selected = await require("./component-picker").pickComponents(vscode, sources[0],
@@ -2266,13 +2266,15 @@ async function saveCatalogRoom() {
       return runSelectedEncryption(argsFor(selection, "capture-plan"), root, dimension,
         { title: "Checking Catalog Room…", action: "preview a Catalog Room" });
     },
-    save: (selection, approval) => runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"], selection.root,
-      selection.dimension, { title: "Saving Catalog Room…", action: "save a Catalog Room" }),
+    save: async (selection, approval) => {
+      const result = await runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"],
+        selection.root, selection.dimension, { title: "Saving Catalog Room…", action: "save a Catalog Room" });
+      if (result?.ok && roomsProvider?.reload) {
+        void roomsProvider.reload().catch(error => outputChannel?.warn(sanitizeControllerText(error.message)));
+      }
+      return result;
+    },
   });
-  if (result?.ok && roomsProvider?.reload) {
-    void roomsProvider.reload().catch(error => outputChannel?.warn(sanitizeControllerText(error.message)));
-  }
-  return result;
 }
 
 async function restoreCatalogRoom(item, restoreChildren = false) {
@@ -2289,7 +2291,7 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
   }
   if (!item) return "cancelled";
   const selection = item.kind === "catalog-parent"
-    ? (await vscode.window.showQuickPick(item.children.map(point => ({
+    ? (await vscode.window.showQuickPick(item.children.filter(point => point.kind === "catalog-point").map(point => ({
       label: point.label, description: point.description, point,
     })), { title: "Choose an exact Catalog recovery point" }))?.point : item;
   if (!selection) return "cancelled";
@@ -2349,6 +2351,76 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
     await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, undefined, true);
   }
   await vscode.commands.executeCommand("vscode.openFolder", destination, false);
+  return result;
+}
+
+async function deleteCatalogItem(item) {
+  const kind = {
+    "catalog-parent": "catalog",
+    "catalog-point": "recovery-point",
+    "catalog-child-room": "room",
+    "catalog-child-point": "recovery-point",
+  }[item?.kind];
+  if (!kind) return "cancelled";
+  const root = activeWorkspace();
+  const { catalog, dimension, point, room } = item;
+  const dimensionId = dimension?.id || dimension?.dimension_id;
+  const namespace = catalog?.namespace;
+  const target = { kind, room: kind === "catalog" ? null : room?.room_id || catalog?.parent_room_id,
+    snapshot: kind === "recovery-point" ? point?.snapshot_id : null };
+  if (!dimensionId || !/^[a-f0-9]{32}$/.test(namespace) || (kind !== "catalog" && !target.room)
+      || (kind === "recovery-point" && !/^jat-[a-z0-9-]+$/.test(target.snapshot))) {
+    throw new Error("Choose a saved Catalog item from Rooms.");
+  }
+  const isOpen = () => {
+    const marker = deletionWorkspaceMarker(root);
+    return marker?.dimension_id === dimensionId && marker.composition_namespace === namespace
+      && (!target.room || marker.project_id === target.room)
+      && (!target.snapshot || marker.snapshot_id === target.snapshot);
+  };
+  const blocked = () => {
+    void vscode.window.showWarningMessage("This Catalog item is open. Switch workspaces before deleting it.");
+    return "blocked";
+  };
+  if (isOpen()) return blocked();
+  const args = ["--dimension", dimensionId, "--namespace", namespace, "--kind", kind,
+    ...(target.room ? ["--room", target.room] : []), ...(target.snapshot ? ["--snapshot", target.snapshot] : [])];
+  const matches = row => row?.kind === kind && row.room === target.room && row.snapshot === target.snapshot;
+  const preview = await runSelectedEncryption(["composition", "retirement-preview", ...args], root, dimension,
+    { title: "Checking Catalog dependencies…", action: "check Catalog deletion" });
+  if (!preview?.ok || preview.plan?.namespace !== namespace || preview.plan?.binding?.dimension_id !== dimensionId
+      || !matches(preview.plan.target) || preview.physical_deletion !== false) {
+    throw new Error("The controller could not verify the selected Catalog item.");
+  }
+  if (preview.can_apply !== true) {
+    const messages = {
+      "incomplete-reservation": "Finish the pending Catalog operation first.",
+      "incomplete-capture-claim": "Finish the pending Catalog capture first.",
+      "retained-parent-pin": "A saved Catalog recovery point still pins this child recovery point.",
+      "room-not-empty": "Delete this child Room’s recovery points first.",
+      "catalog-has-child-rooms": "Delete the child Rooms first.",
+      "catalog-has-recovery-points": "Delete the Catalog recovery points first.",
+    };
+    void vscode.window.showWarningMessage(preview.plan.blockers?.map(row => messages[row.reason]).filter(Boolean).join(" ")
+      || "This item has Catalog dependencies that block deletion.");
+    return "blocked";
+  }
+  if (!/^[a-f0-9]{64}$/.test(preview.approval_sha256)) throw new Error("The controller did not provide an exact deletion approval.");
+  const unit = { catalog: "Catalog", room: "Child Room", "recovery-point": "Recovery Point" }[kind];
+  const action = `Delete ${unit}`;
+  const answer = await vscode.window.showWarningMessage(`${action} ${item.label}?`, {
+    modal: true, detail: "This removes the item from Rooms and disables restoration. Encrypted payloads remain in storage.",
+  }, action);
+  if (answer !== action) return "cancelled";
+  if (isOpen()) return blocked();
+  const result = await runSelectedEncryption(["composition", "retire", ...args, "--approve", preview.approval_sha256],
+    root, dimension, { title: `Deleting ${unit}…`, action: "delete a Catalog item" });
+  if (!result?.ok || result.status !== "retired" || result.namespace !== namespace || !matches(result.target)) {
+    throw new Error("The controller could not verify the Catalog deletion. Refresh Rooms before retrying.");
+  }
+  try { await roomsProvider?.reload(); }
+  catch (error) { outputChannel?.warn(sanitizeControllerText(error.message)); }
+  void vscode.window.showInformationMessage(`${unit} deleted from Rooms.`);
   return result;
 }
 
@@ -3961,6 +4033,7 @@ function activate(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
+  register(context, "joshRoom.deleteCatalogItem", deleteCatalogItem);
   register(context, "joshRoom.enterChild", childPath => enterChildRoom(false, childPath));
   register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
@@ -5293,9 +5366,15 @@ class HierarchyRoomsProvider {
     );
     if (["catalog-parent", "catalog-point", "catalog-child"].includes(item.kind)) {
       treeItem.iconPath = new vscode.ThemeIcon({ "catalog-parent": "library", "catalog-point": "history", "catalog-child": "folder" }[item.kind]);
-      treeItem.command = { command: "joshRoom.restoreCatalog", title: item.kind === "catalog-child" ? "Enter Child Room" : "Restore Catalog Room", arguments: [item] };
+      if (item.kind !== "catalog-parent" || item.children.some(row => row.kind === "catalog-point")) {
+        treeItem.command = { command: "joshRoom.restoreCatalog", title: item.kind === "catalog-child" ? "Enter Child Room" : "Restore Catalog Room", arguments: [item] };
+      }
+      if (item.retirement) treeItem.contextValue = `${item.kind}-deletable`;
       treeItem.tooltip = [item.label, item.description].filter(Boolean).join(" · ");
       return treeItem;
+    }
+    if (["catalog-child-history", "catalog-child-room", "catalog-child-point"].includes(item.kind)) {
+      treeItem.iconPath = new vscode.ThemeIcon({ "catalog-child-history": "folder-library", "catalog-child-room": "folder", "catalog-child-point": "history" }[item.kind]);
     }
     if (item.kind === "catalog-partial") treeItem.iconPath = new vscode.ThemeIcon("warning");
     if (item.kind === "dimension") {
@@ -6453,6 +6532,7 @@ function activateNative(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
+  register(context, "joshRoom.deleteCatalogItem", deleteCatalogItem);
   register(context, "joshRoom.enterChild", childPath => enterChildRoom(false, childPath));
   register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));

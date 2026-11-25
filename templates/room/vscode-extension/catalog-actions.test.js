@@ -186,7 +186,7 @@ const childHistory = { ...children, child_path: "projects/a", child_room_id: "a"
   recovery_points: [{ snapshot_id: "jat-child-new", created_at: "new" }] };
 
 test("whole child opens only after verified immutable entry", async () => {
-  const vscode = { window: { showQuickPick: async rows => rows[0], showInformationMessage: async () => {} } };
+  const vscode = { window: { showQuickPick: async rows => rows[0], showInformationMessage: () => new Promise(() => {}) } };
   let opened;
   const args = { root: "/synthetic/root", marker: parentMarker, listChildren: async () => children,
     enter: async selection => {

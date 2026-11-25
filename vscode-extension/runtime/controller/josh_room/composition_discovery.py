@@ -11,12 +11,37 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from .catalog import Catalog
 from .composition_authority import CompositionAuthority
+from .composition_retirement import active_inventory
 
 _PREFIX = "composition/v1/"
 _PAGE_SIZE = 16
 _MAX_PAGES = 4
 _MAX_POINTS = 64
 _CHILD_LABEL_BUDGET = 12 * 1024
+_CHILD_HISTORY_BUDGET = 12 * 1024
+
+
+def _child_history(parent, operations, active_rooms, projects):
+    paths = {}
+    pinned = set()
+    active_points = set(active_rooms[parent]["recovery_points"])
+    for operation in operations:
+        if operation["phase"] != "committed" or operation["parent_pin"]["room_id"] != parent:
+            continue
+        for path, pin in operation["child_pins"].items():
+            room = pin["room_id"]
+            if room not in active_rooms:
+                continue
+            paths[room] = path
+            if operation["parent_pin"]["logical_jat_id"] in active_points:
+                pinned.add((room, pin["logical_jat_id"]))
+    return [{
+        "room_id": room, "path": path, "recovery_points": [{
+            "snapshot_id": snapshot,
+            "created_at": projects[room]["snapshots"][snapshot]["created_at"],
+            "pinned": (room, snapshot) in pinned,
+        } for snapshot in active_rooms[room]["recovery_points"]],
+    } for room, path in sorted(paths.items(), key=lambda item: item[1])]
 
 
 def discover_catalogs(backend, dimension, material):
@@ -28,6 +53,7 @@ def discover_catalogs(backend, dimension, material):
     cursor = None
     points = 0
     child_label_bytes = 0
+    child_history_bytes = 0
     with TemporaryDirectory(prefix="josh-room-catalog-list-") as tmp:
         for _ in range(_MAX_PAGES):
             try:
@@ -53,14 +79,22 @@ def discover_catalogs(backend, dimension, material):
                     state = (envelope or {}).get("state")
                     if state is None:
                         continue
+                    inventory = active_inventory(envelope)
+                    if not inventory["catalog_active"]:
+                        continue
+                    active_rooms = inventory["rooms"]
                     catalog = Catalog.from_body(state["dimension_catalog"])
-                    parents = {}
-                    for operation in state["operations"].values():
+                    operations = state["operations"].values()
+                    parents = {op["parent_pin"]["room_id"]: {} for op in operations
+                               if op["phase"] == "committed" and op["parent_pin"]["room_id"] in active_rooms}
+                    for operation in operations:
                         if operation["phase"] != "committed":
                             continue
                         pin = operation["parent_pin"]
                         parent = pin["room_id"]
                         snapshot = pin["logical_jat_id"]
+                        if parent not in parents or snapshot not in active_rooms[parent]["recovery_points"]:
+                            continue
                         record = catalog.resolve_snapshot(parent, snapshot)
                         if record["ciphertext_sha256"] != pin["descriptor_sha256"]:
                             raise ValueError("Catalog parent pin differs from its record")
@@ -81,11 +115,19 @@ def discover_catalogs(backend, dimension, material):
                         available = _MAX_POINTS - points
                         if len(newest) > available:
                             result["catalog_discovery_partial"] = True
-                        if not available:
+                        if not available and newest:
                             return result
-                        catalogs.append({"namespace": namespace, "parent_room_id": parent,
-                                         "display_name": catalog.body["projects"][parent]["display_name"],
-                                         "recovery_points": newest[:available]})
+                        projects = catalog.body["projects"]
+                        entry = {"namespace": namespace, "parent_room_id": parent,
+                                 "display_name": projects[parent]["display_name"], "recovery_points": newest[:available]}
+                        history = _child_history(parent, operations, active_rooms, projects)
+                        history_size = len(json.dumps(history))
+                        if child_history_bytes + history_size <= _CHILD_HISTORY_BUDGET:
+                            entry["child_rooms"] = history
+                            child_history_bytes += history_size
+                        else:
+                            result["catalog_discovery_partial"] = True
+                        catalogs.append(entry)
                         points += min(len(newest), available)
                 except (BotoCoreError, ClientError, KeyError, OSError, RuntimeError, ValueError):
                     result["catalog_discovery_partial"] = True

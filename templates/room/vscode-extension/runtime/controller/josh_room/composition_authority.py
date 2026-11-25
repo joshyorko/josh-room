@@ -104,6 +104,7 @@ class CompositionAuthority:
         return body, etag
 
     def validate(self, body):
+        version2 = isinstance(body, dict) and body.get('format') == 'composition-authority-v2'
         if (
             not isinstance(body, dict)
             or set(body)
@@ -116,8 +117,8 @@ class CompositionAuthority:
                 "repository_id",
                 "state",
                 "capture_claims",
-            }
-            or body["format"] != "composition-authority-v1"
+            } | ({'retirements'} if version2 else set())
+            or body["format"] not in ("composition-authority-v1", "composition-authority-v2")
             or body["namespace"] != self.namespace
             or body["binding"] != self.binding
             or not isinstance(body["secret"], str)
@@ -152,9 +153,32 @@ class CompositionAuthority:
                 raise ValueError(
                     "composition state belongs to another namespace authority"
                 )
+        if version2:
+            from .composition_retirement import validate_retirements
+            validate_retirements(body)
 
     def put(self, body, expected_etag):
         self.validate(body)
+        previous, observed_etag = self.read()
+        if observed_etag != expected_etag:
+            raise ValueError('composition authority changed before CAS')
+        if previous is None and body['format'] == 'composition-authority-v2':
+            raise ValueError('retirement requires an existing authority')
+        if previous is not None:
+            old = previous.get('retirements', [])
+            new = body.get('retirements', [])
+            if new[:len(old)] != old or len(new) < len(old) or len(new) > len(old) + 1:
+                raise ValueError('retirement history is immutable')
+            if previous['format'] == 'composition-authority-v2' and body['format'] != previous['format']:
+                raise ValueError('retirement authority cannot be downgraded')
+            if len(new) != len(old):
+                before = {key: value for key, value in previous.items() if key not in ('format', 'retirements')}
+                after = {key: value for key, value in body.items() if key not in ('format', 'retirements')}
+                if before != after:
+                    raise ValueError('retirement cannot rewrite historical authority')
+            elif old:
+                from .composition_retirement import validate_active_transition
+                validate_active_transition(previous, body)
         if len(canonical(body)) > LIMIT // 2:
             raise ValueError("composition authority exceeds size limit")
         path = self.private / "authority-write.age"
@@ -204,7 +228,13 @@ class CompositionAuthority:
             path.unlink(missing_ok=True)
 
     def descriptor(self, record):
+        from .composition_retirement import require_active
         from .logical_jat import LogicalJat
+
+        envelope, _ = self.read()
+        if envelope is None:
+            raise ValueError('composition authority is unavailable')
+        require_active(envelope, record['room_id'], record['snapshot_id'])
 
         key = record["object_key"]
         if re.fullmatch("objects/sha256/[a-f0-9]{64}", key) is None:

@@ -57,15 +57,20 @@ from .workspace_state import context_status, write_stat_workspace_marker
 
 
 def _open(authority, namespace):
+    from .composition_retirement import require_active
     if not sys.platform.startswith('linux') or namespace != authority.namespace:
         raise ValueError('namespace updates require the selected Linux authority')
     envelope, etag = authority.read()
     if envelope is None or envelope['state'] is None:
         raise ValueError('namespace is unavailable')
+    require_active(envelope)
     return envelope, etag, CompositionSafetyState.from_dict(envelope['state'])
 
 
 def _descriptor(authority, state, room, snapshot):
+    from .composition_retirement import require_active
+    envelope, _ = authority.read()
+    require_active(envelope, room, snapshot)
     _identifier(room)
     _identifier(snapshot)
     record = Catalog.from_body(state.to_dict()['dimension_catalog']).resolve_snapshot(room, snapshot)
@@ -376,9 +381,13 @@ def _verify_parent_workspace(workspace, authority, room, snapshot, operation):
 
 def parent_children(workspace, authority, namespace, room, snapshot, *, child_path=None, offset=0, revision=None):
     """Read immutable choices for the exact entered parent from its namespace ledger."""
-    _, _, state = _open(authority, namespace)
+    envelope, _, state = _open(authority, namespace)
+    from .composition_retirement import active_inventory, require_active
+    require_active(envelope, room, snapshot)
+    active = active_inventory(envelope)['rooms']
     body = state.to_dict()
-    if ((revision is not None and revision != body['revision'])
+    picker_revision = body['revision'] + len(envelope.get('retirements', []))
+    if ((revision is not None and revision != picker_revision)
             or (offset or child_path is not None) and revision is None):
         raise CompositionAdmissionError('composition-picker-stale', 'Catalog choices changed; reopen the picker')
     committed = [op for op in body['operations'].values() if op['phase'] == 'committed']
@@ -395,9 +404,11 @@ def parent_children(workspace, authority, namespace, room, snapshot, *, child_pa
         if update['phase'] == 'committed':
             pin = update['pin']
             history.setdefault(pin['room_id'], set()).add(pin['logical_jat_id'])
+    history = {child: points.intersection(active.get(child, {}).get('recovery_points', []))
+               for child, points in history.items()}
     projects = body['dimension_catalog']['projects']
     result = {'ok': True, 'namespace': namespace, 'parent_room_id': room, 'parent_snapshot_id': snapshot,
-              'revision': body['revision'], 'current_parent': projects[room]['latest'] == snapshot}
+              'revision': picker_revision, 'current_parent': active[room]['latest'] == snapshot}
     if child_path is None:
         rows = [{'path': path, 'room_id': pin['room_id'], 'snapshot_id': pin['logical_jat_id'],
                  'other_point_count': len(history[pin['room_id']]) - 1}
