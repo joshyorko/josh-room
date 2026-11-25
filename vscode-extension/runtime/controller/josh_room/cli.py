@@ -558,6 +558,10 @@ def build_parser() -> argparse.ArgumentParser:
         if action in ('save-child', 'refresh-parent-pins', 'save-catalog-root', 'save-whole-catalog'):
             operation.add_argument('--approve', required=True)
         _json_option(operation)
+    save_intent = composition_commands.add_parser("save-intent", help="inspect a pending whole-Catalog Save")
+    save_intent.add_argument("--dimension", required=True)
+    save_intent.add_argument("--namespace", required=True)
+    _json_option(save_intent)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
     _json_option(context)
@@ -1897,9 +1901,23 @@ def dispatch(args, instance: Path) -> dict:
                 if args.composition_command == 'retirement-preview':
                     return preview_retirement(*arguments)
                 return retire(*arguments, approved_plan_sha256=args.approve)
+        if args.composition_command == "save-intent":
+            from .composition_lifecycle import provider_runtime
+            from .composition_updates import inspect_catalog_save
+
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in ("minio", "s3", "r2"):
+                raise ValueError("Save intent inspection requires an explicit provider Dimension")
+            with sdk_error_boundary(dimension), provider_runtime(
+                    instance, dimension, getattr(args, "_selected_encryption_material", None),
+                    args.namespace, authority_only=True) as (authority, _factory, _private):
+                return inspect_catalog_save(authority, args.namespace)
         if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins',
                                         'plan-catalog-save', 'save-catalog-root', 'plan-whole-catalog-save', 'save-whole-catalog'):
-            from .composition_lifecycle import provider_runtime
+            from .composition_lifecycle import (
+                CompositionAdmissionError,
+                provider_runtime,
+            )
             from .composition_updates import (
                 refresh_parent,
                 save_catalog_workspace,
@@ -1929,6 +1947,8 @@ def dispatch(args, instance: Path) -> dict:
                     return refresh_parent(dimension, args.namespace, args.parent_room, args.parent_snapshot,
                         args.operation_id, pins, authority, factory, private, approval=getattr(args, 'approve', None),
                             workspace=args.workspace, save_root=args.composition_command in ('plan-catalog-save', 'save-catalog-root'))
+            except (CLICancelled, CompositionAdmissionError):
+                raise
             except Exception:  # noqa: BLE001 - bounded credential-free provider failure boundary.
                 raise ValueError('Composition update could not be verified; preserve source and retry the same operation ID') from None
         if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child', 'enter-children', 'parent-children'):

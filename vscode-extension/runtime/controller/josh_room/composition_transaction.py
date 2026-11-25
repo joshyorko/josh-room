@@ -31,6 +31,7 @@ def reserve(catalog, scope, operation_id, plan, *, previous=None):
     operation. Reusing an operation ID with any changed plan is refused.
     """
     _identifier(operation_id)
+    validate = CompositionSafetyState.from_dict if previous is None else previous.replace
     if previous is None:
         body = {"format_version": 4, "contract": "composition-safety-v1",
                 "scope": copy.deepcopy(scope), "revision": catalog.body["revision"],
@@ -50,14 +51,14 @@ def reserve(catalog, scope, operation_id, plan, *, previous=None):
     if existing is not None:
         if existing["plan"] != plan:
             raise ValueError("operation ID already binds another plan")
-        return CompositionSafetyState.from_dict(body)
+        return validate(body)
     body["operations"][operation_id] = operation
     body["revision"] += 1
-    return CompositionSafetyState.from_dict(body)
+    return validate(body)
 
 
 def _operation(state, operation_id, approved_plan_sha256):
-    body = CompositionSafetyState.from_dict(state.to_dict()).to_dict()
+    body = state.replace(state.to_dict()).to_dict()
     operation = body["operations"].get(operation_id)
     if operation is None or operation["plan_sha256"] != approved_plan_sha256:
         raise ValueError("operation or approved plan differs")
@@ -85,11 +86,11 @@ def record_child(state, operation_id, approved_plan_sha256, path, *,
     slot = next((row for row in operation["plan"]["children"] if row["path"] == path), None)
     if slot is None:
         raise ValueError("child slot is not reserved")
-    return _record(body, operation, slot, descriptor, object_ref,
+    return _record(state, body, operation, slot, descriptor, object_ref,
                    workspace_signature, display_name, child_path=path)
 
 
-def _record(body, operation, slot, descriptor, object_ref, signature, name, *, child_path=None):
+def _record(state, body, operation, slot, descriptor, object_ref, signature, name, *, child_path=None):
     value = descriptor.to_dict()
     if value["room_id"] != slot["room_id"] or value["logical_jat_id"] != slot["logical_jat_id"]:
         raise ValueError("descriptor differs from reserved slot")
@@ -125,7 +126,7 @@ def _record(body, operation, slot, descriptor, object_ref, signature, name, *, c
     if existing_pin is not None:
         if existing_pin != pin or catalog.resolve_snapshot(slot["room_id"], slot["logical_jat_id"]) != record:
             raise ValueError("immutable recorded output differs")
-        return CompositionSafetyState.from_dict(body)
+        return state.replace(body)
     if child_path is not None:
         if operation["phase"] != "reserved":
             raise ValueError("child cannot be recorded in this phase")
@@ -139,7 +140,7 @@ def _record(body, operation, slot, descriptor, object_ref, signature, name, *, c
         operation["phase"] = "committed"
     body["dimension_catalog"] = candidate.body
     body["revision"] += 1
-    return CompositionSafetyState.from_dict(body)
+    return state.replace(body)
 
 
 def prepare_parent(state, operation_id, approved_plan_sha256, *, policy_sha256):
@@ -150,12 +151,12 @@ def prepare_parent(state, operation_id, approved_plan_sha256, *, policy_sha256):
     if operation["phase"] in ("parent-prepared", "committed"):
         if operation["manifest_sha256"] != digest or operation["parent_policy_sha256"] != policy_sha256:
             raise ValueError("prepared metadata differs")
-        return CompositionSafetyState.from_dict(body)
+        return state.replace(body)
     if operation["phase"] != "children-recorded":
         raise ValueError("children are not all recorded")
     operation.update(phase="parent-prepared", manifest_sha256=digest, parent_policy_sha256=policy_sha256)
     body["revision"] += 1
-    return CompositionSafetyState.from_dict(body)
+    return state.replace(body)
 
 
 def record_parent(state, operation_id, approved_plan_sha256, *, descriptor,
@@ -168,7 +169,7 @@ def record_parent(state, operation_id, approved_plan_sha256, *, descriptor,
     body, operation = _operation(state, operation_id, approved_plan_sha256)
     plan = operation["plan"]
     slot = {"room_id": plan["parent_room_id"], "logical_jat_id": plan["parent_logical_jat_id"]}
-    return _record(body, operation, slot, descriptor, object_ref, workspace_signature, display_name)
+    return _record(state, body, operation, slot, descriptor, object_ref, workspace_signature, display_name)
 
 
 def persist_candidate(store, expected_state, expected_etag, candidate):
@@ -179,7 +180,7 @@ def persist_candidate(store, expected_state, expected_etag, candidate):
     write. Process loss (BaseException) propagates; reopening/repeating reads the
     exact desired candidate before doing anything else.
     """
-    desired = CompositionSafetyState.from_dict(candidate.to_dict()).to_dict()
+    desired = candidate.replace(candidate.to_dict()).to_dict()
     expected = None if expected_state is None else expected_state.to_dict()
     _require_extension(expected, desired)
     observed, etag = store.read()
@@ -200,11 +201,11 @@ def persist_candidate(store, expected_state, expected_etag, candidate):
     return candidate, etag
 
 
-def _require_extension(previous, candidate):
+def _require_extension(previous, candidate, *, retired_points=frozenset()):
     """A CAS must never erase historical records, pins or operation bindings."""
     for key, operation in candidate['operations'].items():
         if operation['phase'] in ('parent-prepared', 'committed'):
-            expected_manifest = manifest_for(CompositionSafetyState.from_dict(candidate), key, operation['plan_sha256'])
+            expected_manifest = manifest_for(CompositionSafetyState.from_dict(candidate, retired_points=retired_points), key, operation['plan_sha256'])
             if operation['manifest_sha256'] != hashlib.sha256(canonical(expected_manifest)).hexdigest():
                 raise ValueError('prepared manifest differs from reserved pins')
     if previous is None:

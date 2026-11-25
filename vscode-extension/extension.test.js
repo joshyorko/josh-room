@@ -8642,3 +8642,43 @@ test("Delete Catalog confirms a whole Catalog once and updates the sidebar witho
   assert.deepEqual(operations, ["retirement-batch-preview", "retirement-batch-preview", "retire-batch"]);
   assert.deepEqual(parentRows().map(row => row.label), ["Other Catalog"]);
 });
+
+test("retiring one parent reloads shared Child Room pins and fences child deletion on reload failure", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-pin-refresh-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode } = fixture;
+  vscode.workspace.isTrusted = true;
+  const extension = loadExtension(vscode, () => assert.fail("a child deletion needs authoritative pins before controller access"));
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [] });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(provider);
+  const id = "fixture";
+  const namespace = "1".repeat(32);
+  const dimension = { id, provider: "minio" };
+  const pinned = { room_id: "child", snapshot_id: "jat-child", pinned: true, created_at: "2026-01-01T00:00:00Z" };
+  const catalog = { namespace, parent_room_id: "parent", display_name: "Catalog", child_rooms: [{ room_id: "child", path: "child" }],
+    child_recovery_points: [pinned], recovery_points: [
+      { snapshot_id: "jat-first", child_count: 1, children: ["child"], created_at: "2026-01-01T00:00:00Z" },
+      { snapshot_id: "jat-second", child_count: 1, children: ["child"], created_at: "2026-01-02T00:00:00Z" },
+    ] };
+  const data = catalogs => ({ dimensions: [{ ...dimension, catalogs }] });
+  const childPoint = () => provider.roots[0].children[0].children[0].children
+    .find(row => row.kind === "catalog-parent").children.find(row => row.kind === "catalog-child-history").children[0].children[0];
+  await provider.setCatalog(data([catalog]));
+  let calls = 0;
+  provider.reload = async () => {
+    calls++;
+    if (calls > 1) throw new Error("synthetic unavailable");
+    await provider.setCatalog(data([{ ...catalog, recovery_points: [catalog.recovery_points[1]] }]), { authoritative: true });
+  };
+  await provider.applyCatalogDeletion(id, namespace, { kind: "recovery-point", room: "parent", snapshot: "jat-first" });
+  assert.equal(calls, 1);
+  assert.equal(childPoint().point.pinned, true);
+  assert.equal(provider.catalogPinsPending(id, namespace), false);
+  await provider.applyCatalogDeletion(id, namespace, { kind: "recovery-point", room: "parent", snapshot: "jat-second" });
+  assert.equal(calls, 2);
+  assert.equal(childPoint().point.pinned, true);
+  assert.equal(provider.getTreeItem(childPoint()).contextValue, "catalog-child-point-pins-unverified");
+  assert.equal(await fixture.commandCallbacks.get("joshRoom.deleteCatalogItem")(childPoint()), "blocked");
+});

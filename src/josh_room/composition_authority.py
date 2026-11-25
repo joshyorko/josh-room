@@ -14,7 +14,19 @@ from urllib.parse import urlsplit
 
 from botocore.exceptions import ClientError
 
-from .composition_safety import CompositionSafetyState
+from .composition_safety import (
+    CompositionSafetyState,
+    _digest,
+    _identifier,
+    retired_recovery_points,
+)
+from .composition_save_intent import (
+    INTENT_FORMAT,
+    MAX_DESCRIPTOR_CIPHERTEXT,
+    require_writer,
+    validate_intent,
+    validate_intent_transition,
+)
 from .composition_transaction import canonical
 from .crypto import decrypt, encrypt
 from .encryption_domain import physical_bucket_identity
@@ -104,7 +116,9 @@ class CompositionAuthority:
         return body, etag
 
     def validate(self, body):
-        version2 = isinstance(body, dict) and body.get('format') == 'composition-authority-v2'
+        format_name = body.get("format") if isinstance(body, dict) else None
+        has_retirements = format_name in ("composition-authority-v2", INTENT_FORMAT)
+        has_intent = format_name == INTENT_FORMAT
         if (
             not isinstance(body, dict)
             or set(body)
@@ -117,8 +131,8 @@ class CompositionAuthority:
                 "repository_id",
                 "state",
                 "capture_claims",
-            } | ({'retirements'} if version2 else set())
-            or body["format"] not in ("composition-authority-v1", "composition-authority-v2")
+            } | ({'retirements'} if has_retirements else set()) | ({'save_intent', 'completed_saves'} if has_intent else set())
+            or format_name not in ("composition-authority-v1", "composition-authority-v2", INTENT_FORMAT)
             or body["namespace"] != self.namespace
             or body["binding"] != self.binding
             or not isinstance(body["secret"], str)
@@ -135,8 +149,27 @@ class CompositionAuthority:
             and re.fullmatch("[a-f0-9]{64}", body["repository_id"]) is None
         ):
             raise ValueError("invalid composition repository binding")
+        if has_intent:
+            if body["state"] is None:
+                raise ValueError("Catalog Save intent requires an existing state")
+            validate_intent(body["save_intent"])
+            receipts = body["completed_saves"]
+            if not isinstance(receipts, dict) or len(receipts) > 32:
+                raise ValueError("invalid completed Catalog Save approvals")
+            for operation_id, approval in receipts.items():
+                _identifier(operation_id)
+                _digest(approval)
+                if body["state"]["operations"].get(operation_id, {}).get("phase") != "committed":
+                    raise ValueError("completed Catalog Save approval lacks a committed operation")
+        if has_retirements:
+            if not isinstance(body["retirements"], list) or len(body["retirements"]) > 4096:
+                raise ValueError("invalid retirement ledger")
+            if not body["retirements"] and not has_intent:
+                raise ValueError("invalid retirement ledger")
+        if len(canonical(body)) > LIMIT // 2:
+            raise ValueError("composition authority exceeds size limit")
         if body["state"] is not None:
-            state = CompositionSafetyState.from_dict(body["state"]).to_dict()
+            state = CompositionSafetyState.from_envelope(body).to_dict()
             expected = {
                 k: self.binding[k]
                 for k in (
@@ -153,23 +186,29 @@ class CompositionAuthority:
                 raise ValueError(
                     "composition state belongs to another namespace authority"
                 )
-        if version2:
+        if has_retirements and body["retirements"]:
             from .composition_retirement import validate_retirements
             validate_retirements(body)
 
-    def put(self, body, expected_etag):
+    def put(self, body, expected_etag, *, intent_id=None):
         self.validate(body)
         previous, observed_etag = self.read()
         if observed_etag != expected_etag:
             raise ValueError('composition authority changed before CAS')
-        if previous is None and body['format'] == 'composition-authority-v2':
-            raise ValueError('retirement requires an existing authority')
+        if previous is None and body['format'] != 'composition-authority-v1':
+            raise ValueError('retirement or Save intent requires an existing authority')
         if previous is not None:
+            require_writer(previous, intent_id)
+            validate_intent_transition(previous, body, intent_id)
+            if previous.get("save_intent") is not None:
+                from .composition_transaction import _require_extension
+
+                _require_extension(previous["state"], body["state"], retired_points=retired_recovery_points(body))
             old = previous.get('retirements', [])
             new = body.get('retirements', [])
             if new[:len(old)] != old or len(new) < len(old):
                 raise ValueError('retirement history is immutable')
-            if previous['format'] == 'composition-authority-v2' and body['format'] != previous['format']:
+            if previous['format'] == 'composition-authority-v2' and body['format'] not in (previous['format'], INTENT_FORMAT):
                 raise ValueError('retirement authority cannot be downgraded')
             if len(new) != len(old):
                 added = new[len(old):]
@@ -183,8 +222,8 @@ class CompositionAuthority:
                     if ([entry['target'] for entry in added] != [*points, *children, _target('catalog')]
                             or any(entry['approval_sha256'] != added[0]['approval_sha256'] for entry in added)):
                         raise ValueError('retirement batch differs from the complete Catalog inventory')
-                before = {key: value for key, value in previous.items() if key not in ('format', 'retirements')}
-                after = {key: value for key, value in body.items() if key not in ('format', 'retirements')}
+                before = {key: value for key, value in previous.items() if key not in ('format', 'retirements', 'save_intent')}
+                after = {key: value for key, value in body.items() if key not in ('format', 'retirements', 'save_intent')}
                 if before != after:
                     raise ValueError('retirement cannot rewrite historical authority')
             elif old:
@@ -195,10 +234,13 @@ class CompositionAuthority:
         path = self.private / "authority-write.age"
         encrypt(canonical(body), self.recipients, path)
         try:
+            encrypted = path.read_bytes()
+            if len(encrypted) > LIMIT:
+                raise ValueError("composition authority exceeds ciphertext size limit")
             kwargs = {
                 "Bucket": self.bucket,
                 "Key": self.prefix + "authority.age",
-                "Body": path.read_bytes(),
+                "Body": encrypted,
             }
             kwargs.update(
                 {"IfNoneMatch": "*"}
@@ -221,11 +263,15 @@ class CompositionAuthority:
         finally:
             path.unlink(missing_ok=True)
 
-    def put_descriptor(self, descriptor):
+    def put_descriptor(self, descriptor, *, intent_id=None):
+        current, _ = self.read()
+        require_writer(current or {}, intent_id)
         path = self.private / "descriptor-write.age"
         encrypt(descriptor.to_json().encode(), self.recipients, path)
         try:
             raw = path.read_bytes()
+            if len(raw) > MAX_DESCRIPTOR_CIPHERTEXT:
+                raise ValueError("composition descriptor exceeds ciphertext size limit")
             digest = hashlib.sha256(raw).hexdigest()
             key = "objects/sha256/" + digest
             self.client.put_object(

@@ -4,7 +4,14 @@ from __future__ import annotations
 import copy
 import hashlib
 
-from .composition_safety import CompositionSafetyState, _identifier
+from .composition_safety import (
+    CompositionSafetyState,
+    _identifier,
+    recovery_time,
+    retired_recovery_points,
+    writable_latest,
+)
+from .composition_save_intent import INTENT_FORMAT, derived_claim
 from .composition_transaction import canonical
 
 
@@ -38,9 +45,9 @@ def require_active(envelope, room=None, snapshot=None):
             raise ValueError('selected Catalog, Room or recovery point is retired')
 
 
-def active_inventory(envelope):
+def active_inventory(envelope, *, validated_state=None):
     """Authenticated callers retain empty Catalogs and empty child Rooms."""
-    body = CompositionSafetyState.from_dict(envelope['state']).to_dict()
+    body = validated_state if validated_state is not None else CompositionSafetyState.from_envelope(envelope).to_dict()
     retired = _retired(envelope)
     catalog_active = not any(t['kind'] == 'catalog' for t in retired)
     parents = {op['plan']['parent_room_id'] for op in body['operations'].values()}
@@ -51,18 +58,39 @@ def active_inventory(envelope):
             continue
         project = body['dimension_catalog']['projects'].get(room, {})
         records = project.get('snapshots', {})
-        points = [point for point in records if not any(t['kind'] == 'recovery-point'
-                  and (t['room'], t['snapshot']) == (room, point) for t in retired)]
-        points.sort(key=lambda point: (records[point]['created_at'], point), reverse=True)
+        removed = {t['snapshot'] for t in retired if t['kind'] == 'recovery-point' and t['room'] == room}
+        points = [point for point in records if point not in removed]
+        points.sort(key=lambda point: (recovery_time(records[point]['created_at']), point), reverse=True)
         rooms[room] = {'kind': 'catalog' if room in parents else 'room',
                        'recovery_points': points,
-                       'latest': project.get('latest') if project.get('latest') in points else (points[0] if points else None)}
+                       'latest': writable_latest(project, removed)}
     return {'catalog_active': catalog_active, 'rooms': rooms}
 
 
-def _blockers(envelope, target, *, pending=True):
+def completed_capture_claims(envelope):
+    """Identify logical and component slots proved committed by the authority."""
+    state = envelope["state"]
+    projects = state["dimension_catalog"]["projects"]
+    claims = {point for project in projects.values() for point in project["snapshots"]}
+    slots = [
+        slot for op in state["operations"].values()
+        if op["plan"]["expected_parent_logical_jat_id"] is None
+        for slot in op["plan"]["children"] if slot["path"] in op["child_pins"]
+    ]
+    slots.extend(op["plan"] for op in state.get("child_updates", {}).values() if op["phase"] == "committed")
+    for slot in slots:
+        output = slot["logical_jat_id"]
+        record = projects[slot["room_id"]]["snapshots"][output]
+        modes = slot.get("component_plan", {}).get("selection", {}).get("components", {})
+        for name, ref in record.get("component_refs", {}).items():
+            if ref is not None and modes.get(name) == "refresh":
+                claims.add(derived_claim(envelope["namespace"], output, name))
+    return claims
+
+
+def _blockers(envelope, target, *, pending=True, validated_state=None):
     body = envelope['state']
-    inventory = active_inventory(envelope)
+    inventory = active_inventory(envelope, validated_state=validated_state)
     if not inventory['catalog_active']:
         raise ValueError('Catalog is already retired')
     kind, room, snapshot = (target[key] for key in ('kind', 'room', 'snapshot'))
@@ -74,12 +102,13 @@ def _blockers(envelope, target, *, pending=True):
     if kind == 'room' and selected['kind'] != 'room':
         raise ValueError('parent identity requires Catalog retirement')
     blockers = []
+    if pending and envelope.get("save_intent") is not None:
+        blockers.append({"reason": "incomplete-reservation"})
     if pending and (any(op['phase'] != 'committed' for op in body['operations'].values()) or any(
             op['phase'] != 'committed' for op in body.get('child_updates', {}).values())):
         blockers.append({'reason': 'incomplete-reservation'})
     # A claim without its committed catalog record is an interrupted writer.
-    recorded = {point for project in body['dimension_catalog']['projects'].values() for point in project['snapshots']}
-    if pending and set(envelope.get('capture_claims', {})) - recorded:
+    if pending and set(envelope.get('capture_claims', {})) - completed_capture_claims(envelope):
         blockers.append({'reason': 'incomplete-capture-claim'})
     if kind == 'recovery-point':
         for operation_id, op in sorted(body['operations'].items()):
@@ -110,6 +139,7 @@ def validate_retirements(envelope):
     records = envelope['retirements']
     if not isinstance(records, list) or not 1 <= len(records) <= 4096 or envelope['state'] is None:
         raise ValueError('invalid retirement ledger')
+    validated = CompositionSafetyState.from_envelope(envelope).to_dict()
     prior = copy.deepcopy(envelope)
     prior['retirements'] = []
     for index, record in enumerate(records):
@@ -123,7 +153,7 @@ def validate_retirements(envelope):
             raise ValueError('invalid retirement approval')
         # Replaying against the immutable history also rejects newly introduced
         # live references to retired identities after a later writer commits.
-        if _blockers(prior, target, pending=False):
+        if _blockers(prior, target, pending=False, validated_state=validated):
             raise ValueError('retirement ledger violates retained dependencies')
         prior['retirements'].append(record)
 
@@ -157,7 +187,7 @@ def validate_active_transition(previous, candidate):
             raise ValueError('capture claims are immutable')
     old, new = previous['state'], candidate['state']
     if old != new:
-        _require_extension(old, new)
+        _require_extension(old, new, retired_points=retired_recovery_points(candidate))
     for name in ('operations', 'child_updates'):
         for key, operation in new.get(name, {}).items():
             if operation == old.get(name, {}).get(key):
@@ -183,7 +213,8 @@ def retire(authority, namespace, kind, room=None, snapshot=None, *, approved_pla
     if etag != preview['plan']['authority_etag'] or hashlib.sha256(canonical(envelope)).hexdigest() != preview['plan']['authority_sha256']:
         raise ValueError('retirement preview is stale; review a fresh preview')
     updated = copy.deepcopy(envelope)
-    updated['format'] = 'composition-authority-v2'
+    if updated['format'] != INTENT_FORMAT:
+        updated['format'] = 'composition-authority-v2'
     ledger = updated.setdefault('retirements', [])
     ledger.append({'sequence': len(ledger) + 1, 'target': preview['plan']['target'],
                    'approval_sha256': approved_plan_sha256})
@@ -235,7 +266,8 @@ def retire_batch(authority, namespace, *, approved_plan_sha256):
     if not preview['can_apply']:
         raise ValueError('Catalog retirement is blocked by retained dependencies')
     candidate = copy.deepcopy(envelope)
-    candidate['format'] = 'composition-authority-v2'
+    if candidate['format'] != INTENT_FORMAT:
+        candidate['format'] = 'composition-authority-v2'
     ledger = candidate.setdefault('retirements', [])
     for target in targets:
         ledger.append({'sequence': len(ledger) + 1, 'target': target, 'approval_sha256': approved_plan_sha256})

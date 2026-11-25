@@ -403,3 +403,62 @@ def test_real_age_encrypted_retirement_over_synthetic_sqlite_transport(tmp_path)
             authority.descriptor(record)
     finally:
         transport.db.close()
+
+
+def test_component_claim_requires_committed_ref_from_its_refresh_slot():
+    from test_composition_component_contract import _descriptor, slot
+    from test_composition_transaction import output, setup
+
+    from josh_room.catalog import Catalog
+    from josh_room.composition_component_contract import artifacts_digest
+    from josh_room.composition_save_intent import derived_claim
+    from josh_room.composition_transaction import (
+        prepare_parent,
+        record_child,
+        record_parent,
+        reserve,
+    )
+    from josh_room.logical_jat import LogicalJat
+
+    unfulfilled, descriptors, _, original = setup()
+    plan = original["operations"]["operation"]["plan"]
+    plan["plan_version"] = 4
+    row = plan["children"][0]
+    row.update(slot("refresh"), capture_mode="source-only", capture_policy_sha256="b" * 64,
+               source_records_sha256="c" * 64, approved_paths_sha256="d" * 64)
+    raw = descriptors[("child", "jat-child")].to_dict()
+    raw["components"] = _descriptor().to_dict()["components"]
+    raw["components"]["homebrew_recovery"] = None
+    row["component_plan"]["selection"]["components"]["homebrew_recovery"] = "omit"
+    row["component_plan"]["artifacts_sha256"] = artifacts_digest(raw["components"])
+    descriptors[("child", "jat-child")] = LogicalJat.from_dict(raw)
+    state = reserve(Catalog.from_body(unfulfilled.to_dict()["dimension_catalog"]), original["scope"], "operation", plan)
+    approval = plan_digest(plan)
+    state = record_child(state, "operation", approval, row["path"], **output(original, descriptors, "child"))
+    state = prepare_parent(state, "operation", approval,
+                           policy_sha256=descriptors[("parent", "jat-parent")].to_dict()["capture_policy_sha256"])
+    state = record_parent(state, "operation", approval, **output(original, descriptors, "parent"))
+    authority = Authority(state.to_dict())
+    good = derived_claim(authority.namespace, "jat-child", "hauler_content")
+    interrupted = derived_claim(authority.namespace, "jat-child", "homebrew_recovery")
+    authority.body["capture_claims"] = {"jat-child": "a" * 32, good: "b" * 32}
+    assert preview_retirement_batch(authority, authority.namespace)["can_apply"]
+    authority.body["capture_claims"][interrupted] = "c" * 32
+    assert {"reason": "incomplete-capture-claim"} in preview_retirement_batch(authority, authority.namespace)["plan"]["blockers"]
+    assert {"reason": "incomplete-capture-claim"} in preview_retirement(
+        authority, authority.namespace, "recovery-point", "parent", "jat-parent")["plan"]["blockers"]
+    del authority.body["capture_claims"][interrupted]
+    assert retire_parent(authority)["status"] == "retired"
+    assert apply(authority, "recovery-point", "child", "jat-child")["status"] == "retired"
+
+
+def test_writable_latest_orders_offsets_and_nanoseconds():
+    from josh_room.composition_safety import writable_latest
+
+    project = {"latest": "retired", "snapshots": {
+        "retired": {"created_at": "2026-02-01T00:00:00Z"},
+        "lexically-later": {"created_at": "2026-01-02T03:00:00+02:00"},
+        "absolute-later": {"created_at": "2026-01-02T02:00:00.000000001Z"},
+        "a-tie-nanoseconds": {"created_at": "2026-01-02T02:00:00.000000002Z"},
+    }}
+    assert writable_latest(project, {"retired"}) == "a-tie-nanoseconds"
