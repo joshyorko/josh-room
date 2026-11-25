@@ -2721,13 +2721,14 @@ async function updateCompositionRoom(kind) {
           ...(kind === "parent" ? ["--set-child", `${ticket.child}=${ticket.pin}`] : [])]),
       ...(ticket.component_options ? ["--component-options", JSON.stringify(ticket.component_options)] : []),
       ...(apply ? ["--approve", ticket.approval] : [])];
-    return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
+    return runSelectedEncryption(args, root, dimension, { title: kind === "catalog" ? (apply ? "Saving Catalog…" : "Checking Catalog changes…")
+      : (apply ? "Saving namespace Room…" : "Checking exact namespace baseline…"), action: "update a namespace Room" });
   };
   const saveGeneration = workspaceEventGeneration;
   const result = await require("./catalog-actions").updateRoom(vscode, { marker, kind, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     chooseComponents: () => chooseCatalogComponents(root, marker.project_id, true), pending: extensionContext.workspaceState.get(key),
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
-  if (result?.status === "saved" && kind !== "parent" && result.marker_verified && openWorkspaceBinding().root === root) {
+  if (["saved", "unchanged"].includes(result?.status) && kind !== "parent" && result.marker_verified && openWorkspaceBinding().root === root) {
     const clean = saveGeneration === workspaceEventGeneration && dirtyBuffers.size === 0;
     setRoomState(clean ? "clean" : "saved-but-still-dirty", { bindingTrusted: true });
   }
@@ -5951,7 +5952,9 @@ function catalogSnapshotContext(item) {
   const projectId = room?.room_id || catalog?.parent_room_id;
   const snapshot = point?.snapshot_id;
   const dimensionId = dimension?.id || dimension?.dimension_id;
-  if (!/^[a-f0-9]{32}$/.test(namespace) || !/^[a-z0-9-]+$/.test(projectId) || !/^jat-[a-z0-9-]+$/.test(snapshot)
+  const exactId = id => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)
+    && id.toLowerCase() !== "latest";
+  if (!/^[a-f0-9]{32}$/.test(namespace) || !exactId(projectId) || !exactId(snapshot)
       || !/^[a-z0-9][a-z0-9._-]*$/.test(dimensionId)) {
     throw new Error("Choose an exact Catalog recovery point from Rooms.");
   }

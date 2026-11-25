@@ -542,6 +542,43 @@ def _parent_save_view(workspace, private, manifest, policy_sha256, root_files_on
         os.close(fd)
 
 
+def _bind_parent_save(workspace, dimension, authority, namespace, room, snapshot, display_name,
+                      private, original_manifest, policy_sha256, root_files_only, accepted,
+                      previous_op, committed_manifest, content_sha256, replace_manifest=None):
+    fd = _directory(workspace)
+    try:
+        opened = os.fstat(fd)
+        scan = scan_workspace_for_status(workspace)
+        live = _parent_save_view(workspace, private, original_manifest, policy_sha256, root_files_only,
+                                 *((parse_manifest(replace_manifest),) if committed_manifest and replace_manifest else ()))
+        after = scan_workspace_for_status(workspace)
+        _verify_parent_workspace(workspace, authority, room, accepted, previous_op, *committed_manifest)
+        current = workspace.lstat()
+        if (scan.signature != after.signature or after.capture_policy_sha256 != policy_sha256
+                or _content_digest(live) != content_sha256
+                or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)):
+            raise ValueError('Catalog was saved, but its local files changed before the marker could be updated')
+        held = Path(f'/proc/{os.getpid()}/fd/{fd}')
+        if replace_manifest and _read_regular(fd, MANIFEST, MAX_BYTES) != replace_manifest:
+            with tempfile.NamedTemporaryFile(prefix='.catalog-manifest-', dir=held, delete=False) as handle:
+                temporary = Path(handle.name)
+                try:
+                    handle.write(replace_manifest)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    os.replace(temporary, held / MANIFEST)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            after = scan_workspace_for_status(workspace)
+        write_stat_workspace_marker(held, dimension_id=dimension.dimension_id,
+            encryption_domain_id=authority.binding['encryption_domain_id'], project_id=room, snapshot_id=snapshot,
+            display_name=display_name,
+            workspace_signature=after.signature, signature_algorithm=after.signature_algorithm,
+            capture_policy_sha256=after.capture_policy_sha256, path_binding=workspace, composition_namespace=namespace)
+    finally:
+        os.close(fd)
+
+
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
                    authority, store_factory, private, *, approval=None, workspace=None, save_root=False,
                    expected_content=None):
@@ -610,7 +647,12 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
                     'changed': changed, 'snapshot_id': output if changed else baseline}
         if approval != digest:
             raise ValueError('parent refresh approval differs')
+        display_name = body['dimension_catalog']['projects'][room]['display_name']
         if not changed and old is None:
+            if save_root:
+                _bind_parent_save(workspace, dimension, authority, namespace, room, baseline, display_name,
+                                  private, original_manifest, policy_sha256, root_files_only, accepted,
+                                  previous_op, committed_manifest, request['content_sha256'])
             return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline, 'catalog_writes': False,
                     **({'marker_verified': True} if save_root else {})}
         (view / MANIFEST).write_bytes(canonical(manifest))
@@ -659,38 +701,10 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
             if _content_digest(_proof(store, committed, private)) != _content_digest(view):
                 raise ValueError('committed parent output differs; preserve history')
         if save_root:
-            fd = _directory(workspace)
-            try:
-                opened = os.fstat(fd)
-                scan = scan_workspace_for_status(workspace)
-                live = _parent_save_view(workspace, private, original_manifest, policy_sha256, root_files_only,
-                                         *((manifest,) if committed_manifest else ()))
-                after = scan_workspace_for_status(workspace)
-                _verify_parent_workspace(workspace, authority, room, accepted, previous_op, *committed_manifest)
-                current = workspace.lstat()
-                if (scan.signature != after.signature or after.capture_policy_sha256 != policy_sha256
-                        or _content_digest(live) != request['content_sha256']
-                        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)):
-                    raise ValueError('Catalog was saved, but its local files changed before the marker could be updated')
-                held = Path(f'/proc/{os.getpid()}/fd/{fd}')
-                if canonical(manifest) != raw and _read_regular(fd, MANIFEST, MAX_BYTES) != canonical(manifest):
-                    with tempfile.NamedTemporaryFile(prefix='.catalog-manifest-', dir=held, delete=False) as handle:
-                        temporary = Path(handle.name)
-                        try:
-                            handle.write(canonical(manifest))
-                            handle.flush()
-                            os.fsync(handle.fileno())
-                            os.replace(temporary, held / MANIFEST)
-                        finally:
-                            temporary.unlink(missing_ok=True)
-                    after = scan_workspace_for_status(workspace)
-                write_stat_workspace_marker(held, dimension_id=dimension.dimension_id,
-                    encryption_domain_id=authority.binding['encryption_domain_id'], project_id=room, snapshot_id=output,
-                    display_name=state.to_dict()['dimension_catalog']['projects'][room]['display_name'],
-                    workspace_signature=after.signature, signature_algorithm=after.signature_algorithm,
-                    capture_policy_sha256=after.capture_policy_sha256, path_binding=workspace, composition_namespace=namespace)
-            finally:
-                os.close(fd)
+            _bind_parent_save(workspace, dimension, authority, namespace, room, output, display_name,
+                              private, original_manifest, policy_sha256, root_files_only, accepted,
+                              previous_op, committed_manifest, request['content_sha256'],
+                              canonical(manifest) if canonical(manifest) != raw else None)
         return {'ok': True, 'status': 'saved', 'namespace': namespace, 'room_id': room,
                 'snapshot_id': output, 'workspace_modified': save_root, 'previous_parent_snapshot_id': baseline,
                 **({'marker_verified': context_status(workspace).get('snapshot_id') == output} if save_root else {})}

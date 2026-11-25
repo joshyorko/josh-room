@@ -88,6 +88,27 @@ def test_whole_catalog_save_publishes_root_and_edited_child_together(runtime):
     assert not (cold / 'b').exists()
 
 
+def test_unchanged_catalog_save_rebinds_root_without_publishing(runtime):
+    from josh_room.composition_updates import save_catalog_workspace
+    from josh_room.workspace_state import local_status
+
+    r = runtime
+    result = save(r)
+    baseline = result['parent_snapshot_id']
+    root = r.tmp / 'unchanged-catalog'
+    hydrate_composition(r.dimension, NAMESPACE, 'parent', baseline, root,
+                        r.authority, r.factory, r.private)
+    (root / 'notes.txt').write_text('parent note\n')
+    assert local_status(root)['state'] == 'changed'
+    args = (root, r.dimension, NAMESPACE, 'parent', baseline, 'rebind', r.authority, r.factory, r.private)
+    writes = r.transport.writes
+    review = save_catalog_workspace(*args)
+    assert not review['changed']
+    assert save_catalog_workspace(*args, approval=review['approval_sha256'])['status'] == 'unchanged'
+    assert r.transport.writes == writes
+    assert local_status(root)['state'] == 'clean'
+
+
 def update(r, target, child, operation='update', approval=None):
     return save_child(target / 'a', r.dimension, NAMESPACE, child['room_id'], child['snapshot_id'], operation,
                       r.authority, r.factory, r.private, approval=approval)

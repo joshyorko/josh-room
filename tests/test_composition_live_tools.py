@@ -592,7 +592,7 @@ def test_inherited_exclusions_nested_child_and_legacy_optimize(runtime):
     git(r.source, "init", "-q")
     git(r.source, "add", ".")
     r.assignments[1]["path"] = "projects/a"
-    with pytest.raises(ValueError, match="cohesive Git repository"):
+    with pytest.raises(ValueError, match="Save it as one Room to preserve Git history"):
         capture_plan(r.source, r.dimension, NAMESPACE, "parent", r.assignments)
     assert r.transport.writes == 0
     (r.source / ".josh-roomignore").write_text("# josh-room capture-mode: source-only\nprojects/a/private/**\n")

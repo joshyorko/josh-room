@@ -393,8 +393,11 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
   if (ticket.approval && ticket.approval !== preview.approval_sha256) throw new Error("Pending approval changed. Preserve the operation receipt; do not start a blind retry.");
   const action = kind === "catalog" ? "Save Catalog" : kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
   if (kind === "catalog" && !preview.changed && !pending) {
-    void vscode.window.showInformationMessage("Catalog is already saved.");
-    return { ok: true, status: "unchanged" };
+    const result = await save({ ...ticket, approval: preview.approval_sha256 });
+    if (!result?.ok || result.status !== "unchanged" || !result.marker_verified) {
+      throw new Error("The saved Catalog baseline could not be verified.");
+    }
+    return result;
   }
   const approved = await vscode.window.showWarningMessage(`${action}?`, { modal: true,
     detail: kind === "catalog" ? `Save the Catalog files as a new recovery point.${
