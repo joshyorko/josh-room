@@ -124,3 +124,18 @@ def test_lost_admission_cas_only_resumes_matching_intent(monkeypatch):
     writer = _start_save(accepted, envelope, "synthetic-etag", intent, children, parent)
     assert writer.operation_id == intent["operation_id"]
     assert accepted.attempts == 1
+
+
+def test_completed_operation_cannot_be_admitted_again_or_overwrite_receipt():
+    previous, intent, _, _ = example()
+    previous["state"]["operations"]["aggregate"] = {
+        "phase": "committed", "parent_pin": {"logical_jat_id": intent["parent_output"]},
+    }
+    receipts = {"aggregate": "a" * 64}
+    previous.update(format=INTENT_FORMAT, save_intent=None, completed_saves=receipts)
+    foreign = {**intent, "approval_sha256": "f" * 64}
+    with pytest.raises(ValueError, match="already belongs"):
+        validate_intent_transition(previous, {**previous, "save_intent": foreign}, "aggregate")
+    with pytest.raises(ValueError, match="already recorded"):
+        validate_intent_transition({**previous, "save_intent": foreign},
+                                   {**previous, "completed_saves": {"aggregate": "f" * 64}}, "aggregate")
