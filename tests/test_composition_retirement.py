@@ -11,8 +11,10 @@ from josh_room.composition_authority import CompositionAuthority
 from josh_room.composition_retirement import (
     active_inventory,
     preview_retirement,
+    preview_retirement_batch,
     require_active,
     retire,
+    retire_batch,
     validate_active_transition,
     validate_retirements,
 )
@@ -57,6 +59,27 @@ def apply(authority, kind, room=None, snapshot=None):
 
 def retire_parent(authority):
     return apply(authority, 'recovery-point', 'parent', 'jat-parent')
+
+
+def test_catalog_batch_retires_dependencies_then_catalog_in_one_write():
+    authority = Authority()
+    namespace = authority.namespace
+    assert preview_retirement(authority, namespace, 'catalog')['can_apply'] is False
+    batch = preview_retirement_batch(authority, namespace)
+    assert batch['can_apply']
+    assert batch['plan']['recovery_point_count'] == 2
+    assert batch['plan']['child_room_count'] == 1
+    authority.etag = '2'
+    with pytest.raises(ValueError, match='stale'):
+        retire_batch(authority, namespace, approved_plan_sha256=batch['approval_sha256'])
+    assert authority.writes == 0
+    batch = preview_retirement_batch(authority, namespace)
+    retire_batch(authority, namespace, approved_plan_sha256=batch['approval_sha256'])
+    assert authority.writes == 1
+    assert [(entry['target']['kind'], entry['target']['room']) for entry in authority.body['retirements']] == [
+        ('recovery-point', 'parent'), ('recovery-point', 'child'), ('room', 'child'), ('catalog', None),
+    ]
+    assert active_inventory(authority.body) == {'catalog_active': False, 'rooms': {}}
 
 
 def test_exact_dependency_order_preserves_history_and_empty_catalog_visibility():
@@ -365,8 +388,10 @@ def test_real_age_encrypted_retirement_over_synthetic_sqlite_transport(tmp_path)
             'binding': authority.binding, 'state': state, 'request': {}, 'secret': 'a' * 43,
             'repository_id': scope['repository_id'], 'capture_claims': {}}
         authority.put(body, None)
-        retire_parent(authority)
+        preview = preview_retirement_batch(authority, authority.namespace)
+        retire_batch(authority, authority.namespace, approved_plan_sha256=preview['approval_sha256'])
         observed, _ = authority.read()
+        assert len(observed['retirements']) == 4
         assert observed['state'] == state
         assert observed['format'] == 'composition-authority-v2'
         raw, = transport.db.execute('select body from objects').fetchone()

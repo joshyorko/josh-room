@@ -478,14 +478,15 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(check)
     composition = commands.add_parser("composition", help="explicit catalog capture, pinned entry and offline discovery")
     composition_commands = composition.add_subparsers(dest="composition_command", required=True)
-    for action in ('retirement-preview', 'retire'):
+    for action in ('retirement-preview', 'retire', 'retirement-batch-preview', 'retire-batch'):
         operation = composition_commands.add_parser(action)
         operation.add_argument('--dimension', required=True)
         operation.add_argument('--namespace', required=True)
-        operation.add_argument('--kind', choices=('recovery-point', 'room', 'catalog'), required=True)
-        operation.add_argument('--room')
-        operation.add_argument('--snapshot')
-        if action == 'retire':
+        if 'batch' not in action:
+            operation.add_argument('--kind', choices=('recovery-point', 'room', 'catalog'), required=True)
+            operation.add_argument('--room')
+            operation.add_argument('--snapshot')
+        if action in ('retire', 'retire-batch'):
             operation.add_argument('--approve', required=True)
         _json_option(operation)
     composition_plan = composition_commands.add_parser("plan")
@@ -1866,15 +1867,24 @@ def _composition_component_options(encoded):
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
-        if args.composition_command in ('retirement-preview', 'retire'):
+        if args.composition_command in ('retirement-preview', 'retire', 'retirement-batch-preview', 'retire-batch'):
             from .composition_lifecycle import provider_runtime
-            from .composition_retirement import preview_retirement, retire
+            from .composition_retirement import (
+                preview_retirement,
+                preview_retirement_batch,
+                retire,
+                retire_batch,
+            )
             dimension = _effective_dimension(args)
             if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
                 raise ValueError('retirement requires an explicit provider Dimension')
             with sdk_error_boundary(dimension), provider_runtime(
                     instance, dimension, getattr(args, '_selected_encryption_material', None),
                     args.namespace, authority_only=True) as (authority, _factory, _private):
+                if args.composition_command == 'retirement-batch-preview':
+                    return preview_retirement_batch(authority, args.namespace)
+                if args.composition_command == 'retire-batch':
+                    return retire_batch(authority, args.namespace, approved_plan_sha256=args.approve)
                 arguments = (authority, args.namespace, args.kind, args.room, args.snapshot)
                 if args.composition_command == 'retirement-preview':
                     return preview_retirement(*arguments)

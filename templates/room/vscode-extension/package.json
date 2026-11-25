@@ -337,7 +337,7 @@
       },
       {
         "command": "joshRoom.manageCatalogDeletion",
-        "title": "Manage Catalog Deletion…",
+        "title": "Delete Catalog…",
         "icon": "$(trash)"
       },
       {

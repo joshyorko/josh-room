@@ -146,14 +146,13 @@ recovery point. Each restore requires an explicit choice and never overwrites
 an occupied child. If discovery is marked incomplete, the receipt and CLI
 still allow restoring a known exact recovery point.
 
-In **Rooms**, use **Manage Catalog Deletion…** on the Catalog row. It shows
-the next eligible items and asks you to confirm each deletion individually.
-Use **Delete…** on a specific recovery point or child Room to delete it
-directly. Every saved Catalog recovery point
-protects the child recovery points it pins. Delete the parent recovery points
-to release those pins. Then delete child recovery points and their empty
-Rooms. The Catalog can be deleted after its last child Room and recovery
-point are gone. Deletion removes the selected item from discovery and blocks
+In **Rooms**, use **Delete Catalog…** on the Catalog row and confirm the
+number of recovery points and child Rooms affected. Josh Room retires the
+Catalog recovery points first to release their child pins, then the child
+recovery points, the empty child Rooms, and finally the empty Catalog.
+The sidebar updates after the verified deletion. Use **Delete…** on a
+specific recovery point or empty child Room to delete it individually.
+A retained parent pin protects the child recovery point it references. Deletion removes the selected item from discovery and blocks
 future restores of it. Existing local folders and encrypted payloads remain
 in place. After deleting the newest point, you can restore older points.
 Save and pin refresh still require the recorded baseline.

@@ -2361,48 +2361,65 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
 
 async function manageCatalogDeletion(item) {
   if (item?.kind !== "catalog-parent" || !item.retirement) return "cancelled";
-  const binding = row => row.dimension.id || row.dimension.dimension_id;
-  const dimensionId = binding(item);
-  const namespace = item.catalog.namespace;
-  const parentId = item.catalog.parent_room_id;
-  let catalog = await roomsProvider.reload();
-  for (;;) {
-    const parent = nativeRegistry.buildProviderTree(catalog).flatMap(provider => provider.children || [])
-      .flatMap(connection => connection.children || []).flatMap(dimension => dimension.children || [])
-      .find(row => row.kind === "catalog-parent" && binding(row) === dimensionId
-        && row.catalog.namespace === namespace && row.catalog.parent_room_id === parentId);
-    if (!parent?.retirement) {
-      void vscode.window.showWarningMessage("The Catalog deletion inventory is unavailable. Refresh Rooms and try again.");
-      return "blocked";
-    }
-    const parentPoints = parent.children.filter(row => row.kind === "catalog-point");
-    const childRooms = parent.children.find(row => row.kind === "catalog-child-history")?.children
-      .filter(row => row.kind === "catalog-child-room") || [];
-    const childPoints = childRooms.flatMap(row => row.children.map(point => ({ point, child: row.label })));
-    let rows, instruction;
-    if (parentPoints.length) {
-      rows = parentPoints.map(row => ({ label: row.label, description: row.description, row }));
-      instruction = "Choose a Catalog recovery point to release its child pins.";
-    } else if (childPoints.length) {
-      rows = childPoints.map(({ point, child }) => ({ label: child, description: point.label, row: point }));
-      instruction = "Choose a child recovery point to delete.";
-    } else if (childRooms.length) {
-      rows = childRooms.map(row => ({ label: row.label, description: row.description, row }));
-      instruction = "Choose an empty child Room to delete.";
-    } else {
-      return deleteCatalogItem(parent);
-    }
-    const choice = await vscode.window.showQuickPick(rows, {
-      title: `Delete from ${parent.label}`, placeHolder: instruction, matchOnDescription: true,
-    });
-    if (!choice) return "cancelled";
-    const result = await deleteCatalogItem(choice.row, { refresh: false });
-    if (result?.status !== "retired") return result;
-    catalog = await roomsProvider.reload();
+  const root = activeWorkspace();
+  const { catalog, dimension } = item;
+  const dimensionId = dimension?.id || dimension?.dimension_id;
+  const namespace = catalog?.namespace;
+  if (!dimensionId || !/^[a-f0-9]{32}$/.test(namespace)) throw new Error("Choose a saved Catalog from Rooms.");
+  const args = ["--dimension", dimensionId, "--namespace", namespace];
+  const isOpen = () => {
+    const marker = deletionWorkspaceMarker(root);
+    return marker?.dimension_id === dimensionId && marker.composition_namespace === namespace;
+  };
+  const blockedByWorkspace = () => {
+    void vscode.window.showWarningMessage("This Catalog is open. Switch workspaces before deleting it.");
+    return "blocked";
+  };
+  if (isOpen()) return blockedByWorkspace();
+  const preview = await runSelectedEncryption(["composition", "retirement-batch-preview", ...args], root, dimension,
+    { title: "Checking Catalog deletion…", action: "check Catalog deletion" });
+  const plan = preview?.plan;
+  const counts = [plan?.recovery_point_count, plan?.child_room_count];
+  if (!preview?.ok || plan?.namespace !== namespace || plan.binding?.dimension_id !== dimensionId
+      || plan.format !== "composition-retirement-batch-v1" || preview.physical_deletion !== false
+      || counts.some(count => !Number.isSafeInteger(count) || count < 0)) {
+    throw new Error("The controller could not verify the Catalog deletion.");
   }
+  if (preview.can_apply !== true) return showCatalogDeletionBlockers(plan.blockers);
+  if (!/^[a-f0-9]{64}$/.test(preview.approval_sha256)) throw new Error("The controller did not provide an exact deletion approval.");
+  const [points, rooms] = counts;
+  const affected = `${points} recovery point${points === 1 ? "" : "s"} and ${rooms} child Room${rooms === 1 ? "" : "s"}`;
+  const answer = await vscode.window.showWarningMessage(`Delete Catalog “${item.label}”?`, {
+    modal: true, detail: `This removes the Catalog, ${affected} from Rooms and disables restoration. Local folders and encrypted payloads remain.`,
+  }, "Delete Catalog");
+  if (answer !== "Delete Catalog") return "cancelled";
+  if (isOpen()) return blockedByWorkspace();
+  const result = await runSelectedEncryption(["composition", "retire-batch", ...args, "--approve", preview.approval_sha256],
+    root, dimension, { title: "Deleting Catalog…", action: "delete a Catalog" });
+  if (!result?.ok || result.status !== "retired" || result.namespace !== namespace || result.physical_deletion !== false
+      || result.recovery_point_count !== points || result.child_room_count !== rooms) {
+    throw new Error("The controller could not verify the Catalog deletion. Refresh Rooms before retrying.");
+  }
+  await roomsProvider?.applyCatalogDeletion(dimensionId, namespace, { kind: "catalog" });
+  void vscode.window.showInformationMessage("Catalog deleted from Rooms.");
+  return result;
 }
 
-async function deleteCatalogItem(item, { refresh = true } = {}) {
+function showCatalogDeletionBlockers(blockers) {
+  const messages = {
+    "incomplete-reservation": "Finish the pending Catalog operation first.",
+    "incomplete-capture-claim": "Finish the pending Catalog capture first.",
+    "retained-parent-pin": "A saved Catalog recovery point still pins this child recovery point.",
+    "room-not-empty": "Delete this child Room’s recovery points first.",
+    "catalog-has-child-rooms": "Delete the child Rooms first.",
+    "catalog-has-recovery-points": "Delete the Catalog recovery points first.",
+  };
+  void vscode.window.showWarningMessage(blockers?.map(row => messages[row.reason]).filter(Boolean).join(" ")
+    || "This item has Catalog dependencies that block deletion.");
+  return "blocked";
+}
+
+async function deleteCatalogItem(item) {
   const kind = {
     "catalog-parent": "catalog",
     "catalog-point": "recovery-point",
@@ -2440,19 +2457,7 @@ async function deleteCatalogItem(item, { refresh = true } = {}) {
       || !matches(preview.plan.target) || preview.physical_deletion !== false) {
     throw new Error("The controller could not verify the selected Catalog item.");
   }
-  if (preview.can_apply !== true) {
-    const messages = {
-      "incomplete-reservation": "Finish the pending Catalog operation first.",
-      "incomplete-capture-claim": "Finish the pending Catalog capture first.",
-      "retained-parent-pin": "A saved Catalog recovery point still pins this child recovery point.",
-      "room-not-empty": "Delete this child Room’s recovery points first.",
-      "catalog-has-child-rooms": "Delete the child Rooms first.",
-      "catalog-has-recovery-points": "Delete the Catalog recovery points first.",
-    };
-    void vscode.window.showWarningMessage(preview.plan.blockers?.map(row => messages[row.reason]).filter(Boolean).join(" ")
-      || "This item has Catalog dependencies that block deletion.");
-    return "blocked";
-  }
+  if (preview.can_apply !== true) return showCatalogDeletionBlockers(preview.plan.blockers);
   if (!/^[a-f0-9]{64}$/.test(preview.approval_sha256)) throw new Error("The controller did not provide an exact deletion approval.");
   const unit = { catalog: "Catalog", room: "Child Room", "recovery-point": "Recovery Point" }[kind];
   const action = `Delete ${unit}`;
@@ -2466,10 +2471,7 @@ async function deleteCatalogItem(item, { refresh = true } = {}) {
   if (!result?.ok || result.status !== "retired" || result.namespace !== namespace || !matches(result.target)) {
     throw new Error("The controller could not verify the Catalog deletion. Refresh Rooms before retrying.");
   }
-  if (refresh) {
-    try { await roomsProvider?.reload(); }
-    catch (error) { outputChannel?.warn(sanitizeControllerText(error.message)); }
-  }
+  await roomsProvider?.applyCatalogDeletion(dimensionId, namespace, target);
   void vscode.window.showInformationMessage(`${unit} deleted from Rooms.`);
   return result;
 }
@@ -5513,6 +5515,31 @@ class HierarchyRoomsProvider {
     this.state = "ready";
     await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", this.roots.length === 0);
     this.emitter.fire(undefined);
+  }
+
+  async applyCatalogDeletion(id, namespace, { kind, room, snapshot }) {
+    if (this.loading) await this.loading.catch(() => {});
+    if (!lastKnownCatalog) return;
+    const dimensions = dimensionList(lastKnownCatalog).map(dimension => {
+      if ((dimension.id || dimension.dimension_id) !== id || !Array.isArray(dimension.catalogs)) return dimension;
+      const catalogs = dimension.catalogs.flatMap(catalog => {
+        if (catalog.namespace !== namespace) return [catalog];
+        if (kind === "catalog") return [];
+        if (kind === "room") {
+          return [{ ...catalog, child_rooms: catalog.child_rooms?.filter(row => row.room_id !== room) }];
+        }
+        if (room === catalog.parent_room_id) {
+          const recoveryPoints = catalog.recovery_points.filter(point => point.snapshot_id !== snapshot);
+          // The previously reported pin may have come from the deleted parent.
+          const childPoints = catalog.child_recovery_points?.map(point => ({ ...point, pinned: false }));
+          return [{ ...catalog, recovery_points: recoveryPoints, child_recovery_points: childPoints }];
+        }
+        return [{ ...catalog, child_recovery_points: catalog.child_recovery_points?.filter(point =>
+          point.room_id !== room || point.snapshot_id !== snapshot) }];
+      });
+      return { ...dimension, catalogs };
+    });
+    await this.setCatalog({ ...lastKnownCatalog, dimensions });
   }
 
   async refresh() {

@@ -8476,3 +8476,50 @@ test("Catalog sidebar deletion shows dependencies and applies only the previewed
   assert.equal((await remove(item)).status, "retired");
   assert.deepEqual(operations, ["retirement-preview", "retirement-preview", "retirement-preview", "retire"]);
 });
+
+test("Delete Catalog confirms a whole Catalog once and updates the sidebar without reloading storage", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-safe-delete-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode } = fixture;
+  const namespace = "1".repeat(32);
+  const dimension = { id: "fixture", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" };
+  const approval = "b".repeat(64);
+  const counts = { recovery_point_count: 3, child_room_count: 2 };
+  const operations = [];
+  const harness = createSpawnHarness(({ args }) => {
+    if (args[0] === "encryption") return { stdout: JSON.stringify({ ok: true, ...dimension, key_generation: 1 }) };
+    assert.equal(args[0], "composition");
+    operations.push(args[1]);
+    if (args[1] === "retirement-batch-preview") {
+      return { stdout: JSON.stringify({ ok: true, can_apply: true, approval_sha256: approval, physical_deletion: false,
+        plan: { format: "composition-retirement-batch-v1", namespace, binding: { dimension_id: dimension.id }, ...counts } }) };
+    }
+    assert.deepEqual(args.slice(-3), ["--approve", approval, "--json"]);
+    return { stdout: JSON.stringify({ ok: true, status: "retired", namespace, physical_deletion: false, ...counts }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const catalog = { namespace, parent_room_id: "parent", display_name: "Synthetic Catalog", child_rooms: [], recovery_points: [] };
+  const other = { ...catalog, namespace: "2".repeat(32), display_name: "Other Catalog" };
+  await provider.setCatalog({ dimensions: [{ ...dimension, catalogs: [catalog, other] }] });
+  provider.reload = () => assert.fail("verified Catalog deletion must update the cached sidebar");
+  extension.__test__.setRoomsProvider(provider);
+  const parentRows = () => provider.roots[0].children[0].children[0].children;
+  let confirmations = 0;
+  vscode.window.showWarningMessage = async (message, options, action) => {
+    confirmations += 1;
+    assert.equal(message, "Delete Catalog “Synthetic Catalog”?");
+    assert.match(options.detail, /3 recovery points and 2 child Rooms/);
+    return confirmations === 2 ? action : undefined;
+  };
+  const remove = fixture.commandCallbacks.get("joshRoom.manageCatalogDeletion");
+  assert.equal(await remove(parentRows()[0]), "cancelled");
+  assert.equal(parentRows().length, 2);
+  assert.equal((await remove(parentRows()[0])).status, "retired");
+  assert.equal(confirmations, 2);
+  assert.deepEqual(operations, ["retirement-batch-preview", "retirement-batch-preview", "retire-batch"]);
+  assert.deepEqual(parentRows().map(row => row.label), ["Other Catalog"]);
+});

@@ -191,3 +191,55 @@ def retire(authority, namespace, kind, room=None, snapshot=None, *, approved_pla
     authority.put(updated, etag)
     return {'ok': True, 'status': 'retired', 'namespace': namespace,
             'target': preview['plan']['target'], 'physical_deletion': False}
+
+
+def _catalog_deletion_targets(envelope):
+    inventory = active_inventory(envelope)
+    if not inventory['catalog_active']:
+        raise ValueError('Catalog is already retired')
+    rooms = sorted(inventory['rooms'].items(), key=lambda item: (item[1]['kind'] != 'catalog', item[0]))
+    points = [_target('recovery-point', room, point) for room, row in rooms for point in row['recovery_points']]
+    children = [_target('room', room) for room, row in rooms if row['kind'] == 'room']
+    return points, children
+
+
+def _batch_plan(authority, namespace):
+    if namespace != authority.namespace:
+        raise ValueError('retirement namespace differs from selected authority')
+    envelope, etag = authority.read()
+    if envelope is None or envelope['state'] is None or not isinstance(etag, str) or not etag:
+        raise ValueError('authenticated namespace is unavailable')
+    points, children = _catalog_deletion_targets(envelope)
+    targets = [*points, *children, _target('catalog')]
+    blockers = _blockers(envelope, targets[0])
+    plan = {
+        'format': 'composition-retirement-batch-v1', 'namespace': namespace,
+        'binding': envelope['binding'], 'recovery_point_count': len(points), 'child_room_count': len(children),
+        'targets_sha256': hashlib.sha256(canonical(targets)).hexdigest(),
+        'authority_etag': etag, 'authority_sha256': hashlib.sha256(canonical(envelope)).hexdigest(),
+        'blockers': blockers,
+    }
+    preview = {'ok': True, 'can_apply': not blockers, 'plan': plan,
+               'approval_sha256': hashlib.sha256(canonical(plan)).hexdigest(), 'physical_deletion': False}
+    return preview, envelope, etag, targets
+
+
+def preview_retirement_batch(authority, namespace):
+    return _batch_plan(authority, namespace)[0]
+
+
+def retire_batch(authority, namespace, *, approved_plan_sha256):
+    preview, envelope, etag, targets = _batch_plan(authority, namespace)
+    if approved_plan_sha256 != preview['approval_sha256']:
+        raise ValueError('retirement approval is stale; review a fresh preview')
+    if not preview['can_apply']:
+        raise ValueError('Catalog retirement is blocked by retained dependencies')
+    candidate = copy.deepcopy(envelope)
+    candidate['format'] = 'composition-authority-v2'
+    ledger = candidate.setdefault('retirements', [])
+    for target in targets:
+        ledger.append({'sequence': len(ledger) + 1, 'target': target, 'approval_sha256': approved_plan_sha256})
+    authority.put(candidate, etag)
+    return {'ok': True, 'status': 'retired', 'namespace': namespace, 'physical_deletion': False,
+            'recovery_point_count': preview['plan']['recovery_point_count'],
+            'child_room_count': preview['plan']['child_room_count']}

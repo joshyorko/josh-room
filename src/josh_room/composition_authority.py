@@ -167,11 +167,22 @@ class CompositionAuthority:
         if previous is not None:
             old = previous.get('retirements', [])
             new = body.get('retirements', [])
-            if new[:len(old)] != old or len(new) < len(old) or len(new) > len(old) + 1:
+            if new[:len(old)] != old or len(new) < len(old):
                 raise ValueError('retirement history is immutable')
             if previous['format'] == 'composition-authority-v2' and body['format'] != previous['format']:
                 raise ValueError('retirement authority cannot be downgraded')
             if len(new) != len(old):
+                added = new[len(old):]
+                if len(added) > 1:
+                    from .composition_retirement import (
+                        _catalog_deletion_targets,
+                        _target,
+                    )
+
+                    points, children = _catalog_deletion_targets(previous)
+                    if ([entry['target'] for entry in added] != [*points, *children, _target('catalog')]
+                            or any(entry['approval_sha256'] != added[0]['approval_sha256'] for entry in added)):
+                        raise ValueError('retirement batch differs from the complete Catalog inventory')
                 before = {key: value for key, value in previous.items() if key not in ('format', 'retirements')}
                 after = {key: value for key, value in body.items() if key not in ('format', 'retirements')}
                 if before != after:
