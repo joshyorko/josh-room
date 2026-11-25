@@ -405,7 +405,8 @@
       {
         "command": "joshRoom.restoreCatalogChildren",
         "title": "Restore Child Rooms…",
-        "category": "Josh Room"
+        "category": "Josh Room",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "joshRoom.enterChild",
