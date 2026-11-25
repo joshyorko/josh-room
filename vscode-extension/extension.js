@@ -2305,6 +2305,15 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
       && !fs.existsSync(path.join(root, ".josh-room-split.json"))) {
     return enterCatalogChildAt(root, current, dimension, child, restoreChildren);
   }
+  let selectedChildren;
+  if (!child && Array.isArray(point.children) && point.children.length) {
+    const scope = await vscode.window.showQuickPick(point.children.map(label => ({ label })), {
+      canPickMany: true, title: `Restore ${catalog.display_name || "Catalog Room"}`,
+      placeHolder: "Check children to restore, use Select All, or leave all unchecked for the parent only.",
+    });
+    if (scope === undefined) return "cancelled";
+    selectedChildren = scope.map(row => row.label);
+  }
   const destination = await vscode.window.showSaveDialog({ title: "Restore Catalog Room to a new folder",
     saveLabel: "Restore Catalog", defaultUri: vscode.Uri.file(path.join(root, "Restored Catalog")) });
   if (!destination) return "cancelled";
@@ -2323,7 +2332,10 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
     project_id: result.room_id, snapshot_id: result.snapshot_id };
   await extensionContext?.globalState?.update(catalogPromptKey(destination.fsPath, restoredMarker), true);
   if (child) return enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, child);
-  const next = restoreChildren ? { id: "children" } : await vscode.window.showQuickPick([
+  if (selectedChildren?.length) {
+    await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, undefined, true, selectedChildren);
+  }
+  const next = selectedChildren !== undefined ? undefined : restoreChildren ? { id: "children" } : await vscode.window.showQuickPick([
     { id: "child", label: "Choose a child Room", description: "Restore one of this Catalog’s pinned folders" },
     { id: "children", label: "Restore child Rooms…", description: "Select all folders or just the ones you need" },
     { id: "parent", label: "Open Catalog parent", description: "Open the root files and Catalog links" },
@@ -2359,10 +2371,10 @@ async function enterChildRoom(multiple = false) {
   return enterCatalogChildAt(root, marker, dimension, undefined, multiple);
 }
 
-function enterCatalogChildAt(root, marker, dimension, childPath, multiple = false) {
+function enterCatalogChildAt(root, marker, dimension, childPath, multiple = false, childPaths) {
   const actions = require("./catalog-actions");
   return (multiple ? actions.hydrateChildren : actions.enterChild)(vscode, {
-    root, marker, childPath, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
+    root, marker, childPath, childPaths, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     enter: ({ namespace, child }) => runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
       "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
     dimension, { title: "Entering pinned child Room…", action: "enter a child Room" }),

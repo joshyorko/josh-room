@@ -8364,7 +8364,15 @@ test("registered Catalog restore submits the selected exact pin and only opens a
     secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
   const restore = fixture.commandCallbacks.get("joshRoom.restoreCatalog");
   const point = { kind: "catalog-point", dimension, catalog: { namespace, parent_room_id: "parent" },
-    point: { snapshot_id: "jat-older" } };
+    point: { snapshot_id: "jat-older", children: ["a", "b"] } };
+  vscode.window.showSaveDialog = async () => assert.fail("scope cancellation must stop before choosing a destination");
+  vscode.window.showQuickPick = async () => undefined;
+  assert.equal(await restore(point), "cancelled");
+  vscode.window.showQuickPick = async (rows, options) => {
+    assert.equal(options.canPickMany, true);
+    assert.deepEqual(rows.map(row => row.label), ["a", "b"]);
+    return [];
+  };
   vscode.window.showSaveDialog = async () => undefined;
   assert.equal(await restore(point), "cancelled");
   assert.equal(calls, 0);

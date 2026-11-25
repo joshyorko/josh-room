@@ -303,20 +303,20 @@ async function enterChild(vscode, { root, marker, listChildren, enter, open, chi
   return result;
 }
 
-async function hydrateChildren(vscode, { root, marker, listChildren, enter }) {
+async function hydrateChildren(vscode, { root, marker, listChildren, enter, childPaths }) {
   const { choices } = await pinnedChildChoices(marker, listChildren, false);
-  const selected = await vscode.window.showQuickPick(choices, { canPickMany: true,
-    title: "Restore Catalog child Rooms", placeHolder: "Check the child Rooms to restore, or use Select All." });
+  const selected = childPaths ?? (await vscode.window.showQuickPick(choices, { canPickMany: true,
+    title: "Restore Catalog child Rooms", placeHolder: "Check the child Rooms to restore, or use Select All." }))?.map(choice => choice.label);
   if (!selected?.length) return "cancelled";
+  const pinned = [...new Set(selected)].map(label => choices.find(choice => choice.label === label));
+  if (pinned.some(choice => !choice)) throw new Error("A selected child is unavailable at this Catalog recovery point.");
   const restored = [];
-  for (const choice of selected) {
-    const pinned = choices.find(candidate => candidate.label === choice.label);
-    if (!pinned) throw new Error("A selected child is unavailable at this Catalog recovery point.");
+  for (const choice of pinned) {
     try {
-      const { result } = await hydratePinnedChild(root, marker, pinned.row, enter);
+      const { result } = await hydratePinnedChild(root, marker, choice.row, enter);
       restored.push(result);
     } catch (error) {
-      throw new Error(`Restored ${restored.length} of ${selected.length} child Rooms. ${pinned.label}: ${error.message}`);
+      throw new Error(`Restored ${restored.length} of ${pinned.length} child Rooms. ${choice.label}: ${error.message}`);
     }
   }
   void vscode.window.showInformationMessage(`Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`);
