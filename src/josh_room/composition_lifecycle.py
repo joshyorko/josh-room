@@ -248,7 +248,7 @@ def _child_inventory(source, child, root_policy, selection):
     for path in scan.paths:
         if path != ".josh-roomignore":
             try:
-                validate_payload_path(path)
+                validate_payload_path(path, allow_nested_policy=True)
             except ValueError as error:
                 if str(error) != "reserved composition payload path":
                     raise

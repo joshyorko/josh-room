@@ -184,7 +184,7 @@ def _child_view(workspace, private, namespace, room, baseline, accepted, expecte
         validate_child_git(workspace, scan.paths, policy.capture_mode)
         for path in scan.paths:
             if path != '.josh-roomignore':
-                validate_payload_path(path)
+                validate_payload_path(path, allow_nested_policy=True)
         records = _records(workspace, scan.paths, fd)
         # Marker/guard replacement changes the root's mtime but no payload.
         evidence_records = {**records, '.': records['.'][:3]}
@@ -485,7 +485,7 @@ def _parent_save_view(workspace, private, manifest, policy_sha256, root_files_on
         if root_files_only:
             paths = {path for path in paths if stat.S_ISREG(records[path][2])}
         for path in paths:
-            validate_payload_path(path)
+            validate_payload_path(path, allow_nested_policy=True)
         view = private / ('parent-save-view-' + uuid.uuid4().hex)
         view.mkdir(mode=0o700)
         ignore, modes = _copy_paths(workspace, view, paths, source_fd=fd, records=records)

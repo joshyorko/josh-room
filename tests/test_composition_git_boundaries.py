@@ -121,3 +121,29 @@ def test_active_worktree_config_offers_files_only_for_that_child(tmp_path):
     _child_view(source, "child", target, preview["request"])
     assert (target / "payload.txt").read_text() == "synthetic source content"
     assert not (target / ".git").exists()
+
+
+def test_catalog_child_keeps_nested_repo_and_its_own_ignore_file(tmp_path):
+    if not shutil.which("git"):
+        pytest.skip("requires Git for a nested repository")
+    source = tmp_path / "source"
+    repo = source / "group" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "payload.txt").write_text("inner project file")
+    (repo / ".josh-roomignore").write_text("payload.txt\n")
+    dimension = DimensionConfig(
+        "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
+        "synthetic-bucket", "synthetic-profile", connection_id="synthetic",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    assignments = [{"path": "group", "outcome": "child"}]
+    preview = capture_plan(source, dimension, "1" * 32, "parent", assignments, root_files_only=True)
+    target = tmp_path / "staged"
+    _child_view(source, "group", target, preview["request"])
+    assert (target / "repo/.git/HEAD").is_file()
+    assert (target / "repo/.josh-roomignore").read_bytes() == b"payload.txt\n"
+    assert (target / "repo/payload.txt").read_text() == "inner project file"
+    (repo / ".josh-room-composition.json").write_text("{}")
+    with pytest.raises(CompositionAdmissionError, match="reserved Room metadata"):
+        capture_plan(source, dimension, "1" * 32, "parent", assignments, root_files_only=True)
