@@ -6,6 +6,7 @@ installed VSIX qualification. All source names and identities are synthetic.
 
 import hashlib
 import io
+import json
 import os
 import shutil
 import sqlite3
@@ -281,14 +282,21 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     ]
     preview = capture_plan(
         r.source, r.dimension, NAMESPACE, "parent", assignments,
-        root_files_only=True,
+        root_files_only=True, parent_name="Synthetic Projects",
     )
     assert preview["request"]["root_files_only"] is True
     assert preview["request"]["assignments"] == assignments
+    assert preview["request"]["parent_name"] == "Synthetic Projects"
+    with pytest.raises(ValueError, match="approval is stale"):
+        save_composition(
+            r.source, r.dimension, NAMESPACE, "parent", assignments,
+            preview["approval_sha256"], r.authority, r.factory, r.private,
+            root_files_only=True, parent_name="Changed Catalog Name",
+        )
     saved = save_composition(
         r.source, r.dimension, NAMESPACE, "parent", assignments,
         preview["approval_sha256"], r.authority, r.factory, r.private,
-        root_files_only=True,
+        root_files_only=True, parent_name="Synthetic Projects",
     )
     from josh_room.composition_discovery import discover_catalogs
 
@@ -301,6 +309,8 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     assert discovery["catalog_discovery_partial"] is True
     assert [(row["namespace"], row["parent_room_id"]) for row in discovery["catalogs"]] == [(NAMESPACE, "parent")]
     assert discovery["catalogs"][0]["recovery_points"][0]["snapshot_id"] == saved["parent_snapshot_id"]
+    assert discovery["catalogs"][0]["display_name"] == "Synthetic Projects"
+    assert discovery["catalogs"][0]["recovery_points"][0]["children"] == ["a", "b"]
     assert r.transport.writes == writes
     target = r.tmp / "root-files-only-entered"
     parent = hydrate_composition(
@@ -308,6 +318,7 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
         target, r.authority, r.factory, r.private,
     )
     assert parent["marker_verified"]
+    assert json.loads((target / ".josh-room.json").read_text())["display_name"] == "Synthetic Projects"
     assert (target / "notes.txt").read_text() == "parent note\n"
     assert not any((target / path).exists() for path in ("a", "b", "local"))
 

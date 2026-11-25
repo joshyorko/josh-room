@@ -8257,6 +8257,7 @@ for (const [command, provider, readiness, expected] of [
     }
     assert.equal(args[0], "composition");
     assert.ok(args.includes("--root-files-only"));
+    assert.ok(args.includes("--parent-name=Synthetic Projects"));
     operations.push(args[1]);
     assert.ok(!args.includes("--expected-domain"));
     assert.equal(Boolean(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL), provider === "minio");
@@ -8273,7 +8274,10 @@ for (const [command, provider, readiness, expected] of [
   extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
     secrets: { get: async key => provider === "minio" && key.startsWith("josh-room.encryption.v1:")
       ? JSON.stringify({ identity: "synthetic-identity" }) : undefined } });
-  vscode.window.showInputBox = () => assert.fail("manual UUID requested");
+  vscode.window.showInputBox = options => {
+    assert.equal(options.title, "Name the Catalog Room");
+    return "Synthetic Projects";
+  };
   if (command === "joshRoom.new") fixture.quickPickResponses.push({ id: "catalog" });
   fixture.quickPickResponses.push([{ label: "a" }], { dimension });
   fixture.openDialogResponses.push([{ fsPath: root }]);
@@ -8375,4 +8379,26 @@ test("registered Catalog restore submits the selected exact pin and only opens a
   assert.equal((await restore(point)).snapshot_id, "jat-older");
   assert.equal(calls, 2);
   assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 1);
+});
+
+test("opening an exact Catalog parent only offers restoration once and makes no storage calls", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-open-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  vscode.workspace.isTrusted = true;
+  const calls = [];
+  vscode.window.showInformationMessage = async (...args) => { calls.push(args); };
+  const extension = loadExtension(vscode, () => assert.fail("startup must not start the controller"));
+  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify({
+    format_version: 4, project_id: "parent", display_name: "Synthetic Catalog", snapshot_id: "jat-parent",
+    dimension_id: "synthetic", composition_namespace: "1".repeat(32), encryption_domain_id: "domain",
+    workspace_signature: "0".repeat(64), capture_policy_sha256: "0".repeat(64),
+    signature_algorithm: "josh-room-stat-v1", workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
+  }));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "a" }] }));
+  const state = new Map();
+  const context = { globalState: { get: key => state.get(key), update: async (key, value) => state.set(key, value) } };
+  await extension.__test__.offerCatalogChildOnOpen(context);
+  await extension.__test__.offerCatalogChildOnOpen(context);
+  assert.deepEqual(calls, [["This Catalog has child Rooms available to restore.", "Choose child Rooms"]]);
 });

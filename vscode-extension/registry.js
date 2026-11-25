@@ -298,12 +298,17 @@ function catalogNodes(dimension) {
       description: new Date(points[0].created_at).toLocaleString(),
       catalog, dimension,
     };
-    parent.children = points.map(point => ({
-      kind: "catalog-point", id: `${parent.id}:${point.snapshot_id}`,
-      label: new Date(point.created_at).toLocaleString(),
-      description: `${point.child_count} child ${point.child_count === 1 ? "Room" : "Rooms"}`,
-      catalog, point, dimension,
-    }));
+    parent.children = points.map(point => {
+      const entry = {
+        kind: "catalog-point", id: `${parent.id}:${point.snapshot_id}`,
+        label: new Date(point.created_at).toLocaleString(),
+        description: `${point.child_count} child ${point.child_count === 1 ? "Room" : "Rooms"}`,
+        catalog, point, dimension,
+      };
+      entry.children = (Array.isArray(point.children) ? point.children : []).filter(child => typeof child === "string")
+        .map(child => ({ kind: "catalog-child", id: `${entry.id}:${child}`, label: child, catalog, point, dimension, child }));
+      return entry;
+    });
     return [parent];
   });
   if (dimension.catalog_discovery_partial) parents.push({

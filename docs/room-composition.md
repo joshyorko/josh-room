@@ -108,7 +108,9 @@ and passes assignments only for checked immediate child directories. The flag
 defines the root-file/child boundary for that operation; CLI calls without the
 flag retain their existing explicit subtree-assignment behavior.
 
-After folder selection, choose the destination. **Review Catalog** shows the
+After folder selection, name the Catalog Room and choose the destination.
+The source folder name is suggested. The chosen name appears in **Rooms** and
+on the restored parent. **Review Catalog** shows the
 destination, the Catalog parent, and a scrollable list of child folders with
 their Git capture settings and optional content. Choose **Save catalog** to
 approve, or **Cancel** to leave without saving.
@@ -126,10 +128,16 @@ In a restored Catalog parent, **Enter Child Room** lets you choose a saved child
 **Refresh Catalog Child Pins** lets you choose a child and a particular saved
 version. The controller verifies the parent's membership and exact recovery points.
 On an enrolled machine, reload **Rooms** and expand the storage bucket. Saved
-Catalog parents appear as **Catalog Room** entries with their most recent save
-date. Select the parent and an exact recovery point, then choose a new folder
-for **Restore Catalog Room**. Use **Enter Child Room** from the restored parent
-to open a pinned child. If discovery is marked incomplete, the receipt and CLI
+Catalog parents appear by name and save date. Expand a dated recovery point
+and select a pinned child to enter it directly. If the exact parent is not
+open, choose a new folder to restore that parent first. To restore several
+children, use **Restore Catalog Child Rooms…** from the recovery point's
+context menu, check the folders you want, or use **Select All**. Open a dated
+point to restore the parent and then choose one child, several children, or the
+parent itself. When an existing Catalog parent opens with a child that is not
+yet on disk, Josh Room offers the checkbox picker once for that folder and
+recovery point. Each restore requires an explicit choice and never overwrites
+an occupied child. If discovery is marked incomplete, the receipt and CLI
 still allow restoring a known exact recovery point.
 
 ## Selecting child components

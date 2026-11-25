@@ -524,7 +524,8 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
             if (restored / MANIFEST).read_bytes() != canonical(manifest) or _content_digest(restored) != _content_digest(view):
                 raise ValueError('refreshed parent payload differs')
             state = record_parent(state, operation_id, plan_digest(plan), descriptor=descriptor,
-                object_ref=authority.put_descriptor(descriptor), workspace_signature=saved_scan.signature, display_name='Catalog Room')
+                object_ref=authority.put_descriptor(descriptor), workspace_signature=saved_scan.signature,
+                display_name=state.to_dict()['dimension_catalog']['projects'][room]['display_name'])
             envelope, etag = _commit(authority, envelope, etag, state)
         else:
             _, committed = _descriptor(authority, state, room, output)

@@ -283,11 +283,16 @@ def _child_inventory(source, child, root_policy, selection):
     return scan, evidence, generated
 
 
-def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, root_files_only=False):
+def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, root_files_only=False, parent_name=None):
     if not sys.platform.startswith("linux"):
         raise ValueError("catalog capture is not yet qualified on this platform")
     namespace_prefix(namespace)
     _identifier(parent_room)
+    if parent_name is not None:
+        if (not isinstance(parent_name, str) or not 1 <= len(parent_name.strip()) <= 100
+                or any(unicodedata.category(c) in {"Cc", "Zl", "Zp"} for c in parent_name)):
+            raise CompositionAdmissionError("composition-parent-name-invalid", "Enter a Catalog name on one line, up to 100 characters.")
+        parent_name = parent_name.strip()
     workspace = Path(os.path.abspath(workspace))
     descriptor = _directory(workspace)
     source_identity = [os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino]
@@ -475,6 +480,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
         "source_signature": scan.signature,
         "capture_policy_sha256": policy.sha256,
         "parent_room_id": parent_room,
+        **({"parent_name": parent_name} if parent_name is not None else {}),
         "capture_mode": "source-only",
         "assignments": rows,
         **({"root_files_only": True} if root_files_only else {}),
@@ -1071,6 +1077,7 @@ def save_composition(
     private,
     *,
     root_files_only=False,
+    parent_name=None,
 ):
     if namespace != authority.namespace:
         raise ValueError("requested namespace differs from selected authority")
@@ -1080,13 +1087,10 @@ def save_composition(
         or workspace.resolve() in Path(private).resolve().parents
     ):
         raise ValueError("private runtime must be outside the capture source")
-    if root_files_only:
-        preview = capture_plan(
-            workspace, dimension, namespace, parent_room, assignments,
-            root_files_only=True,
-        )
-    else:
-        preview = capture_plan(workspace, dimension, namespace, parent_room, assignments)
+    options = {"root_files_only": True} if root_files_only else {}
+    if parent_name is not None:
+        options["parent_name"] = parent_name
+    preview = capture_plan(workspace, dimension, namespace, parent_room, assignments, **options)
     request = preview["request"]
     if approval != preview["approval_sha256"]:
         raise CompositionAdmissionError("composition-approval-stale", "capture approval is stale or missing")
@@ -1280,11 +1284,7 @@ def save_composition(
             ):
                 raise ValueError("saved parent contains child payload")
             if (
-                (capture_plan(workspace, dimension, namespace, parent_room, assignments,
-                              root_files_only=True) if root_files_only else
-                 capture_plan(workspace, dimension, namespace, parent_room, assignments))[
-                    "approval_sha256"
-                ]
+                capture_plan(workspace, dimension, namespace, parent_room, assignments, **options)["approval_sha256"]
                 != approval
             ):
                 raise ValueError(
@@ -1297,7 +1297,7 @@ def save_composition(
                 descriptor=descriptor,
                 object_ref=authority.put_descriptor(descriptor),
                 workspace_signature=scan.signature,
-                display_name="Catalog Room",
+                display_name=request.get("parent_name", "Catalog Room"),
             )
             envelope, etag = _commit(authority, envelope, etag, state)
         catalog = Catalog.from_body(state.to_dict()["dimension_catalog"])
@@ -1481,7 +1481,7 @@ def hydrate_composition(
                 Path(destination),
                 private,
                 dimension,
-                "Catalog Room",
+                catalog.body["projects"][room]["display_name"],
                 namespace=namespace,
             )
         else:

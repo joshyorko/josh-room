@@ -62,7 +62,7 @@ function reviewedDestination(dimension, binding) {
   };
 }
 
-function reviewCatalog(vscode, root, destination, children) {
+function reviewCatalog(vscode, name, destination, children) {
   const heading = label => ({ label, kind: vscode.QuickPickItemKind.Separator });
   const parent = {
     label: "$(root-folder) Catalog parent",
@@ -71,7 +71,7 @@ function reviewCatalog(vscode, root, destination, children) {
     alwaysShow: true,
   };
   const picker = vscode.window.createQuickPick();
-  picker.title = `Review Catalog · ${path.basename(root) || root} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
+  picker.title = `Review Catalog · ${name} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
   picker.placeholder = "Review the plan, then choose Save catalog, Advanced settings, or Cancel";
   picker.matchOnDescription = true;
   picker.matchOnDetail = true;
@@ -146,13 +146,19 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
   const root = source[0].fsPath;
   const children = await selectChildren(root);
   if (!children?.length) return "cancelled";
+  const validateName = value => !value.trim() || [...value.trim()].length > 100 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
+    ? "Enter a Catalog name on one line, up to 100 characters." : undefined;
+  const name = await vscode.window.showInputBox({ title: "Name the Catalog Room",
+    value: path.basename(root) || "Catalog Room", validateInput: validateName });
+  if (name === undefined) return "cancelled";
+  if (validateName(name)) throw new Error(validateName(name));
   let assignments = children.map(path => ({ path, outcome: "child" }));
   const configured = await dimensions(root);
   const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Where should this catalog be saved?" });
   if (!choice) return "cancelled";
   const namespace = crypto.randomUUID().replaceAll("-", "");
   const parentRoom = `catalog-${namespace}`;
-  let selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
+  let selection = { root, assignments, namespace, parentRoom, name: name.trim(), dimension: choice.dimension };
   for (;;) {
     let preview;
     try {
@@ -192,7 +198,7 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
         ...(components === "Workspace only" ? {} : { detail: components }),
       };
     });
-    const approved = await reviewCatalog(vscode, root, destination, childSummary);
+    const approved = await reviewCatalog(vscode, selection.name, destination, childSummary);
     if (approved === "Advanced settings") {
       const edited = await catalogSettings(vscode, root, assignments, chooseComponents);
       if (!edited) return "cancelled";
@@ -215,7 +221,7 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
   }
 }
 
-async function chooseChild(vscode, marker, listChildren, refresh) {
+async function pinnedChildChoices(marker, listChildren, refresh) {
   if (!marker?.composition_namespace || !marker?.project_id || !marker?.snapshot_id || !marker?.dimension_id) {
     throw new Error("Open a restored Catalog parent first.");
   }
@@ -233,6 +239,16 @@ async function chooseChild(vscode, marker, listChildren, refresh) {
     }
     offset = page.next_offset;
   } while (offset !== null);
+  return { choices, revision };
+}
+
+async function chooseChild(vscode, marker, listChildren, refresh, childPath) {
+  const { choices, revision } = await pinnedChildChoices(marker, listChildren, refresh);
+  if (childPath !== undefined) {
+    const pinned = choices.find(choice => choice.row.path === childPath);
+    if (!pinned) throw new Error("The selected child is unavailable at this Catalog recovery point.");
+    return { ...pinned.row, revision };
+  }
   if (!choices.length) {
     await vscode.window.showInformationMessage(refresh ? "All child Rooms are pinned to their only saved recovery point." : "This parent has no child Rooms.");
     return undefined;
@@ -267,9 +283,7 @@ async function chooseRecoveryPoint(vscode, marker, child, listChildren) {
   }
 }
 
-async function enterChild(vscode, { root, marker, listChildren, enter, open }) {
-  const row = await chooseChild(vscode, marker, listChildren, false);
-  if (!row) return "cancelled";
+async function hydratePinnedChild(root, marker, row, enter) {
   const target = path.resolve(root, row.path);
   relativeSource(root, target);
   const result = await enter({ namespace: marker.composition_namespace, child: row.path, marker });
@@ -277,9 +291,36 @@ async function enterChild(vscode, { root, marker, listChildren, enter, open }) {
       || result.room_id !== row.room_id || result.snapshot_id !== row.snapshot_id) {
     throw new Error("Child entry did not verify the selected recovery point. Preserve the destination.");
   }
+  return { result, target };
+}
+
+async function enterChild(vscode, { root, marker, listChildren, enter, open, childPath }) {
+  const row = await chooseChild(vscode, marker, listChildren, false, childPath);
+  if (!row) return "cancelled";
+  const { result, target } = await hydratePinnedChild(root, marker, row, enter);
   await vscode.window.showInformationMessage(`Child Room verified at exact recovery point ${result.snapshot_id}.`);
   await open(target);
   return result;
+}
+
+async function hydrateChildren(vscode, { root, marker, listChildren, enter }) {
+  const { choices } = await pinnedChildChoices(marker, listChildren, false);
+  const selected = await vscode.window.showQuickPick(choices, { canPickMany: true,
+    title: "Restore Catalog child Rooms", placeHolder: "Check the child Rooms to restore, or use Select All." });
+  if (!selected?.length) return "cancelled";
+  const restored = [];
+  for (const choice of selected) {
+    const pinned = choices.find(candidate => candidate.label === choice.label);
+    if (!pinned) throw new Error("A selected child is unavailable at this Catalog recovery point.");
+    try {
+      const { result } = await hydratePinnedChild(root, marker, pinned.row, enter);
+      restored.push(result);
+    } catch (error) {
+      throw new Error(`Restored ${restored.length} of ${selected.length} child Rooms. ${pinned.label}: ${error.message}`);
+    }
+  }
+  void vscode.window.showInformationMessage(`Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`);
+  return { ok: true, restored };
 }
 
 function savedComponents(components) {
@@ -329,4 +370,4 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
   return result;
 }
 
-module.exports = { saveCatalog, enterChild, relativeSource, updateRoom };
+module.exports = { saveCatalog, enterChild, hydrateChildren, relativeSource, updateRoom };

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,6 +16,7 @@ _PREFIX = "composition/v1/"
 _PAGE_SIZE = 16
 _MAX_PAGES = 4
 _MAX_POINTS = 64
+_CHILD_LABEL_BUDGET = 12 * 1024
 
 
 def discover_catalogs(backend, dimension, material):
@@ -25,6 +27,7 @@ def discover_catalogs(backend, dimension, material):
     seen = set()
     cursor = None
     points = 0
+    child_label_bytes = 0
     with TemporaryDirectory(prefix="josh-room-catalog-list-") as tmp:
         for _ in range(_MAX_PAGES):
             try:
@@ -61,10 +64,18 @@ def discover_catalogs(backend, dimension, material):
                         record = catalog.resolve_snapshot(parent, snapshot)
                         if record["ciphertext_sha256"] != pin["descriptor_sha256"]:
                             raise ValueError("Catalog parent pin differs from its record")
-                        parents.setdefault(parent, {})[snapshot] = {
+                        paths = sorted(operation["child_pins"])
+                        point = {
                             "snapshot_id": snapshot, "created_at": record["created_at"],
-                            "child_count": len(operation["child_pins"]),
+                            "child_count": len(paths),
                         }
+                        label_bytes = len(json.dumps(paths))
+                        if child_label_bytes + label_bytes <= _CHILD_LABEL_BUDGET:
+                            point["children"] = paths
+                            child_label_bytes += label_bytes
+                        else:
+                            result["catalog_discovery_partial"] = True
+                        parents.setdefault(parent, {})[snapshot] = point
                     for parent, records in parents.items():
                         newest = sorted(records.values(), key=lambda row: (row["created_at"], row["snapshot_id"]), reverse=True)
                         available = _MAX_POINTS - points
@@ -73,7 +84,8 @@ def discover_catalogs(backend, dimension, material):
                         if not available:
                             return result
                         catalogs.append({"namespace": namespace, "parent_room_id": parent,
-                                         "display_name": "Catalog Room", "recovery_points": newest[:available]})
+                                         "display_name": catalog.body["projects"][parent]["display_name"],
+                                         "recovery_points": newest[:available]})
                         points += min(len(newest), available)
                 except (BotoCoreError, ClientError, KeyError, OSError, RuntimeError, ValueError):
                     result["catalog_discovery_partial"] = True

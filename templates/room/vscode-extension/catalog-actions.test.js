@@ -2,12 +2,13 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { saveCatalog, enterChild, relativeSource, updateRoom } = require("./catalog-actions");
+const { saveCatalog, enterChild, hydrateChildren, relativeSource, updateRoom } = require("./catalog-actions");
 
 const binding = { provider: "minio", dimension_id: "dimension", connection_id: "synthetic-connection",
   encryption_domain_id: "00000000-0000-4000-8000-000000000001", physical_bucket: "minio:https://storage.example.invalid:fixture" };
 
 function installReviewPicker(vscode, interact) {
+  vscode.window.showInputBox ??= async options => options.value;
   vscode.QuickPickItemKind = { Separator: -1 };
   vscode.window.createQuickPick = () => {
     let accepted, hidden, disposed = false;
@@ -43,8 +44,13 @@ test("catalog confirmation assigns only checked child folders and explains root-
     showOpenDialog: async () => dialogs.shift(), showQuickPick: async () => picks.shift(),
     showInformationMessage: async (_, action) => { assert.equal(action, "Copy recovery receipt"); return action; },
   } };
+  vscode.window.showInputBox = async options => {
+    assert.equal(options.value, "root");
+    assert.ok(options.validateInput("  "));
+    return "  Synthetic Catalog  ";
+  };
   installReviewPicker(vscode, (picker, accept) => {
-    assert.match(picker.title, /root → Storage · 1 child Room/);
+    assert.match(picker.title, /Synthetic Catalog → Storage · 1 child Room/);
     assert.deepEqual(picker.items.filter(item => item.kind === -1).map(item => item.label),
       ["Destination", "Capture", "Actions", "Child Rooms"]);
     const destination = picker.items.find(item => item.label === "Storage");
@@ -62,7 +68,7 @@ test("catalog confirmation assigns only checked child folders and explains root-
   });
   const result = await saveCatalog(vscode, {
     selectChildren: async root => { assert.equal(root, "/synthetic/root"); return ["a"]; }, dimensions: async () => [{ id: "dimension", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" }],
-    plan: async (selection) => { assert.equal(approved, false); assert.deepEqual(selection.assignments, [{ path: "a", outcome: "child" }]); return { request: { destination_binding: binding, child_evidence: { a: { capture_mode: "full-repository" } } }, approval_sha256: "approved" }; },
+    plan: async (selection) => { assert.equal(approved, false); assert.equal(selection.name, "Synthetic Catalog"); assert.deepEqual(selection.assignments, [{ path: "a", outcome: "child" }]); return { request: { destination_binding: binding, child_evidence: { a: { capture_mode: "full-repository" } } }, approval_sha256: "approved" }; },
     save: async (selection, approval) => { assert.equal(approved, true); assert.equal(approval, "approved"); return { ok: true, namespace: selection.namespace, parent_room_id: selection.parentRoom, parent_snapshot_id: "exact-pin" }; },
   });
   assert.equal(result.ok, true);
@@ -337,6 +343,7 @@ for (const [field, value] of Object.entries({
     encryption_domain_id: binding.encryption_domain_id, endpoint: "https://storage.example.invalid", bucket: "fixture" };
   const vscode = { window: { showOpenDialog: async () => dialogs.shift(), showQuickPick: async rows => rows[0],
     createQuickPick: () => assert.fail("unexpected approval") } };
+  vscode.window.showInputBox = async options => options.value;
   await assert.rejects(saveCatalog(vscode, { selectChildren: async () => ["a"], dimensions: async () => [dimension],
     plan: async () => ({ request: { destination_binding: { ...binding, [field === "endpoint" ? "physical_bucket" : field]: value },
       child_evidence: { a: { capture_mode: "full-repository" } } } }),
@@ -394,4 +401,36 @@ test("refresh pages all saved child paths and allows choosing a later history pa
       return { approval_sha256: "approved", snapshot_id: "new-parent", changed: true };
     }, save: async () => ({ ok: true, snapshot_id: "new-parent" }) });
   assert.deepEqual(reads.map(page => [page.offset, page.revision]), [[0, undefined], [1, 1], [0, 1], [64, 1]]);
+});
+
+test("Catalog hydration restores only the explicitly checked children at their pins", async () => {
+  const marker = { composition_namespace: "1".repeat(32), dimension_id: "synthetic",
+    project_id: "parent", snapshot_id: "jat-parent" };
+  const children = ["a", "b", "c"].map(path => ({ path, room_id: path, snapshot_id: `jat-${path}` }));
+  const entered = [];
+  const callbacks = { root: "/synthetic/root", marker,
+    listChildren: async () => ({ ok: true, namespace: marker.composition_namespace, revision: 1,
+      parent_room_id: "parent", parent_snapshot_id: "jat-parent", children, next_offset: null }),
+    enter: async ({ child }) => {
+      entered.push(child);
+      return { ok: true, marker_verified: true, namespace: marker.composition_namespace,
+        room_id: child, snapshot_id: `jat-${child}` };
+    },
+  };
+  const vscode = { window: {
+    showQuickPick: async (rows, options) => {
+      assert.equal(options.canPickMany, true);
+      assert.deepEqual(rows.map(row => row.label), ["a", "b", "c"]);
+      return [rows[0], rows[2]];
+    },
+    showInformationMessage: async () => {},
+  } };
+  const result = await hydrateChildren(vscode, callbacks);
+  assert.deepEqual(entered, ["a", "c"]);
+  assert.deepEqual(result.restored.map(row => row.snapshot_id), ["jat-a", "jat-c"]);
+  vscode.window.showQuickPick = async rows => rows;
+  const all = await hydrateChildren(vscode, callbacks);
+  assert.deepEqual(all.restored.map(row => row.snapshot_id), ["jat-a", "jat-b", "jat-c"]);
+  vscode.window.showQuickPick = async () => undefined;
+  assert.equal(await hydrateChildren(vscode, { ...callbacks, enter: assert.fail }), "cancelled");
 });

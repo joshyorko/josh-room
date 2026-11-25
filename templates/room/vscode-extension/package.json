@@ -70,6 +70,7 @@
     "onCommand:joshRoom.splitWorkspace",
     "onCommand:joshRoom.saveCatalog",
     "onCommand:joshRoom.restoreCatalog",
+    "onCommand:joshRoom.restoreCatalogChildren",
     "onCommand:joshRoom.enterChild",
     "onCommand:joshRoom.saveChild",
     "onCommand:joshRoom.refreshCatalogPins",
@@ -325,11 +326,16 @@
       },
       {
         "command": "joshRoom.saveCatalog",
-        "title": "Josh: Save Catalog Room"
+        "title": "Josh: Save Catalog Room",
+        "icon": "$(library)"
       },
       {
         "command": "joshRoom.restoreCatalog",
         "title": "Josh: Restore Catalog Room"
+      },
+      {
+        "command": "joshRoom.restoreCatalogChildren",
+        "title": "Josh: Restore Catalog Child Rooms…"
       },
       {
         "command": "joshRoom.enterChild",
@@ -445,12 +451,27 @@
           "group": "navigation@3"
         },
         {
+          "command": "joshRoom.saveCatalog",
+          "when": "view == joshRoom.rooms",
+          "group": "navigation@4"
+        },
+        {
+          "command": "joshRoom.restoreCatalog",
+          "when": "view == joshRoom.rooms",
+          "group": "2_catalog@1"
+        },
+        {
           "command": "joshRoom.prepare",
           "when": "view == joshRoom.rooms",
           "group": "4_load"
         }
       ],
       "view/item/context": [
+        {
+          "command": "joshRoom.restoreCatalogChildren",
+          "when": "view == joshRoom.rooms && (viewItem == catalog-parent || viewItem == catalog-point)",
+          "group": "catalog@1"
+        },
         {
           "command": "joshRoom.agentSessionsStatus",
           "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",

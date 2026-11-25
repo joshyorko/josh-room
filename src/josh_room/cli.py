@@ -503,6 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
             operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice outside root-files-only mode')
             operation.add_argument('--root-files-only', action='store_true',
                                    help='save policy-eligible root files with the Catalog parent; assignments select child directories only')
+            operation.add_argument('--parent-name', help='display name for the Catalog parent shown in Rooms')
         if action == 'save':
             operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
             operation.add_argument('--ack-local-only', action='store_true')
@@ -1915,12 +1916,12 @@ def dispatch(args, instance: Path) -> dict:
                         row['capture_mode'] = 'source-only'
                 dimension, material, session = resolve_capture_destination(dimension, material,
                     expected_domain=args.expected_domain)
+                capture_options = {"root_files_only": True} if args.root_files_only else {}
+                if args.parent_name is not None:
+                    capture_options["parent_name"] = args.parent_name
                 try:
-                    if args.root_files_only:
-                        preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room,
-                                               assignments, root_files_only=True)
-                    else:
-                        preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
+                    preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room,
+                                           assignments, **capture_options)
                 except (OSError, RuntimeError):
                     raise CompositionAdmissionError('composition-input-unavailable',
                         'Catalog preview could not verify the selected workspace or components') from None
@@ -1934,11 +1935,8 @@ def dispatch(args, instance: Path) -> dict:
                 with provider_runtime(instance, dimension, material, args.namespace, authority_session=session,
                                       authority_only=args.composition_command == 'parent-children') as (authority, factory, private):
                     if args.composition_command == 'save':
-                        if args.root_files_only:
-                            return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
-                                                    args.approve, authority, factory, private, root_files_only=True)
                         return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
-                                                args.approve, authority, factory, private)
+                                                args.approve, authority, factory, private, **capture_options)
                     if args.composition_command == 'parent-children':
                         from .composition_updates import parent_children
                         return parent_children(args.workspace, authority, args.namespace, args.parent_room, args.parent_snapshot,

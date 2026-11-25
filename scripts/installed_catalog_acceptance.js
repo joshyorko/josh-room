@@ -120,6 +120,9 @@ exports.run = async () => {
       })()`), true);
     }
     await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+    await until(async () => (await renderer.widget())?.text.includes("Name the Catalog Room"), "Catalog name");
+    await renderer.text("Synthetic Catalog");
+    await renderer.key("Enter", "Enter", 13);
     await renderer.choose("Synthetic Composition");
     const approvalText = async () => {
       const widget = await renderer.widget();

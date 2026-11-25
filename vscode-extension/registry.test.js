@@ -443,7 +443,7 @@ test("Catalog parents and exact points are separate from ordinary Rooms", () => 
     rooms: [{ id: "ordinary", display_name: "Ordinary Room" }],
     catalogs: [{ namespace: "1".repeat(32), parent_room_id: "parent", display_name: "Catalog Room", recovery_points: [
       { snapshot_id: "jat-old", created_at: "2026-01-01T00:00:00Z", child_count: 2 },
-      { snapshot_id: "jat-new", created_at: "2026-01-02T00:00:00Z", child_count: 3 },
+      { snapshot_id: "jat-new", created_at: "2026-01-02T00:00:00Z", child_count: 3, children: ["a", "b", "c"] },
       { snapshot_id: "latest", created_at: "2026-01-03T00:00:00Z", child_count: 4 },
     ] }],
     catalog_discovery_partial: true,
@@ -454,4 +454,6 @@ test("Catalog parents and exact points are separate from ordinary Rooms", () => 
   assert.equal(parent.label, "Catalog Room");
   assert.deepEqual(parent.children.map(row => row.point.snapshot_id), ["jat-new", "jat-old"]);
   assert.ok(parent.children.every(row => row.kind === "catalog-point" && row.dimension.id === "synthetic"));
+  assert.deepEqual(parent.children[0].children.map(row => [row.kind, row.child, row.point.snapshot_id]),
+    [["catalog-child", "a", "jat-new"], ["catalog-child", "b", "jat-new"], ["catalog-child", "c", "jat-new"]]);
 });

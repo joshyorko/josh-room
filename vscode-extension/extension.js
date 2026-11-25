@@ -2247,7 +2247,7 @@ async function saveCatalogRoom() {
   assertWorkspaceTrusted("save a Catalog Room");
   const argsFor = (selection, command) => ["composition", command, "--root-files-only", "--workspace", selection.root,
     "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
-    "--parent-room", selection.parentRoom, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
+    "--parent-room", selection.parentRoom, `--parent-name=${selection.name}`, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
       ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : []),
       ...(row.component_options ? ["--child-components", row.path, JSON.stringify(row.component_options)] : [])])];
   const result = await require("./catalog-actions").saveCatalog(vscode, {
@@ -2275,7 +2275,7 @@ async function saveCatalogRoom() {
   return result;
 }
 
-async function restoreCatalogRoom(item) {
+async function restoreCatalogRoom(item, restoreChildren = false) {
   assertWorkspaceTrusted("restore a Catalog Room");
   const root = activeWorkspace();
   if (!item) {
@@ -2293,11 +2293,17 @@ async function restoreCatalogRoom(item) {
       label: point.label, description: point.description, point,
     })), { title: "Choose an exact Catalog recovery point" }))?.point : item;
   if (!selection) return "cancelled";
-  const { dimension, catalog, point } = selection;
+  const { dimension, catalog, point, child } = selection;
   const id = dimension?.id || dimension?.dimension_id;
-  if (selection.kind !== "catalog-point" || !id || !/^[a-f0-9]{32}$/.test(catalog?.namespace)
+  if (!["catalog-point", "catalog-child"].includes(selection.kind) || !id || !/^[a-f0-9]{32}$/.test(catalog?.namespace)
       || !catalog?.parent_room_id || !/^jat-[a-z0-9-]+$/.test(point?.snapshot_id)) {
     throw new Error("Choose an exact Catalog recovery point from Rooms.");
+  }
+  const current = currentRoom(root);
+  if ((child || restoreChildren) && current?.dimension_id === id && current.composition_namespace === catalog.namespace
+      && current.project_id === catalog.parent_room_id && current.snapshot_id === point.snapshot_id
+      && !fs.existsSync(path.join(root, ".josh-room-split.json"))) {
+    return enterCatalogChildAt(root, current, dimension, child, restoreChildren);
   }
   const destination = await vscode.window.showSaveDialog({ title: "Restore Catalog Room to a new folder",
     saveLabel: "Restore Catalog", defaultUri: vscode.Uri.file(path.join(root, "Restored Catalog")) });
@@ -2313,6 +2319,22 @@ async function restoreCatalogRoom(item) {
       || result.room_id !== catalog.parent_room_id || result.snapshot_id !== point.snapshot_id) {
     throw new Error("Catalog restore could not verify the selected recovery point.");
   }
+  const restoredMarker = { dimension_id: id, composition_namespace: catalog.namespace,
+    project_id: result.room_id, snapshot_id: result.snapshot_id };
+  await extensionContext?.globalState?.update(catalogPromptKey(destination.fsPath, restoredMarker), true);
+  if (child) return enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, child);
+  const next = restoreChildren ? { id: "children" } : await vscode.window.showQuickPick([
+    { id: "child", label: "Choose a child Room", description: "Restore one of this Catalog’s pinned folders" },
+    { id: "children", label: "Restore child Rooms…", description: "Select all folders or just the ones you need" },
+    { id: "parent", label: "Open Catalog parent", description: "Open the root files and Catalog links" },
+  ], { title: `${catalog.display_name || "Catalog Room"} restored` });
+  if (next?.id === "child") {
+    const entered = await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension);
+    if (entered !== "cancelled") return entered;
+  }
+  if (next?.id === "children") {
+    await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, undefined, true);
+  }
   await vscode.commands.executeCommand("vscode.openFolder", destination, false);
   return result;
 }
@@ -2326,7 +2348,7 @@ function listCatalogChildren(root, dimension, marker, { childPath, offset, revis
   dimension, { title: "Reading saved child Rooms…", action: "read the entered Catalog parent" });
 }
 
-async function enterChildRoom() {
+async function enterChildRoom(multiple = false) {
   assertWorkspaceTrusted("enter a child Room");
   const root = activeWorkspace();
   const marker = currentRoom(root);
@@ -2334,13 +2356,63 @@ async function enterChildRoom() {
   const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
   const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
   if (!dimension) throw new Error("The parent Dimension is not configured.");
-  return require("./catalog-actions").enterChild(vscode, {
-    root, marker, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
+  return enterCatalogChildAt(root, marker, dimension, undefined, multiple);
+}
+
+function enterCatalogChildAt(root, marker, dimension, childPath, multiple = false) {
+  const actions = require("./catalog-actions");
+  return (multiple ? actions.hydrateChildren : actions.enterChild)(vscode, {
+    root, marker, childPath, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     enter: ({ namespace, child }) => runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
       "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
     dimension, { title: "Entering pinned child Room…", action: "enter a child Room" }),
     open: (target) => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(target), false),
   });
+}
+
+function catalogPromptKey(root, marker) {
+  const fingerprint = crypto.createHash("sha256").update(JSON.stringify([
+    root, marker.dimension_id, marker.composition_namespace, marker.project_id, marker.snapshot_id,
+  ])).digest("hex");
+  return `josh-room.catalog-child-prompt.v1:${fingerprint}`;
+}
+
+async function offerCatalogChildOnOpen(context) {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root || vscode.workspace.isTrusted !== true || !context.globalState) return;
+  const marker = currentRoom(root);
+  if (!marker?.composition_namespace || marker.workspace_path_sha256 !== realWorkspacePathSha256(root)
+      || fs.existsSync(path.join(root, ".josh-room-split.json"))) return;
+  const key = catalogPromptKey(root, marker);
+  if (context.globalState.get(key)) return;
+  const manifestPath = path.join(root, ".josh-room-composition.json");
+  const stat = fs.lstatSync(manifestPath, { throwIfNoEntry: false });
+  if (!stat?.isFile() || stat.size > 64 * 1024) return;
+  let children;
+  try { children = JSON.parse(fs.readFileSync(manifestPath, "utf8")).children; } catch { return; }
+  if (!Array.isArray(children) || children.length > 32) return;
+  const pending = children.some(row => {
+    const child = row?.path;
+    if (typeof child !== "string" || /[\\\0]/.test(child)) return false;
+    const parts = child.split("/");
+    if (parts.some(part => !part || part === "." || part === "..")) return false;
+    let location = root;
+    for (const part of parts) {
+      location = path.join(location, part);
+      const entry = fs.lstatSync(location, { throwIfNoEntry: false });
+      if (!entry) return true;
+      if (!entry.isDirectory()) return false;
+    }
+    return false;
+  });
+  if (!pending) return;
+  await context.globalState.update(key, true);
+  const action = "Choose child Rooms";
+  if (await vscode.window.showInformationMessage("This Catalog has child Rooms available to restore.", action) === action
+      && vscode.workspace.workspaceFolders?.[0]?.uri.fsPath === root
+      && currentRoom(root)?.snapshot_id === marker.snapshot_id) {
+    await vscode.commands.executeCommand("joshRoom.restoreCatalogChildren");
+  }
 }
 
 async function updateCompositionRoom(kind) {
@@ -3837,6 +3909,7 @@ function activate(context) {
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
   register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
   register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
@@ -3872,6 +3945,7 @@ module.exports.__test__ = {
   agentPartialWorkspace,
   saveCatalogRoom,
   restoreCatalogRoom,
+  offerCatalogChildOnOpen,
   enterChildRoom,
   splitWorkspace,
   enterRoom,
@@ -5154,9 +5228,9 @@ class HierarchyRoomsProvider {
           : item.kind === "connection" ? item.state === "connected" ? "pass-filled" : item.state === "expired" || item.state === "disconnected" ? "warning" : "plug"
             : item.kind === "room" ? "archive" : "history",
     );
-    if (item.kind === "catalog-parent" || item.kind === "catalog-point") {
-      treeItem.iconPath = new vscode.ThemeIcon(item.kind === "catalog-parent" ? "library" : "history");
-      treeItem.command = { command: "joshRoom.restoreCatalog", title: "Restore Catalog Room", arguments: [item] };
+    if (["catalog-parent", "catalog-point", "catalog-child"].includes(item.kind)) {
+      treeItem.iconPath = new vscode.ThemeIcon({ "catalog-parent": "library", "catalog-point": "history", "catalog-child": "folder" }[item.kind]);
+      treeItem.command = { command: "joshRoom.restoreCatalog", title: item.kind === "catalog-child" ? "Enter Child Room" : "Restore Catalog Room", arguments: [item] };
       treeItem.tooltip = [item.label, item.description].filter(Boolean).join(" · ");
       return treeItem;
     }
@@ -6313,6 +6387,7 @@ function activateNative(context) {
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
   register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
   register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
@@ -6366,8 +6441,8 @@ function activateNative(context) {
   register(context, "joshRoom.jatServe", jatServe);
   register(context, "joshRoom.jatExport", jatExport);
   register(context, "joshRoom.jatCopy", jatCopy);
-  // Activation only registers native UI. Runtime, storage, auth, and key
-  // reads begin after an explicit command or tree load action.
+  // This startup check is local. Authenticated reads and restore still require a click.
+  void offerCatalogChildOnOpen(context).catch(error => outputChannel?.warn(sanitizeControllerText(error.message)));
 }
 
 module.exports.activate = activateNative;
