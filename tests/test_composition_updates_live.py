@@ -427,7 +427,7 @@ def test_legacy_lossy_baseline_refuses_fresh_operation_without_any_publication(r
     # Reproduce the old actual capture format: no rule semantics for paths not
     # present yet, and no authenticated descriptor provenance.
     with monkeypatch.context() as legacy:
-        legacy.setattr(composition_lifecycle, '_inherited_exclusions', lambda *_: ())
+        legacy.setattr(composition_lifecycle, '_inherited_exclusions', lambda _policy, _child, *, compact=False: ())
         legacy.setattr(composition_lifecycle, '_capture', old_capture)
         _, target, child = entered(r)
     (target / 'a/reports').mkdir()

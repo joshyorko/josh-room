@@ -122,7 +122,7 @@ def runtime(tmp_path):
             repository=tmp_path / "composition-repository",
             password_file=password,
             cache_dir=private / "cache",
-            executable=os.environ.get("JOSH_ROOM_TEST_RESTIC", shutil.which("restic")),
+            executable=executable,
         )
 
     source = tmp_path / "source"
@@ -145,6 +145,7 @@ def runtime(tmp_path):
         dimension=dimension,
         authority=authority,
         factory=factory,
+        restic_executable=executable,
         transport=transport,
         assignments=assignments,
         tmp=tmp_path,
@@ -632,7 +633,7 @@ def test_inherited_exclusions_nested_child_and_legacy_optimize(runtime):
         repository=r.tmp / "legacy-repository",
         cache_dir=r.private / "legacy-cache",
         password_file=password,
-        executable=os.environ["JOSH_ROOM_TEST_RESTIC"],
+        executable=r.restic_executable,
     ) as store:
         legacy_repo = store.initialize()
         store.backup(r.source / "b")
@@ -784,7 +785,7 @@ def test_provider_runtime_uses_actual_binding_and_composition_locator(
     monkeypatch.setattr(
         room_store_bridge,
         "_verified_restic_executable",
-        lambda **_: os.environ["JOSH_ROOM_TEST_RESTIC"],
+        lambda **_: r.restic_executable,
     )
     monkeypatch.setattr(room_store_bridge, "_provider_environment", lambda _: {})
     locators = []

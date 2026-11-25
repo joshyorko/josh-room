@@ -620,6 +620,8 @@ class RoomWorkspaceProvider:
 
     def _dir_boundary_kind(self, dir_fd: int, dir_path: Path, *, is_root: bool) -> str:
         kind = "folder"
+        composition_control = False
+        bound_catalog_root = is_root and self._context.get("path_matches") and self._context.get("composition_namespace")
         for name in (".git", ".josh-room.json", COMPOSITION_MANIFEST, COMPOSITION_SPLIT_GUARD):
             try:
                 info = (
@@ -634,6 +636,10 @@ class RoomWorkspaceProvider:
             if is_root and name == ".josh-room.json":
                 continue
             if name != ".git":
+                if (bound_catalog_root and not composition_control
+                        and stat.S_ISREG(info.st_mode) and info.st_nlink == 1):
+                    composition_control = True
+                    continue
                 return "reserved-boundary"
             if stat.S_ISDIR(info.st_mode) and not (getattr(info, "st_file_attributes", 0) & 0x400):
                 kind = "git-directory-unverified"
@@ -965,7 +971,7 @@ class RoomWorkspaceProvider:
                             dir_meta[rel_dir]["coverage"] = "partial"
                             break
                         name = entry.name
-                        if name == ".git":
+                        if name in (".git", COMPOSITION_MANIFEST, COMPOSITION_SPLIT_GUARD):
                             continue
                         if name in colliding_names:
                             continue
