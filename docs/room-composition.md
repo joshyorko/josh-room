@@ -151,6 +151,8 @@ from its own workspace to capture changes inside that child.
 The open workspace shows the Save action for its type. Use **New Room** in
 the Rooms toolbar when opening an unbound folder, or in the toolbar's menu
 when a Room or Catalog is open.
+**Open Workspace** marks eligible file changes made through VS Code as
+**Changes to save**. In the Catalog parent, this tracks files at its root.
 Use **Explore Room in 3D** on an open workspace or its matching Catalog row.
 On a Catalog or child recovery point, the usual **Inspect Logical JAT**,
 **Extract**, **Export Portable JAT**, and **Serve** actions use that point's

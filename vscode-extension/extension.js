@@ -1723,6 +1723,7 @@ function relativeWorkspacePath(uri) {
   const relative = path.relative(root, uri.fsPath);
   if (path.resolve(uri.fsPath) === path.join(root, ".josh-roomignore")) return ".josh-roomignore";
   if (CONTROLLER_MARKER_TEMP.test(relative)) return undefined;
+  if (relative.includes(path.sep) && openWorkspaceBinding().kind === "catalog") return undefined;
   return shouldMarkDirty(relative, workspaceCapturePolicy) ? relative : undefined;
 }
 
@@ -2567,9 +2568,18 @@ function openWorkspaceBinding() {
 }
 
 let currentWorkspaceKind;
+let workspaceActionsRoot;
 
 function refreshWorkspaceActions() {
-  const { kind } = openWorkspaceBinding();
+  const { kind, root } = openWorkspaceBinding();
+  if (workspaceActionsRoot !== root) {
+    workspaceActionsRoot = root;
+    try {
+      workspaceCapturePolicy = root ? loadCapturePolicy(root) : undefined;
+    } catch {
+      workspaceCapturePolicy = undefined;
+    }
+  }
   if (currentWorkspaceKind === kind) return;
   currentWorkspaceKind = kind;
   void vscode.commands.executeCommand("setContext", "joshRoom.workspaceKind", kind);
@@ -2607,7 +2617,8 @@ function openWorkspaceRows() {
   }
   return [{ kind: "open-workspace", id: "open-workspace", label: "Open Workspace",
     contextValue: isCatalog ? "open-catalog-workspace" : "open-room-workspace",
-    project: marker, description, children: actions }];
+    project: marker, description, children: actions,
+    changed: roomStatus.kind === "dirty" || roomStatus.kind === "saved-but-still-dirty" }];
 }
 
 async function offerCatalogChildOnOpen(context) {
@@ -2657,9 +2668,14 @@ async function updateCompositionRoom(kind) {
       ...(apply ? ["--approve", ticket.approval] : [])];
     return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
   };
+  const saveGeneration = workspaceEventGeneration;
   const result = await require("./catalog-actions").updateRoom(vscode, { marker, kind, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     chooseComponents: () => chooseCatalogComponents(root, marker.project_id, true), pending: extensionContext.workspaceState.get(key),
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
+  if (result?.status === "saved" && kind !== "parent" && result.marker_verified && openWorkspaceBinding().root === root) {
+    const clean = saveGeneration === workspaceEventGeneration && dirtyBuffers.size === 0;
+    setRoomState(clean ? "clean" : "saved-but-still-dirty", { bindingTrusted: true });
+  }
   if (result?.status === "saved" && kind === "catalog") void roomsProvider?.reload().catch(error => outputChannel?.warn(sanitizeControllerText(error.message)));
   return result;
 }
@@ -5400,9 +5416,11 @@ class HierarchyRoomsProvider {
         ? vscode.TreeItemCollapsibleState.Expanded : group
           ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
       treeItem.id = `${item.kind}:${item.id}`;
-      treeItem.iconPath = new vscode.ThemeIcon(workspace ? "window" : group ? "folder-library" : item.icon);
+      treeItem.iconPath = workspace && item.changed
+        ? new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("gitDecoration.modifiedResourceForeground"))
+        : new vscode.ThemeIcon(workspace ? "window" : group ? "folder-library" : item.icon);
       treeItem.contextValue = item.contextValue;
-      treeItem.description = item.description;
+      treeItem.description = item.changed ? `${item.description} · Changes to save` : item.description;
       treeItem.command = item.command;
       return treeItem;
     }
@@ -6680,7 +6698,7 @@ function activateNative(context) {
     const relative = relativeWorkspacePath(document.uri);
     if (!relative) return;
     dirtyBuffers.delete(relative);
-    if (workspaceBaseline) markWorkspaceChange(document.uri);
+    if (openWorkspaceBinding().marker) void markWorkspaceChange(document.uri);
   }));
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
     const relative = relativeWorkspacePath(document.uri);
@@ -6731,9 +6749,21 @@ function activateNative(context) {
   if (vscode.workspace.onDidChangeWorkspaceFolders) {
     context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
       void stopRoomView();
+      dirtyBuffers.clear();
+      workspaceEventGeneration += 1;
+      setRoomState("unknown", { bindingTrusted: false });
       refreshWorkspaceActions();
       roomsProvider?.emitter.fire(undefined);
     }));
+  }
+  const markFiles = files => {
+    if (openWorkspaceBinding().marker) for (const file of files) void markWorkspaceChange(file);
+  };
+  if (vscode.workspace.onDidCreateFiles) context.subscriptions.push(vscode.workspace.onDidCreateFiles(({ files }) => markFiles(files)));
+  if (vscode.workspace.onDidDeleteFiles) context.subscriptions.push(vscode.workspace.onDidDeleteFiles(({ files }) => markFiles(files)));
+  if (vscode.workspace.onDidRenameFiles) {
+    context.subscriptions.push(vscode.workspace.onDidRenameFiles(({ files }) =>
+      markFiles(files.flatMap(({ oldUri, newUri }) => [oldUri, newUri]))));
   }
   if (vscode.workspace.onDidGrantWorkspaceTrust) {
     context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => {

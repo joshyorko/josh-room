@@ -8494,6 +8494,34 @@ test("Rooms shows workspace actions for the current binding and saved tools on t
   assert.ok(!title.some(item => ["joshRoom.save", "joshRoom.saveCatalog", "joshRoom.restoreCatalog"].includes(item.command)));
 });
 
+test("Open Workspace marks a Catalog root edit without marking its child edits", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-dirty-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  vscode.workspace.isTrusted = true;
+  vscode.ThemeColor = class { constructor(id) { this.id = id; } };
+  let created;
+  vscode.workspace.onDidCreateFiles = callback => { created = callback; return { dispose() {} }; };
+  const extension = loadExtension(vscode, () => assert.fail("workspace change indicators are local"));
+  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify({
+    format_version: 4, project_id: "parent", display_name: "Synthetic Catalog", snapshot_id: "jat-parent",
+    dimension_id: "synthetic", composition_namespace: "1".repeat(32), encryption_domain_id: "domain",
+    workspace_signature: "0".repeat(64), capture_policy_sha256: "0".repeat(64),
+    signature_algorithm: "josh-room-stat-v1", workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
+  }));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "child" }] }));
+  fs.writeFileSync(path.join(root, ".josh-roomignore"), "ignored.txt\n");
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [] });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(provider);
+  const item = () => provider.getTreeItem(provider.getChildren()[0]);
+  created({ files: ["child/note.txt", "ignored.txt"].map(name => vscode.Uri.file(path.join(root, name))) });
+  assert.doesNotMatch(item().description, /Changes to save/);
+  created({ files: [vscode.Uri.file(path.join(root, "root-edit.txt"))] });
+  assert.match(item().description, /Changes to save/);
+  assert.equal(item().iconPath.id, "circle-filled");
+});
+
 test("Catalog sidebar deletion shows dependencies and applies only the previewed approved target", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-delete-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
