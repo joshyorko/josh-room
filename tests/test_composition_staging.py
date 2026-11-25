@@ -32,13 +32,15 @@ def fixture(tmp_path):
 
 
 def test_catalog_save_refuses_insufficient_staging_before_authority_access(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     from josh_room import composition_lifecycle as lifecycle
 
     source, dimension, assignments, preview = fixture(tmp_path)
     monkeypatch.setattr(lifecycle, "_staging_free", lambda _: 0)
     with pytest.raises(lifecycle.CompositionAdmissionError) as error:
         lifecycle.save_composition(source, dimension, "1" * 32, "parent", assignments,
-                                   preview["approval_sha256"], None, None, tmp_path)
+                                   preview["approval_sha256"], SimpleNamespace(namespace="1" * 32), None, tmp_path)
     assert error.value.result["error_code"] == "composition-staging-space"
 
 
