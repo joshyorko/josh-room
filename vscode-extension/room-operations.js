@@ -1,6 +1,7 @@
 "use strict";
 
 const ROOMS_VIEW = "joshRoom.rooms";
+const { quietProgress } = require("./progress");
 const COMPLETION_MS = 4000;
 const CONTEXT_PHASES = {
   save: "Saving…",
@@ -67,6 +68,7 @@ class RoomOperations {
     this.active.unshift(row);
     this.tick(Boolean(row.target));
     try {
+      if (row.quiet) return await quietProgress(this.updateStatus, row, () => task({ report() {} }, undefined));
       const result = await vscode.window.withProgress(
         { title, location: { viewId: ROOMS_VIEW }, cancellable: !cancellation && cancellable },
         (progress, token) => task({
