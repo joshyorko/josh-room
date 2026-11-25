@@ -5,6 +5,8 @@ import pytest
 
 from josh_room.composition import validate_child_git
 from josh_room.composition_git_integrity import verify_staged_git
+from josh_room.composition_lifecycle import _child_view, capture_plan
+from josh_room.config import DimensionConfig
 
 
 def repository(tmp_path):
@@ -19,6 +21,28 @@ def repository(tmp_path):
 
 def inventory(root):
     return {p.relative_to(root).as_posix() for p in root.rglob("*")}
+
+
+def test_catalog_preserves_git_history_with_inactive_worktree_config(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    root = repository(source)
+    subprocess.run(["git", "-C", root, "config", "extensions.worktreeConfig", "true"], check=True)
+    head = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"])
+    dimension = DimensionConfig(
+        "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
+        "synthetic-bucket", "synthetic-profile", connection_id="synthetic",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    stage = tmp_path / "staged"
+    preview = capture_plan(source, dimension, "1" * 32, "parent",
+                           [{"path": "child", "outcome": "child"}], root_files_only=True)
+    assert preview["request"]["child_evidence"]["child"]["capture_mode"] == "full-repository"
+    _child_view(source, "child", stage, preview["request"])
+    verify_staged_git(stage, inventory(stage), "full-repository", tmp_path)
+    assert subprocess.check_output(["git", "-C", stage, "rev-parse", "HEAD"]) == head
+    assert subprocess.check_output(["git", "-C", stage, "show", "HEAD:file"]) == b"committed"
+    assert (stage / ".git/config").read_bytes() == (root / ".git/config").read_bytes()
 
 
 @pytest.mark.parametrize("ref", ["HEAD", ":file"])

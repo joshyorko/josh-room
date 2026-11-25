@@ -114,9 +114,9 @@ their Git capture settings and optional content. Choose **Save catalog** to
 approve, or **Cancel** to leave without saving.
 **Advanced settings** is available from that review for the existing child Git
 and optional component settings. Returning from settings always creates a new
-plan and requires a new confirmation. If a child has incomplete Git history or
-unsupported Git index entries, choose **Review files only** to keep its files
-without Git history. A folder blocked by reserved Room metadata can be left
+plan and requires a new confirmation. If a child has incomplete Git history,
+unsupported Git index entries, or an unverified Git repository format, choose
+**Review files only** to keep its files without Git history. A folder blocked by reserved Room metadata can be left
 local. Both choices require a fresh review before Save. The review shows what
 will be saved in the parent and child Rooms and what will stay on this device.
 The original files stay on disk. Choose **Copy recovery
@@ -471,3 +471,6 @@ operations. Policy changes require reconciliation, which remains unsupported.
 A full Git child requires Git to inspect its index. Catalog capture refuses an index that tracks the generated child policy, guard, or marker at its root, even when the working copy of that file is missing. Sparse directory indexes, split indexes requiring an external base, and submodule gitlinks are unsupported. Save such a repository as one ordinary Room. The same checks apply before a subsequent child Save.
 A standalone `.gitmodules` file without sibling Git metadata is ordinary source
 content and does not make a copied folder a submodule repository.
+An enabled `extensions.worktreeConfig` flag is supported when the repository has
+no worktree configuration file or linked worktree metadata. The child still
+passes the full Git integrity check.
