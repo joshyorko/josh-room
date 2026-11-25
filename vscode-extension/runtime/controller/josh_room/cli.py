@@ -515,6 +515,8 @@ def build_parser() -> argparse.ArgumentParser:
             operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice outside root-files-only mode')
             operation.add_argument('--root-files-only', action='store_true',
                                    help='save policy-eligible root files with the Catalog parent; assignments select child directories only')
+            operation.add_argument('--preserve-content', action='store_true',
+                                   help='preserve all policy-eligible content unless explicitly split or left local')
             operation.add_argument('--parent-name', help='display name for the Catalog parent shown in Rooms')
         if action == 'save':
             operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
@@ -1967,6 +1969,8 @@ def dispatch(args, instance: Path) -> dict:
                 dimension, material, session = resolve_capture_destination(dimension, material,
                     expected_domain=args.expected_domain)
                 capture_options = {"root_files_only": True} if args.root_files_only else {}
+                if args.preserve_content:
+                    capture_options["preserve_content"] = True
                 if args.parent_name is not None:
                     capture_options["parent_name"] = args.parent_name
                 try:

@@ -122,9 +122,10 @@ def validate_paths(paths) -> None:
 
 def validate_manifest(body: dict) -> dict:
     if (not isinstance(body, dict) or set(body) != {"format", "children"}
-            or body["format"] != "room-composition-v1"
             or not isinstance(body["children"], list)
-            or not 1 <= len(body["children"]) <= MAX_CHILDREN):
+            or (body["format"] == "room-composition-v1" and not 1 <= len(body["children"]) <= MAX_CHILDREN)
+            or (body["format"] == "room-composition-v2" and body["children"])
+            or body["format"] not in ("room-composition-v1", "room-composition-v2")):
         raise ValueError("invalid composition manifest")
     identities = set()
     for row in body["children"]:

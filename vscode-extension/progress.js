@@ -19,7 +19,7 @@ function progressDetail(event) {
   if (stage === "upload" || stage === "download") {
     return `${formatBytes(current)} / ${formatBytes(total)}`;
   }
-  if (stage === "catalog-restore") return `${current} of ${total} Rooms`;
+  if (stage === "catalog-restore" || stage === "catalog-save") return `${current} of ${total} Rooms`;
   return undefined;
 }
 

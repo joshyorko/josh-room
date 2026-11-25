@@ -96,27 +96,26 @@ activation/terminal hydration, or selected-file restore is added.
 
 Native commands are `Josh: Save Catalog Room`, `Josh: Enter Child Room`,
 `Josh: Save Child Room`, and `Josh: Refresh Catalog Child Pins`.
-Choose **Configure Catalog Room** from New Room, then select a source folder.
-The native checkbox picker reads and lists only that folder's immediate
-directories; it does not recursively discover child candidates. Check up to 32
-folders. Each checked directory becomes one independent child Room containing
-its deeper contents. The child capture scans those contents normally after
-admission, so the shallow picker does not make child captures shallow.
+Choose **Configure Catalog Room** from New Room, then select a source folder,
+name the Catalog and choose the destination. **Review Catalog** shows the
+destination and what the parent will preserve. The default includes eligible
+files and folders under the source capture policy, with eligible Git
+repositories kept intact in the Catalog parent. Policy exclusions stay local.
 
-Eligible regular files directly in the source root are saved with the Catalog
-parent. Every unchecked directory stays local, including directories with
-names that cannot be restored across platforms. The extension uses
-`--root-files-only` for both `composition capture-plan` and `composition save`,
-and passes assignments only for checked immediate child directories. The flag
-defines the root-file/child boundary for that operation; CLI calls without the
-flag retain their existing explicit subtree-assignment behavior.
+Choose **Split folders into Rooms…** to give up to 32 immediate folders
+independent recovery points. Each checked folder becomes one whole child Room.
+The other eligible folders stay in the parent. A split within a cohesive Git
+repository is blocked when retaining Git history. You can save a Catalog with
+zero separate child Rooms.
 
-After folder selection, name the Catalog Room and choose the destination.
-The source folder name is suggested. The chosen name appears in **Rooms** and
-on the restored parent. **Review Catalog** shows the
-destination, the Catalog parent, and a scrollable list of child folders with
-their Git capture settings and optional content. Choose **Save catalog** to
-approve, or **Cancel** to leave without saving.
+The extension uses `--preserve-content --assign .=parent` for both
+`composition capture-plan` and `composition save`. The controller binds the
+capture mode, exact assignments, and source inventory into the review. The
+existing CLI `--root-files-only` option still saves direct root files plus
+explicitly selected immediate children. Existing Catalogs retain their saved
+capture boundaries.
+
+Choose **Save catalog** to approve, or **Cancel** to leave without saving.
 **Advanced settings** is available from that review for the existing child Git
 and optional component settings. Returning from settings always creates a new
 plan and requires a new confirmation. If a child has incomplete Git history,

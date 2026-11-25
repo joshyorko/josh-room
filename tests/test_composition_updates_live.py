@@ -561,3 +561,46 @@ def test_policy_change_before_publication_preserves_old_pin_and_verified_payload
     with r.factory(current['secret']) as store:
         store.open_existing()
         assert len(store.snapshots()) == 4
+
+
+@pytest.mark.parametrize("split", [False, True])
+def test_preservation_catalog_keeps_nested_repository_and_optional_child(runtime, split):
+    from josh_room.composition_lifecycle import capture_plan, save_composition
+    from josh_room.composition_updates import save_catalog_workspace
+    from scripts.git_recovery_acceptance import git
+
+    r = runtime
+    repo = r.source / 'a'
+    git(repo, 'init', '-q')
+    git(repo, 'add', 'file.txt')
+    git(repo, 'commit', '-qm', 'synthetic repository')
+    git_head = git(repo, 'rev-parse', 'HEAD').strip()
+    (r.source / '.josh-roomignore').write_text('local/**\n')
+    rows = [{'path': '.', 'outcome': 'parent'}]
+    if split:
+        rows.append({'path': 'b', 'outcome': 'child'})
+    args = (r.source, r.dimension, NAMESPACE, 'parent', rows)
+    preview = capture_plan(*args, preserve_content=True)
+    assert preview['request']['parent_git_count'] == 1
+    assert preview['child_count'] == int(split)
+    result = save_composition(*args, preview['approval_sha256'], r.authority, r.factory, r.private,
+                              preserve_content=True)
+    root = r.tmp / 'preserved'
+    parent = result['parent_snapshot_id']
+    hydrate_composition(r.dimension, NAMESPACE, 'parent', parent, root, r.authority, r.factory, r.private)
+    assert (root / 'a/file.txt').read_bytes() == (repo / 'file.txt').read_bytes()
+    assert git(root / 'a', 'rev-parse', 'HEAD').strip() == git_head
+    git(root / 'a', 'fsck', '--full')
+    assert (root / 'notes.txt').is_file()
+    assert (root / 'b/file.txt').is_file() is not split
+    assert not (root / 'local').exists()
+    (root / 'a/new.txt').write_text('retained nested edit')
+    operation = (root, r.dimension, NAMESPACE, 'parent', parent, 'preserved-save',
+                 r.authority, r.factory, r.private)
+    approval = save_catalog_workspace(*operation)
+    saved = save_catalog_workspace(*operation, approval=approval['approval_sha256'])
+    restored = r.tmp / 'preserved-new'
+    hydrate_composition(r.dimension, NAMESPACE, 'parent', saved['snapshot_id'], restored,
+                        r.authority, r.factory, r.private)
+    assert git(restored / 'a', 'rev-parse', 'HEAD').strip() == git_head
+    assert (restored / 'a/new.txt').read_text() == 'retained nested edit'

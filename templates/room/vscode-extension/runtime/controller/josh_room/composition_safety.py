@@ -31,7 +31,7 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z")
 _PHASES = ("reserved", "children-recorded", "parent-prepared", "committed")
-_CONTRACTS = ("composition-safety-v1", "composition-safety-v2", "composition-safety-v3", "composition-safety-v4")
+_CONTRACTS = ("composition-safety-v1", "composition-safety-v2", "composition-safety-v3", "composition-safety-v4", "composition-safety-v5")
 _MODES = ("source-only", "full-repository")
 
 
@@ -65,7 +65,7 @@ def _versioned_plan(body, plan):
     if "plan_version" not in plan:
         return False
     version = plan["plan_version"]
-    if type(version) is not int or version not in (3, 4) or body["contract"] not in _CONTRACTS[version - 1:]:
+    if type(version) is not int or version not in (3, 4, 5) or body["contract"] not in _CONTRACTS[version - 1:]:
         raise ValueError("unsupported composition plan version")
     return True
 
@@ -78,7 +78,7 @@ def _snapshot_slot(body, room, snapshot):
     for op in body["operations"].values():
         plan = op["plan"]
         if op["phase"] == "committed" and (plan["parent_room_id"], plan["parent_logical_jat_id"]) == (room, snapshot):
-            return {"capture_mode": "source-only", "capture_policy_sha256": op["parent_policy_sha256"]}
+            return {"capture_mode": plan["capture_mode"], "capture_policy_sha256": op["parent_policy_sha256"]}
         if plan["expected_parent_logical_jat_id"] is None or body["contract"] in _CONTRACTS[:2]:
             for slot in plan["children"]:
                 if slot["path"] in op["child_pins"] and (slot["room_id"], slot["logical_jat_id"]) == (room, snapshot):
@@ -186,16 +186,20 @@ class CompositionSafetyState:
                     raise ValueError("composition parent baseline is missing") from None
                 if baseline_record.get("payload_kind") != "room-store-v1":
                     raise ValueError("invalid parent baseline")
-            if plan["capture_mode"] != "source-only" or operation["plan_sha256"] != plan_digest(plan):
+            preserves_parent = plan.get("plan_version") == 5 or (
+                body["contract"] == "composition-safety-v5" and baseline is not None and not versioned
+            )
+            if (plan["capture_mode"] not in (_MODES if preserves_parent else ("source-only",))
+                    or operation["plan_sha256"] != plan_digest(plan)):
                 raise ValueError("composition plan or approved capture mode differs")
             children = plan["children"]
-            if not isinstance(children, list) or not 1 <= len(children) <= 32:
+            if not isinstance(children, list) or not (0 if preserves_parent else 1) <= len(children) <= 32:
                 raise ValueError("invalid composition child slots")
             for row in children:
                 fields = "path room_id logical_jat_id"
                 if versioned:
                     fields += " capture_mode capture_policy_sha256 approved_paths_sha256 source_records_sha256"
-                if plan.get("plan_version") == 4 and isinstance(row, dict) and "component_plan" in row:
+                if plan.get("plan_version") in (4, 5) and isinstance(row, dict) and "component_plan" in row:
                     validate_component_plan(row["component_plan"])
                     fields += " component_plan"
                 _object(row, fields)
@@ -269,6 +273,8 @@ class CompositionSafetyState:
                     fields += ' plan_version'
                     if 'content_digest_algorithm' not in plan:
                         raise ValueError('unsupported child content digest algorithm')
+                if plan.get("plan_version") == 5:
+                    raise ValueError("unsupported child update version")
                 if plan.get("plan_version") == 4:
                     fields += " component_plan"
                     validate_component_plan(plan.get("component_plan"))
@@ -356,7 +362,7 @@ def reconcile(state, descriptors, repository, inventory, *, expected_scope):
                 prior = descriptors[(plan["parent_room_id"], baseline)].to_dict()
                 if parent["workspace"].get("parent_snapshot_id") != prior["workspace"]["snapshot_id"]:
                     raise ValueError("parent workspace lineage differs from reserved baseline")
-            if parent.get("capture_mode", "full-repository") != "source-only" or parent["capture_policy_sha256"] != operation["parent_policy_sha256"]:
+            if parent.get("capture_mode", "full-repository") != plan["capture_mode"] or parent["capture_policy_sha256"] != operation["parent_policy_sha256"]:
                 raise ValueError("parent capture contract differs from reserved metadata")
             if any(parent["components"].values()):
                 raise ValueError("composed parent optional components are not admitted")

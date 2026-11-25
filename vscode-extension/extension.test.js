@@ -3927,6 +3927,7 @@ test("fresh activation exposes an actionable idle runtime load without starting 
 test("registered prepare action starts once, reports sanitized runtime progress and publishes the loaded tree", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-prepare-action-"));
   const { vscode, commandCallbacks, treeViewCalls, progressReports, logLines, progressCalls } = createVscodeMock(root);
+  vscode.window.createOutputChannel().info = line => logLines.push(line);
   let catalogReads = 0;
   const spawnHarness = createSpawnHarness(({ args }) => {
     assert.deepEqual(args.slice(args.indexOf("--") + 1), ["python", "-m", "josh_room", "dimensions", "list", "--json"]);
@@ -3947,10 +3948,13 @@ test("registered prepare action starts once, reports sanitized runtime progress 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(acquisition.starts, 1);
   assert.equal(spawnHarness.calls.length, 0);
-  assert.equal(provider.getTreeItem(provider.getChildren()[0]).iconPath.id, "sync~spin");
+  assert.deepEqual(provider.getChildren(), []);
   assert.equal(progressCalls.length, 1);
-  assert.match(JSON.stringify(progressReports), /Downloading RCC/);
-  assert.match(JSON.stringify(progressReports), /RCC importing environment/);
+  assert.deepEqual(progressCalls[0].options.location, { viewId: "joshRoom.rooms" });
+  assert.deepEqual(treeViewCalls.map(call => call.id), ["joshRoom.rooms", "joshRoom.jatTools"]);
+  assert.doesNotMatch(JSON.stringify(progressReports), /Downloading RCC|RCC importing environment/);
+  assert.match(JSON.stringify(logLines), /Downloading RCC/);
+  assert.match(JSON.stringify(logLines), /RCC importing environment/);
   assert.doesNotMatch(JSON.stringify([progressReports, logLines]), /synthetic-private-result|synthetic-|runtime-token/);
   release();
   await Promise.all([first, second]);
@@ -4005,7 +4009,8 @@ test("runtime failure and cancellation expose real retry actions without startin
 
 test("cancelling one runtime consumer preserves preparation needed by another", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-shared-runtime-"));
-  const { vscode, progressCalls, progressReports } = createVscodeMock(root);
+  const { vscode, progressCalls, progressReports, logLines } = createVscodeMock(root);
+  vscode.window.createOutputChannel().info = line => logLines.push(line);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
   const extension = loadExtension(vscode, spawnHarness.spawn);
   let release;
@@ -4024,12 +4029,14 @@ test("cancelling one runtime consumer preserves preparation needed by another", 
   await Promise.all([rejection, second]);
   assert.equal(acquisition.starts, 1);
   assert.equal(spawnHarness.calls.length, 1);
-  assert.match(JSON.stringify(progressReports), /Importing controller Environment Artifact/);
+  assert.doesNotMatch(JSON.stringify(progressReports), /Importing controller Environment Artifact/);
+  assert.match(JSON.stringify(logLines), /Importing controller Environment Artifact/);
 });
 
 test("cancelling one JAT consumer preserves preparation and progress for another", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-shared-jat-"));
-  const { vscode, progressCalls, progressReports } = createVscodeMock(root);
+  const { vscode, progressCalls, progressReports, logLines } = createVscodeMock(root);
+  vscode.window.createOutputChannel().info = line => logLines.push(line);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
   const extension = loadExtension(vscode, spawnHarness.spawn);
   stubRuntimeAcquisition(t, extension);
@@ -4060,7 +4067,8 @@ test("cancelling one JAT consumer preserves preparation and progress for another
   assert.equal(cancelledSharedWork, false);
   assert.equal(starts, 1);
   assert.equal(spawnHarness.calls.length, 1);
-  assert.ok(progressReports.filter((report) => /Importing JAT runtime/.test(report.message)).length >= 2);
+  assert.doesNotMatch(JSON.stringify(progressReports), /Importing JAT runtime/);
+  assert.ok(logLines.filter(line => /Importing JAT runtime/.test(line)).length >= 2);
 });
 
 test("runtime acquisition failures redact stderr in logs, progress and native errors", async (t) => {
@@ -5404,7 +5412,7 @@ test("registered JAT commands wrap controller failures into the error message UX
 
   assert.equal(await commandCallbacks.get("joshRoom.jatInspect")(), "failed");
   assert.deepEqual(spawnHarness.calls[0].args.slice(0, 4), ["jat", "inspect", "--haul", path.join(root, "capsule.haul.tar.zst")]);
-  assert.deepEqual(extras.errorCalls, [["boom"]]);
+  assert.deepEqual(extras.errorCalls, [["boom", "Show Output Log"]]);
 });
 
 test("Pack Folder into JAT forwards every advanced capture input to the build controller", async () => {
@@ -5849,7 +5857,8 @@ test("JAT serve failure redacts structured progress material from every error si
   const sinks = [extras.errorCalls, statusItem, logLines, progressReports];
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(identity)), false);
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(recipient)), false);
-  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE IDENTITY]")), true);
+  assert.equal(progressReports.some((report) => report.message === "Encrypting"), true);
+  assert.match(JSON.stringify(logLines), /\[REDACTED AGE IDENTITY\]/);
 });
 
 test("cancelling a JAT operation kills the spawned controller child", async () => {
@@ -6785,8 +6794,10 @@ test("structured progress events redact private age material before every visual
   const sinks = [progressReports, statusItem, logLines];
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(identity)), false);
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(recipient)), false);
-  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE IDENTITY]")), true);
-  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE RECIPIENT]")), true);
+  assert.ok(progressReports.some(report => report.message === "Encrypting"));
+  assert.doesNotMatch(JSON.stringify(progressReports), /REDACTED AGE/);
+  assert.match(JSON.stringify(logLines), /\[REDACTED AGE IDENTITY\]/);
+  assert.match(JSON.stringify(logLines), /\[REDACTED AGE RECIPIENT\]/);
 });
 
 test("non-JSON controller failures sanitize bounded stdout and stderr before rethrowing", async () => {
@@ -8243,7 +8254,7 @@ for (const [command, provider, readiness, expected] of [
   const operations = [];
   const harness = createSpawnHarness(({ args, options, child }) => {
     const result = body => ({ stdout: JSON.stringify({ ok: true, ...body }) });
-    assert.notEqual(args[1], "inventory", "Catalog selection must not recursively index the source");
+    assert.notEqual(args[1], "inventory", "Catalog review uses the capture plan");
     if (args[0] === "dimensions") {
       assert.deepEqual(args, ["dimensions", "list", "--json"]);
       return result({ dimensions: [dimension] });
@@ -8259,7 +8270,9 @@ for (const [command, provider, readiness, expected] of [
         encryption_domain_id: ["domain-mismatch", "ready"].includes(readiness) ? domain : undefined, key_generation: 1 });
     }
     assert.equal(args[0], "composition");
-    assert.ok(args.includes("--root-files-only"));
+    assert.ok(args.includes("--preserve-content"));
+    assert.ok(!args.includes("--root-files-only"));
+    assert.deepEqual(args.flatMap((value, index) => value === "--assign" ? [args[index + 1]] : []), [".=parent"]);
     assert.ok(args.includes("--parent-name=Synthetic Projects"));
     operations.push(args[1]);
     assert.ok(!args.includes("--expected-domain"));
@@ -8268,10 +8281,12 @@ for (const [command, provider, readiness, expected] of [
       return result({ approval_sha256: "verified", request: { destination_binding: {
         dimension_id: dimension.id, provider, connection_id: dimension.connection_id, encryption_domain_id: domain,
         physical_bucket: provider + ":https://storage.example.invalid:fixture",
-      }, child_evidence: { a: { capture_mode: "full-repository" } } } });
+      }, preserve_content: true, capture_mode: "full-repository", child_evidence: {},
+      assignments: [{ path: ".", outcome: "parent" }] } });
     }
     assert.equal(args[args.indexOf("--approve") + 1], "verified");
-    return result({ status: "saved", parent_snapshot_id: "parent", namespace: args[args.indexOf("--namespace") + 1] });
+    return result({ status: "saved", parent_snapshot_id: "parent", namespace: args[args.indexOf("--namespace") + 1],
+      parent_room_id: args[args.indexOf("--parent-room") + 1] });
   });
   const extension = loadExtension(vscode, harness.spawn);
   extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
@@ -8282,7 +8297,7 @@ for (const [command, provider, readiness, expected] of [
     return "Synthetic Projects";
   };
   if (command === "joshRoom.new") fixture.quickPickResponses.push({ id: "catalog" });
-  fixture.quickPickResponses.push([{ label: "a" }], { dimension });
+  fixture.quickPickResponses.push({ dimension });
   fixture.openDialogResponses.push([{ fsPath: root }]);
   if (expected === "saved") {
     vscode.QuickPickItemKind = { Separator: -1 };

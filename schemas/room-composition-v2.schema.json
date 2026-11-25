@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.dev/schemas/room-composition-v2.schema.json",
+  "title": "Catalog manifest with no separately recoverable child Rooms",
+  "$comment": "Use composition.parse_manifest as well: portable paths, aliased ancestors, overlapping paths and repeated Room identities require semantic validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "children"
+  ],
+  "properties": {
+    "format": {
+      "const": "room-composition-v2"
+    },
+    "children": {
+      "type": "array",
+      "maxItems": 0
+    }
+  }
+}

@@ -2,6 +2,8 @@
 const path = require("path");
 const crypto = require("crypto");
 
+const SPLIT_CHILDREN = "Split folders into Rooms…";
+
 function relativeSource(root, value) {
   const relative = path.relative(root, value);
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -62,17 +64,17 @@ function reviewedDestination(dimension, binding) {
   };
 }
 
-function reviewCatalog(vscode, name, destination, children) {
+function reviewCatalog(vscode, name, destination, children, preservation) {
   const heading = label => ({ label, kind: vscode.QuickPickItemKind.Separator });
   const parent = {
     label: "$(root-folder) Catalog parent",
-    description: "Eligible root files and child Room links",
-    detail: "Checked folders include nested content. Unchecked folders stay local.",
+    description: preservation ? "Eligible files and folders" : "Eligible root files and child Room links",
+    detail: preservation ? preservation.detail : "Checked folders include nested content. Unchecked folders stay local.",
     alwaysShow: true,
   };
   const picker = vscode.window.createQuickPick();
   picker.title = `Review Catalog · ${name} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
-  picker.placeholder = "Review the plan, then choose Save catalog, Advanced settings, or Cancel";
+  picker.placeholder = "Review what will be saved";
   picker.matchOnDescription = true;
   picker.matchOnDetail = true;
   picker.ignoreFocusOut = true;
@@ -81,11 +83,16 @@ function reviewCatalog(vscode, name, destination, children) {
     { label: "Connection", description: destination.connection },
     { label: "Dimension", description: destination.dimension },
     heading("Capture"), parent,
+    ...(preservation?.localOnly.length ? [
+      heading("Stays on this device"),
+      ...preservation.localOnly.map(relative => ({ label: relative.replaceAll("$(", "\\$("), description: "Left local by request" })),
+    ] : []),
     heading("Actions"),
     { label: "$(check) Save catalog", action: "Save catalog" },
-    { label: "$(settings-gear) Advanced settings", action: "Advanced settings" },
+    ...(preservation ? [{ label: `$(split-horizontal) ${SPLIT_CHILDREN}`, action: SPLIT_CHILDREN }] : []),
+    ...(children.length ? [{ label: "$(settings-gear) Advanced settings", action: "Advanced settings" }] : []),
     { label: "$(close) Cancel", action: "Cancel" },
-    heading("Child Rooms"), ...children,
+    ...(children.length ? [heading("Child Rooms"), ...children] : []),
   ];
   return new Promise(resolve => {
     let action;
@@ -140,12 +147,12 @@ async function catalogSettings(vscode, root, assignments, chooseComponents) {
   }
 }
 
-async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponents, plan, save }) {
+async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponents, plan, save, preserveByDefault = false, onSaved }) {
   const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!source?.length) return "cancelled";
   const root = source[0].fsPath;
-  const children = await selectChildren(root);
-  if (!children?.length) return "cancelled";
+  const children = preserveByDefault ? [] : await selectChildren(root);
+  if (!children || (!preserveByDefault && !children.length)) return "cancelled";
   const validateName = value => !value.trim() || [...value.trim()].length > 100 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
     ? "Enter a Catalog name on one line, up to 100 characters." : undefined;
   const name = await vscode.window.showInputBox({ title: "Name the Catalog Room",
@@ -153,21 +160,41 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
   if (name === undefined) return "cancelled";
   if (validateName(name)) throw new Error(validateName(name));
   let assignments = children.map(path => ({ path, outcome: "child" }));
+  const editSplits = async () => {
+    const selected = await selectChildren(root, assignments.filter(row => row.outcome === "child").map(row => row.path));
+    if (selected === undefined) return;
+    const old = new Map(assignments.filter(row => row.outcome === "child").map(row => [row.path, row]));
+    assignments = [
+      ...selected.map(path => old.get(path) || { path, outcome: "child" }),
+      ...assignments.filter(row => row.outcome === "local-only" && !selected.includes(row.path)),
+    ];
+  };
   const configured = await dimensions(root);
   const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Where should this catalog be saved?" });
   if (!choice) return "cancelled";
   const namespace = crypto.randomUUID().replaceAll("-", "");
   const parentRoom = `catalog-${namespace}`;
-  let selection = { root, assignments, namespace, parentRoom, name: name.trim(), dimension: choice.dimension };
+  const sourceSelection = { root, namespace, parentRoom, name: name.trim(), dimension: choice.dimension };
   for (;;) {
+    const selection = { ...sourceSelection, assignments };
     let preview;
     try {
       preview = await plan(selection);
     } catch (error) {
       const failure = error.result;
+      if (preserveByDefault && ["composition-preservation-git", "composition-preservation-boundary"].includes(failure?.error_code)) {
+        const retry = "Check again";
+        const decision = await vscode.window.showWarningMessage("Catalog needs attention", {
+          modal: true, detail: error.message,
+        }, SPLIT_CHILDREN, retry);
+        if (decision === SPLIT_CHILDREN) await editSplits();
+        else if (decision !== retry) return "cancelled";
+        continue;
+      }
       const filesOnly = failure?.error_code === "composition-child-git-files-only";
       if (!filesOnly && failure?.error_code !== "composition-child-room-metadata") throw error;
-      const child = assignments.find(row => crypto.createHash("sha256").update(row.path).digest("hex") === failure.child_path_sha256);
+      const child = assignments.find(row => row.outcome === "child"
+        && crypto.createHash("sha256").update(row.path).digest("hex") === failure.child_path_sha256);
       if (!child || (filesOnly && child.capture_mode === "source-only")) throw error;
       const action = filesOnly ? "Review files only" : "Leave folder local";
       const detail = filesOnly
@@ -176,18 +203,20 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
       if (await vscode.window.showWarningMessage(child.path, { modal: true, detail }, action) !== action) return "cancelled";
       assignments = filesOnly
         ? assignments.map(row => row === child ? { ...row, capture_mode: "source-only" } : row)
-        : assignments.filter(row => row !== child);
-      if (!assignments.length) return "cancelled";
-      selection = { ...selection, assignments };
+        : preserveByDefault
+          ? assignments.map(row => row === child ? { path: row.path, outcome: "local-only" } : row)
+          : assignments.filter(row => row !== child);
+      if (!preserveByDefault && !assignments.length) return "cancelled";
       continue;
     }
     if (preview === undefined) return "cancelled";
     const destination = reviewedDestination(choice.dimension, preview.request?.destination_binding);
+    const childAssignments = assignments.filter(row => row.outcome === "child");
     const evidenceByChild = preview.request.child_evidence;
-    if (Object.keys(evidenceByChild || {}).length !== assignments.length) {
+    if (Object.keys(evidenceByChild || {}).length !== childAssignments.length) {
       throw new Error("The controller returned different Catalog child folders. Review the selection again.");
     }
-    const childSummary = assignments.map(row => {
+    const childSummary = childAssignments.map(row => {
       const evidence = Object.hasOwn(evidenceByChild, row.path) ? evidenceByChild[row.path] : undefined;
       const mode = describeMode(evidence?.capture_mode);
       const git = mode === "Files and Git history" ? "Files + Git if present" : "Files only";
@@ -198,24 +227,58 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
         ...(components === "Workspace only" ? {} : { detail: components }),
       };
     });
-    const approved = await reviewCatalog(vscode, selection.name, destination, childSummary);
+    let preservation;
+    if (preserveByDefault) {
+      const expected = new Map([[".", "parent"], ...assignments.map(row => [row.path, row.outcome])]);
+      const reviewed = preview.request.assignments;
+      if (preview.request.preserve_content !== true || !Array.isArray(reviewed) || reviewed.length !== expected.size
+          || !reviewed.every(row => row && expected.get(row.path) === row.outcome && expected.delete(row.path))) {
+        throw new Error("The controller did not verify the whole-folder capture plan.");
+      }
+      const mode = describeMode(preview.request.capture_mode);
+      const count = preview.request.parent_git_count ?? preview.parent_git_count;
+      const git = mode === "Files and Git history"
+        ? Number.isSafeInteger(count) && count >= 0
+          ? `${count} Git ${count === 1 ? "repository" : "repositories"} in the Catalog parent.`
+          : "Eligible Git repositories stay with their folders."
+        : "The source policy excludes Git history.";
+      preservation = {
+        detail: `${git} Capture policy exclusions stay local.`,
+        localOnly: assignments.filter(row => row.outcome === "local-only").map(row => row.path),
+      };
+    }
+    const approved = await reviewCatalog(vscode, selection.name, destination, childSummary, preservation);
+    if (approved === SPLIT_CHILDREN) {
+      await editSplits();
+      continue;
+    }
     if (approved === "Advanced settings") {
-      const edited = await catalogSettings(vscode, root, assignments, chooseComponents);
+      const edited = await catalogSettings(vscode, root, childAssignments, chooseComponents);
       if (!edited) return "cancelled";
-      assignments = edited;
-      selection = { ...selection, assignments };
+      assignments = [...edited, ...assignments.filter(row => row.outcome === "local-only")];
       continue;
     }
     if (approved !== "Save catalog") return "cancelled";
     const result = await save(selection, preview.approval_sha256);
+    if (onSaved && (result?.ok !== true || result.namespace !== selection.namespace
+        || result.parent_room_id !== selection.parentRoom || typeof result.parent_snapshot_id !== "string"
+        || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(result.parent_snapshot_id)
+        || result.parent_snapshot_id.toLowerCase() === "latest")) {
+      throw new Error("The controller could not verify the saved Catalog recovery point.");
+    }
+    const receipt = {
+      dimension_id: preview.request.destination_binding.dimension_id,
+      namespace: result.namespace,
+      parent_room_id: result.parent_room_id,
+      parent_snapshot_id: result.parent_snapshot_id,
+    };
+    if (onSaved) {
+      await onSaved(receipt);
+      return result;
+    }
     const copy = "Copy recovery receipt";
-    if (await vscode.window.showInformationMessage(`Catalog saved with ${assignments.length} child Room${assignments.length === 1 ? "" : "s"}.`, copy) === copy) {
-      await vscode.env.clipboard.writeText(JSON.stringify({
-        dimension_id: preview.request.destination_binding.dimension_id,
-        namespace: result.namespace,
-        parent_room_id: result.parent_room_id,
-        parent_snapshot_id: result.parent_snapshot_id,
-      }, null, 2));
+    if (await vscode.window.showInformationMessage(`Catalog saved with ${childAssignments.length} child Room${childAssignments.length === 1 ? "" : "s"}.`, copy) === copy) {
+      await vscode.env.clipboard.writeText(JSON.stringify(receipt, null, 2));
     }
     return result;
   }
@@ -298,7 +361,7 @@ function matchesPinnedChild(marker, row, result) {
     && result.room_id === row.room_id && result.snapshot_id === row.snapshot_id;
 }
 
-async function enterChild(vscode, { root, marker, listChildren, enter, open, childPath, localState = () => "missing" }) {
+async function enterChild(vscode, { root, marker, listChildren, enter, open, childPath, notify = true, localState = () => "missing" }) {
   const row = await chooseChild(vscode, marker, listChildren, false, childPath);
   if (!row) return "cancelled";
   const state = localState(row);
@@ -310,9 +373,11 @@ async function enterChild(vscode, { root, marker, listChildren, enter, open, chi
   }
   if (state === "occupied") throw new Error("The child folder is occupied. Choose a new Catalog restore location.");
   const { result, target } = await hydratePinnedChild(root, marker, row, enter);
-  void vscode.window.showInformationMessage(result.local_changes
-    ? "Child Room restored. Local files changed after restore."
-    : `Child Room verified at exact recovery point ${result.snapshot_id}.`);
+  if (notify || result.local_changes) {
+    void vscode.window.showInformationMessage(result.local_changes
+      ? "Child Room restored. Local files changed after restore."
+      : `Child Room verified at exact recovery point ${result.snapshot_id}.`);
+  }
   await open(target);
   return result;
 }
@@ -410,10 +475,7 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
   const result = await save(ticket);
   if (!result?.ok || (kind !== "parent" && !result.marker_verified)) throw new Error("Composition update was not verified. Retain the pending operation for retry.");
   await remember(undefined);
-  if (kind === "catalog") {
-    void vscode.window.showInformationMessage("Catalog saved.");
-    return result;
-  }
+  if (kind === "catalog") return result;
   await vscode.window.showInformationMessage(`${kind === "child" ? "Child saved; parent pins unchanged" : "Parent pin published; working folders unchanged"}. Exact recovery point ${result.snapshot_id}.${kind === "child" ? ` ${savedComponents(result.components)}.` : ""}`);
   return result;
 }

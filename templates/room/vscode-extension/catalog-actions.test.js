@@ -178,6 +178,117 @@ test("Catalog previews explicit files-only and local-only choices before saving"
   assert.equal(plans, 3);
 });
 
+function preservedCatalog(plan, options = {}) {
+  const vscode = { window: {
+    showOpenDialog: async () => [{ fsPath: "/synthetic/work" }],
+    showInputBox: async options => options.value,
+    showQuickPick: async rows => rows[0],
+    showInformationMessage: () => assert.fail("verified Save should pass a receipt to the caller"),
+    ...options,
+  } };
+  const callbacks = {
+    preserveByDefault: true,
+    dimensions: async () => [{ id: "dimension", provider: "minio" }],
+    selectChildren: () => assert.fail("child selection is opt-in"),
+    plan,
+    save: () => assert.fail("Save requires approval"),
+    onSaved: () => assert.fail("receipt requires a successful Save"),
+  };
+  return { vscode, callbacks };
+}
+
+function preservationPreview(selection, approval) {
+  return {
+    approval_sha256: approval,
+    request: {
+      destination_binding: binding,
+      preserve_content: true,
+      capture_mode: "full-repository",
+      parent_git_count: 2,
+      assignments: [{ path: ".", outcome: "parent" }, ...selection.assignments],
+      child_evidence: Object.fromEntries(selection.assignments.filter(row => row.outcome === "child")
+        .map(row => [row.path, { capture_mode: row.capture_mode || "full-repository" }])),
+    },
+  };
+}
+
+test("new preservation review keeps eligible folders and Git in the parent by default", async () => {
+  const { vscode, callbacks } = preservedCatalog(async selection => {
+    assert.deepEqual(selection.assignments, []);
+    return preservationPreview(selection, "preserve-whole");
+  });
+  installReviewPicker(vscode, (picker, accept) => {
+    assert.match(picker.title, /0 child Rooms/);
+    assert.equal(picker.activeItem.description, "Eligible files and folders");
+    assert.match(picker.activeItem.detail, /2 Git repositories in the Catalog parent/);
+    assert.match(picker.activeItem.detail, /Capture policy exclusions stay local/);
+    assert.ok(action(picker, "Split folders into Rooms…"));
+    assert.equal(action(picker, "Advanced settings"), undefined);
+    accept(action(picker, "Save catalog"));
+  });
+  callbacks.save = async (selection, approval) => {
+    assert.deepEqual(selection.assignments, []);
+    assert.equal(approval, "preserve-whole");
+    return { ok: true, namespace: selection.namespace, parent_room_id: selection.parentRoom, parent_snapshot_id: "exact-pin" };
+  };
+  let savedReceipt;
+  callbacks.onSaved = async receipt => { savedReceipt = receipt; };
+  const result = await saveCatalog(vscode, callbacks);
+  assert.deepEqual(savedReceipt, { dimension_id: "dimension", namespace: result.namespace,
+    parent_room_id: result.parent_room_id, parent_snapshot_id: "exact-pin" });
+});
+
+test("opting in to a split and then clearing it both produce fresh preservation plans", async () => {
+  const { vscode, callbacks } = preservedCatalog(async selection => {
+    const expected = [[], [{ path: "service", outcome: "child" }], []];
+    assert.deepEqual(selection.assignments, expected[planCount]);
+    return preservationPreview(selection, `preserve-${++planCount}`);
+  });
+  let pickerCount = 0;
+  let planCount = 0;
+  callbacks.selectChildren = async (root, selected) => {
+    assert.equal(root, "/synthetic/work");
+    assert.deepEqual(selected, pickerCount++ === 0 ? [] : ["service"]);
+    return pickerCount === 1 ? ["service"] : [];
+  };
+  callbacks.save = async (selection, approval) => {
+    assert.deepEqual(selection.assignments, []);
+    assert.equal(approval, "preserve-3");
+    return { ok: true, namespace: selection.namespace, parent_room_id: selection.parentRoom, parent_snapshot_id: "exact-pin" };
+  };
+  callbacks.onSaved = () => {};
+  installReviewPicker(vscode, (picker, accept) => {
+    assert.equal(picker.items.some(item => item.label === "$(folder) service"), planCount === 2);
+    accept(action(picker, planCount === 3 ? "Save catalog" : "Split folders into Rooms…"));
+  });
+  await saveCatalog(vscode, callbacks);
+  assert.equal(pickerCount, 2);
+  assert.equal(planCount, 3);
+});
+
+test("an unsupported preservation boundary requires an explicit decision before replanning", async () => {
+  const { vscode, callbacks } = preservedCatalog(async () => {
+    throw Object.assign(new Error("Finish the current Git operation before saving."), {
+      result: { error_code: "composition-preservation-git" },
+    });
+  }, { showWarningMessage: async (message, options, split) => {
+    assert.equal(message, "Catalog needs attention");
+    assert.equal(options.modal, true);
+    assert.match(options.detail, /Finish the current Git operation/);
+    assert.equal(split, "Split folders into Rooms…");
+  } });
+  assert.equal(await saveCatalog(vscode, callbacks), "cancelled");
+});
+
+test("a preservation request rejects controller changes to parent ownership before review", async () => {
+  const { vscode, callbacks } = preservedCatalog(async selection => {
+    const preview = preservationPreview(selection, "mismatched-parent");
+    preview.request.assignments[0].outcome = "local-only";
+    return preview;
+  });
+  await assert.rejects(saveCatalog(vscode, callbacks), /whole-folder capture plan/);
+});
+
 const parentMarker = { composition_namespace: "1".repeat(32), dimension_id: "dimension", project_id: "parent", snapshot_id: "parent-pin" };
 const children = { ok: true, namespace: parentMarker.composition_namespace, parent_room_id: "parent", parent_snapshot_id: "parent-pin",
   current_parent: true, revision: 1, next_offset: null, children: [{ path: "projects/a", room_id: "a", snapshot_id: "pinned-a",

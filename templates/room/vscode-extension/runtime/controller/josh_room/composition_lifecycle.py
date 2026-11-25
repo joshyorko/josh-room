@@ -195,9 +195,23 @@ def _catalog_admission(root_fd, children, expected_mount=None):
                 os.close(fd)
 
 
-def _parent_scan(source, policy, children):
-    return _scan_workspace(source, replace(policy, capture_mode="source-only"),
+def _parent_scan(source, policy, children, *, preserve=False):
+    return _scan_workspace(source, policy if preserve else replace(policy, capture_mode="source-only"),
                            opaque_directories=frozenset(children))
+
+
+def _preservation_scan(workspace, policy, rows, children):
+    opaque = set(children) | {row["path"] for row in rows if row["outcome"] == "local-only"}
+    try:
+        scan = _parent_scan(workspace, policy, opaque, preserve=True)
+        inventory = {path for path in scan.paths if _outcome(path, rows) == "parent"}
+        validate_child_git(workspace, inventory, policy.capture_mode)
+    except (ValueError, RuntimeError) as error:
+        raise CompositionAdmissionError(
+            "composition-preservation-git",
+            "Catalog preservation needs attention. Check for unreadable files, unsafe paths, or unsupported Git history.",
+        ) from error
+    return scan, sum(path == ".git" or path.endswith("/.git") for path in inventory)
 
 
 def _has_git(directory):
@@ -288,7 +302,8 @@ def _child_inventory(source, child, root_policy, selection):
     return scan, evidence, generated
 
 
-def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, root_files_only=False, parent_name=None):
+def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, root_files_only=False, parent_name=None,
+                 preserve_content=False):
     if not sys.platform.startswith("linux"):
         raise ValueError("catalog capture is not yet qualified on this platform")
     namespace_prefix(namespace)
@@ -301,8 +316,12 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
     workspace = Path(os.path.abspath(workspace))
     descriptor = _directory(workspace)
     source_identity = [os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino]
-    source_mount_id = _mount_id(descriptor) if root_files_only else None
-    os.close(descriptor)
+    try:
+        source_mount_id = _mount_id(descriptor) if root_files_only or preserve_content else None
+    finally:
+        os.close(descriptor)
+    if preserve_content and root_files_only:
+        raise ValueError("select one Catalog capture mode")
     require_uncomposed_workspace(workspace)
     if (workspace / ".josh-room.json").exists():
         raise ValueError(
@@ -343,7 +362,10 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
         raise ValueError("duplicate capture assignment")
     validate_paths(row["path"] for row in rows if row["path"] != ".")
     children = [row["path"] for row in rows if row["outcome"] == "child"]
-    if not 1 <= len(children) <= 32:
+    if preserve_content and ({"path": ".", "outcome": "parent"} not in rows
+                             or any(row["path"] != "." and row["outcome"] == "parent" for row in rows)):
+        raise ValueError("preservation requires the source root assigned to the parent")
+    if not (0 if preserve_content else 1) <= len(children) <= 32:
         raise ValueError(
             "v1 publication requires one to 32 children; discovery is not limited"
         )
@@ -368,7 +390,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
     policy = load_capture_policy(workspace)
     # A parent is deliberately source-only. A cohesive Git source needs an
     # explicit source-only policy before its history can be left behind.
-    if policy.capture_mode != "source-only" and (_has_git(workspace) or any(
+    if policy.capture_mode != "source-only" and ((not preserve_content and _has_git(workspace)) or any(
         (directory / ".git").is_file() or (directory / ".git/HEAD").is_file()
         for directory in workspace.parents
     )):
@@ -377,7 +399,19 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
             "The Catalog source is part of a Git repository. Save it as one Room to preserve Git history, "
             "or choose a source folder outside the repository for a Catalog.",
         )
+    if preserve_content and policy.capture_mode == "full-repository":
+        for row in rows:
+            if row["path"] == ".":
+                continue
+            candidate = workspace / row["path"]
+            if any(_has_git(ancestor) for ancestor in candidate.parents
+                   if ancestor == workspace or workspace in ancestor.parents):
+                raise CompositionAdmissionError(
+                    "composition-preservation-boundary",
+                    "A split or exclusion falls inside a Git repository. Keep the whole repository together.",
+                )
     opaque_directories = frozenset(children)
+    parent_git_count = 0
     if root_files_only:
         root_fd = _directory(workspace)
         try:
@@ -389,14 +423,29 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
             scan = _catalog_root_scan(policy, root_fd, children)
         finally:
             os.close(root_fd)
+    elif preserve_content:
+        scan, parent_git_count = _preservation_scan(workspace, policy, rows, children)
     else:
         scan = _parent_scan(workspace, policy, children)
     for path in scan.paths:
         if path == ".josh-roomignore":
             continue
-        validate_payload_path(path)
+        try:
+            validate_payload_path(path, allow_nested_policy=preserve_content)
+        except ValueError as error:
+            if preserve_content:
+                raise CompositionAdmissionError(
+                    "composition-preservation-boundary",
+                    "The source contains reserved Room metadata. Choose an unbound source or explicitly leave that folder local.",
+                ) from error
+            raise
         location = workspace / path
         if location.is_symlink():
+            if preserve_content:
+                raise CompositionAdmissionError(
+                    "composition-preservation-boundary",
+                    "Catalog preservation found a symbolic link. Leave its containing folder local or choose a source without links.",
+                )
             raise ValueError("linked capture sources are unsupported in catalog mode")
         if root_files_only:
             if "/" not in path and location.is_dir() and path in children:
@@ -407,7 +456,7 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
                 continue
         else:
             outcome = _outcome(path, rows)
-        if (policy.capture_mode != "source-only" and path not in children
+        if (not preserve_content and policy.capture_mode != "source-only" and path not in children
                 and location.is_dir() and _has_git(location)
                 and (outcome == "parent" or any(
                     row["outcome"] != "local-only" and row["path"].startswith(path + "/")
@@ -466,6 +515,9 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
             source_records = _records(workspace, scan.paths, root_fd)
         finally:
             os.close(root_fd)
+    elif preserve_content:
+        with _admitted_source(workspace, {"source_identity": source_identity, "source_mount_id": source_mount_id}) as fd:
+            source_records = _records(workspace, scan.paths, fd, mount_id=source_mount_id)
     else:
         source_records = _records(workspace, scan.paths)
     require_uncomposed_workspace(workspace)
@@ -474,10 +526,10 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
     for child in children:
         require_uncomposed_workspace(workspace / child)
     request = {
-        "plan_version": 4 if component_options else 3,
+        "plan_version": 5 if preserve_content else 4 if component_options else 3,
         "namespace": namespace,
         "source_identity": source_identity,
-        **({"source_mount_id": source_mount_id} if root_files_only else {}),
+        **({"source_mount_id": source_mount_id} if source_mount_id is not None else {}),
         "source_records_sha256": plan_digest(source_records),
         "dimension_id": dimension.dimension_id,
         "destination_binding": dimension_binding(
@@ -489,7 +541,8 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments, *, r
         "capture_policy_sha256": policy.sha256,
         "parent_room_id": parent_room,
         **({"parent_name": parent_name} if parent_name is not None else {}),
-        "capture_mode": "source-only",
+        "capture_mode": policy.capture_mode if preserve_content else "source-only",
+        **({"preserve_content": True, "parent_git_count": parent_git_count} if preserve_content else {}),
         "assignments": rows,
         **({"root_files_only": True} if root_files_only else {}),
     }
@@ -524,7 +577,14 @@ def _record_stat(info):
     ]
 
 
-def _records(source, paths, root_fd=None):
+def _require_capture_mount(fd, mount_id):
+    if mount_id is not None and _mount_id(fd) != mount_id:
+        raise CompositionAdmissionError(
+            "composition-preservation-boundary", "Catalog preservation cannot cross a mounted filesystem.",
+        )
+
+
+def _records(source, paths, root_fd=None, *, mount_id=None):
     fd = _directory(source) if root_fd is None else os.dup(root_fd)
     try:
         result = {".": _record_stat(os.fstat(fd))}
@@ -540,9 +600,15 @@ def _records(source, paths, root_fd=None):
                     )
                     os.close(current)
                     current = child
-                result[path] = _record_stat(
-                    os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
-                )
+                if mount_id is None:
+                    result[path] = _record_stat(os.stat(parts[-1], dir_fd=current, follow_symlinks=False))
+                else:
+                    entry = os.open(parts[-1], os.O_PATH | os.O_NOFOLLOW, dir_fd=current)
+                    try:
+                        _require_capture_mount(entry, mount_id)
+                        result[path] = _record_stat(os.fstat(entry))
+                    finally:
+                        os.close(entry)
             finally:
                 os.close(current)
         return result
@@ -556,7 +622,7 @@ def _admitted_source(source, request):
     try:
         if [os.fstat(fd).st_dev, os.fstat(fd).st_ino] != request["source_identity"]:
             raise ValueError("approved source identity changed")
-        if request.get("root_files_only") and _mount_id(fd) != request["source_mount_id"]:
+        if "source_mount_id" in request and _mount_id(fd) != request["source_mount_id"]:
             raise ValueError("approved source mount changed")
         yield fd
     finally:
@@ -758,6 +824,7 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
     producer_version, producer_platform = _room_version(), _source_platform()
     policy = load_capture_policy(root)
     before = scan_workspace_for_status(root)
+    validate_child_git(root, before.paths, policy.capture_mode)
     verify_staged_git(root, before.paths, policy.capture_mode, private)
     tag = ("composition:" + slot["logical_jat_id"],)
     prior = store.snapshots(tags=tag)
@@ -851,12 +918,13 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
     return descriptor, before
 
 
-def _copy_paths(source, target, paths, *, source_fd=None, records=None):
+def _copy_paths(source, target, paths, *, source_fd=None, records=None, mount_id=None):
     """Read every payload through no-follow descriptors rooted at the source."""
     root_fd = _directory(source) if source_fd is None else os.dup(source_fd)
     modes = []
     try:
-        records = _records(source, paths, root_fd) if records is None else records
+        _require_capture_mount(root_fd, mount_id)
+        records = _records(source, paths, root_fd, mount_id=mount_id) if records is None else records
         policy = load_capture_policy(source, directory_fd=root_fd)
         ignore = _read_ignore(source, directory_fd=root_fd) or b""
         for relative in sorted(
@@ -877,6 +945,7 @@ def _copy_paths(source, target, paths, *, source_fd=None, records=None):
                         raise ValueError("approved ancestor identity changed")
                     os.close(fd)
                     fd = child
+                    _require_capture_mount(fd, mount_id)
                 info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
                 if records.get(relative) != _record_stat(info):
                     raise ValueError("approved payload metadata changed")
@@ -902,6 +971,7 @@ def _copy_paths(source, target, paths, *, source_fd=None, records=None):
                         os.fdopen(opened, "rb") as stream,
                         destination.open("xb") as output,
                     ):
+                        _require_capture_mount(stream.fileno(), mount_id)
                         current = os.fstat(stream.fileno())
                         if (
                             not stat.S_ISREG(current.st_mode)
@@ -997,6 +1067,8 @@ def _build_child_view(source, child, target, request, source_fd):
     if request.get("root_files_only"):
         with _catalog_admission(source_fd, [child], request["source_mount_id"]):
             root_scan = _catalog_root_scan(root_policy, source_fd, request["child_evidence"])
+    elif request.get("preserve_content"):
+        root_scan, _ = _preservation_scan(source, root_policy, request["assignments"], request["child_evidence"])
     else:
         root_scan = _parent_scan(source, root_policy, request["child_evidence"])
     original = source / child
@@ -1014,7 +1086,8 @@ def _build_child_view(source, child, target, request, source_fd):
     ):
         raise ValueError("approved child inventory changed before capture")
     target.mkdir(mode=0o700)
-    root_records = _records(source, root_scan.paths, source_fd)
+    root_records = _records(source, root_scan.paths, source_fd,
+                            mount_id=request.get("source_mount_id") if request.get("preserve_content") else None)
     if plan_digest(root_records) != request["source_records_sha256"]:
         raise ValueError("approved source records changed before staging")
     child_fd = os.dup(source_fd)
@@ -1030,7 +1103,8 @@ def _build_child_view(source, child, target, request, source_fd):
                 != root_records["/".join(Path(child).parts[: index + 1])]
             ):
                 raise ValueError("approved child directory changed")
-        child_records = _records(original, child_scan.paths, child_fd)
+        child_records = _records(original, child_scan.paths, child_fd,
+                                 mount_id=request.get("source_mount_id") if request.get("preserve_content") else None)
         if plan_digest(child_records) != evidence["records_sha256"]:
             raise ValueError("approved child records changed before staging")
         if request.get("root_files_only"):
@@ -1040,7 +1114,8 @@ def _build_child_view(source, child, target, request, source_fd):
                 )
         else:
             _, modes = _copy_paths(
-                original, target, allowed, source_fd=child_fd, records=child_records
+                original, target, allowed, source_fd=child_fd, records=child_records,
+                mount_id=request.get("source_mount_id") if request.get("preserve_content") else None,
             )
     finally:
         os.close(child_fd)
@@ -1071,6 +1146,8 @@ def _build_parent_view(source, target, assignments, manifest, request, source_fd
         children = [row["path"] for row in assignments]
         with _catalog_admission(source_fd, children, request["source_mount_id"]):
             scan = _catalog_root_scan(policy, source_fd, children)
+    elif request.get("preserve_content"):
+        scan, _ = _preservation_scan(source, policy, assignments, request["child_evidence"])
     else:
         scan = _parent_scan(source, policy, request["child_evidence"])
     if (
@@ -1095,18 +1172,20 @@ def _build_parent_view(source, target, assignments, manifest, request, source_fd
         allowed.update(
             parent.as_posix() for parent in Path(path).parents if parent != Path(".")
         )
-    source_records = _records(source, scan.paths, source_fd)
+    source_records = _records(source, scan.paths, source_fd,
+                              mount_id=request.get("source_mount_id") if request.get("preserve_content") else None)
     if plan_digest(source_records) != request["source_records_sha256"]:
         raise ValueError("approved parent records changed before staging")
     original, modes = _copy_paths(
-        source, target, allowed, source_fd=source_fd, records=source_records
+        source, target, allowed, source_fd=source_fd, records=source_records,
+        mount_id=request.get("source_mount_id") if request.get("preserve_content") else None,
     )
     lines = [
         line
         for line in original.splitlines()
         if not line.strip().startswith("# josh-room capture-mode:")
     ]
-    lines.append("# josh-room capture-mode: source-only")
+    lines.append(f'# josh-room capture-mode: {request["capture_mode"]}')
     lines.extend(
         row["path"] + "/**"
         for row in assignments
@@ -1119,6 +1198,8 @@ def _build_parent_view(source, target, assignments, manifest, request, source_fd
         children = [row["path"] for row in assignments]
         with _catalog_admission(source_fd, children, request["source_mount_id"]):
             after = _catalog_root_scan(load_capture_policy(source), source_fd, children)
+    elif request.get("preserve_content"):
+        after, _ = _preservation_scan(source, load_capture_policy(source), assignments, request["child_evidence"])
     else:
         after = _parent_scan(source, load_capture_policy(source), request["child_evidence"])
     if (
@@ -1142,6 +1223,7 @@ def save_composition(
     *,
     root_files_only=False,
     parent_name=None,
+    preserve_content=False,
 ):
     if namespace != authority.namespace:
         raise ValueError("requested namespace differs from selected authority")
@@ -1154,6 +1236,8 @@ def save_composition(
     options = {"root_files_only": True} if root_files_only else {}
     if parent_name is not None:
         options["parent_name"] = parent_name
+    if preserve_content:
+        options["preserve_content"] = True
     preview = capture_plan(workspace, dimension, namespace, parent_room, assignments, **options)
     request = preview["request"]
     if approval != preview["approval_sha256"]:
@@ -1316,6 +1400,12 @@ def save_composition(
             if current != request["child_evidence"][slot["path"]]:
                 raise ValueError("child source changed before publication")
             envelope, etag = _commit(authority, envelope, etag, state)
+        if not operation["plan"]["children"] and operation["phase"] == "reserved":
+            candidate = state.to_dict()
+            candidate["operations"][namespace]["phase"] = "children-recorded"
+            candidate["revision"] += 1
+            state = CompositionSafetyState.from_dict(candidate)
+            envelope, etag = _commit(authority, envelope, etag, state)
         manifest = manifest_for(state, namespace, approved)
         parent = private / ("parent-view-" + uuid.uuid4().hex)
         _parent_view(workspace, parent, request["assignments"], manifest, request)
@@ -1450,7 +1540,7 @@ def _restore(
                     )
                 )
         scan = scan_workspace_for_status(stage)
-        if child_namespace:
+        if namespace or child_namespace:
             validate_child_git(stage.resolve(strict=True), scan.paths, metadata["capture_mode"])
             verify_staged_git(stage, scan.paths, metadata["capture_mode"], private)
         if (load_capture_policy(stage).capture_mode != metadata["capture_mode"]

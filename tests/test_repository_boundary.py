@@ -103,9 +103,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.editConnection",
         "joshRoom.disconnectStorage",
         "joshRoom.showLogs",
-        "joshRoom.openActivity",
-        "joshRoom.cancelActivity",
-        "joshRoom.retryActivity",
+        "joshRoom.showOperation",
         "joshRoom.clearLocalFallback",
         "joshRoom.editStorageSettings",
         "joshRoom.link",
@@ -153,7 +151,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert package["contributes"]["viewsContainers"]["activitybar"][0]["id"] == "josh-room"
     assert package["contributes"]["views"]["josh-room"][0]["id"] == "joshRoom.rooms"
     assert package["contributes"]["viewsWelcome"][0]["view"] == "joshRoom.rooms"
-    assert {view["id"] for view in package["contributes"]["views"]["josh-room"]} == {"joshRoom.rooms", "joshRoom.jatTools", "joshRoom.activity"}
+    assert {view["id"] for view in package["contributes"]["views"]["josh-room"]} == {"joshRoom.rooms", "joshRoom.jatTools"}
     assert "Pack Folder into JAT" in extension and "Restore Workspace" in extension and "Serve JAT…" in extension
     assert "joshRoom.jatInspect" in extension and "joshRoom.jatCopy" in extension
     jat_command_ids = {

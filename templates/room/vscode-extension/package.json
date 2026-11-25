@@ -21,7 +21,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:joshRoom.save",
-    "onCommand:joshRoom.openActivity",
+    "onCommand:joshRoom.showOperation",
     "onCommand:joshRoom.saveFolderAs",
     "onCommand:joshRoom.checkWorkspace",
     "onCommand:joshRoom.new",
@@ -279,18 +279,8 @@
         "icon": "$(cloud-download)"
       },
       {
-        "command": "joshRoom.openActivity",
-        "title": "Josh: Show Room Activity"
-      },
-      {
-        "command": "joshRoom.cancelActivity",
-        "title": "Cancel Operation",
-        "icon": "$(debug-stop)"
-      },
-      {
-        "command": "joshRoom.retryActivity",
-        "title": "Retry Operation",
-        "icon": "$(refresh)"
+        "command": "joshRoom.showOperation",
+        "title": "Josh: Show Room Operation"
       },
       {
         "command": "joshRoom.showLogs",
@@ -407,12 +397,6 @@
           "contextualTitle": "Josh Room"
         },
         {
-          "id": "joshRoom.activity",
-          "name": "Activity",
-          "contextualTitle": "Josh Room",
-          "visibility": "collapsed"
-        },
-        {
           "id": "joshRoom.jatTools",
           "name": "JAT Tools",
           "contextualTitle": "JAT Tools",
@@ -490,8 +474,6 @@
         }
       ],
       "commandPalette": [
-        { "command": "joshRoom.cancelActivity", "when": "false" },
-        { "command": "joshRoom.retryActivity", "when": "false" },
         {
           "command": "joshRoom.manageCatalogDeletion",
           "when": "false"
@@ -502,21 +484,6 @@
         }
       ],
       "view/item/context": [
-        {
-          "command": "joshRoom.cancelActivity",
-          "when": "view == joshRoom.activity && viewItem == activity-cancellable",
-          "group": "inline@1"
-        },
-        {
-          "command": "joshRoom.retryActivity",
-          "when": "view == joshRoom.activity && viewItem == activity-retry",
-          "group": "inline@1"
-        },
-        {
-          "command": "joshRoom.showLogs",
-          "when": "view == joshRoom.activity && viewItem =~ /^activity-(operation|cancellable|retry)$/",
-          "group": "activity@1"
-        },
         {
           "command": "joshRoom.refreshCatalogPins",
           "when": "view == joshRoom.rooms && viewItem == open-catalog-workspace",

@@ -39,7 +39,7 @@ def reserve(catalog, scope, operation_id, plan, *, previous=None):
         body = previous.to_dict()
         if body["scope"] != scope or body["dimension_catalog"] != catalog.body:
             raise ValueError("reservation authority or catalog changed")
-    if plan.get("plan_version") in (3, 4):
+    if plan.get("plan_version") in (3, 4, 5):
         version = max(plan["plan_version"], _CONTRACTS.index(body["contract"]) + 1)
         body["contract"] = _CONTRACTS[version - 1]
         body.setdefault("child_updates", {})
@@ -71,7 +71,7 @@ def manifest_for(state, operation_id, approved_plan_sha256):
     if len(operation["child_pins"]) != len(slots):
         raise ValueError("children are not all recorded")
     scope = body["scope"]
-    return validate_manifest({"format": "room-composition-v1", "children": [
+    return validate_manifest({"format": "room-composition-v1" if slots else "room-composition-v2", "children": [
         {"path": slot["path"], "provider": scope["provider"],
          "connection_id": scope["connection_id"], "dimension_id": scope["dimension_id"],
          "room_id": slot["room_id"], "snapshot_id": slot["logical_jat_id"],
@@ -112,7 +112,7 @@ def _record(body, operation, slot, descriptor, object_ref, signature, name, *, c
             prior = body['dimension_catalog']['projects'][slot['room_id']]['snapshots'][baseline]
             if value['workspace'].get('parent_snapshot_id') != prior['workspace_snapshot_id']:
                 raise ValueError('parent workspace lineage differs from reservation')
-        if (value.get("capture_mode") != "source-only"
+        if (value.get("capture_mode") != operation["plan"]["capture_mode"]
                 or value["capture_policy_sha256"] != operation["parent_policy_sha256"]
                 or any(value["components"].values())):
             raise ValueError("parent capture differs from preparation")

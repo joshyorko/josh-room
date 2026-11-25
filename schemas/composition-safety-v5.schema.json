@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/composition-safety-v5.schema.json",
+  "title": "Namespace capture that preserves the parent workspace and supports optional child Rooms",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "contract",
+    "scope",
+    "revision",
+    "dimension_catalog",
+    "operations",
+    "child_updates"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 4
+    },
+    "contract": {
+      "const": "composition-safety-v5"
+    },
+    "scope": {
+      "$ref": "composition-safety-v1.schema.json#/properties/scope"
+    },
+    "revision": {
+      "$ref": "composition-safety-v1.schema.json#/properties/revision"
+    },
+    "dimension_catalog": {
+      "$ref": "dimension-catalog-v3.schema.json"
+    },
+    "operations": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "propertyNames": {
+        "$ref": "composition-safety-v4.schema.json#/$defs/id"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/operation"
+      }
+    },
+    "child_updates": {
+      "$ref": "composition-safety-v4.schema.json#/properties/child_updates"
+    }
+  },
+  "$defs": {
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "plan_sha256",
+        "phase",
+        "child_pins",
+        "parent_pin",
+        "manifest_sha256",
+        "parent_policy_sha256"
+      ],
+      "properties": {
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "composition-safety-v4.schema.json#/$defs/operation/properties/plan"
+            },
+            {
+              "$ref": "#/$defs/initialPlan"
+            },
+            {
+              "$ref": "#/$defs/parentUpdate"
+            }
+          ]
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "phase": {
+          "$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/phase"
+        },
+        "child_pins": {
+          "$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/child_pins"
+        },
+        "parent_pin": {
+          "$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/parent_pin"
+        },
+        "manifest_sha256": {
+          "$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/manifest_sha256"
+        },
+        "parent_policy_sha256": {
+          "$ref": "composition-safety-v1.schema.json#/$defs/operation/properties/parent_policy_sha256"
+        }
+      }
+    },
+    "initialPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan_version",
+        "source_path_sha256",
+        "capture_policy_sha256",
+        "parent_room_id",
+        "parent_logical_jat_id",
+        "expected_parent_logical_jat_id",
+        "capture_mode",
+        "children"
+      ],
+      "properties": {
+        "plan_version": {
+          "const": 5
+        },
+        "source_path_sha256": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/digest"
+        },
+        "capture_policy_sha256": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/digest"
+        },
+        "parent_room_id": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/id"
+        },
+        "parent_logical_jat_id": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/id"
+        },
+        "expected_parent_logical_jat_id": {
+          "type": "null"
+        },
+        "capture_mode": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/mode"
+        },
+        "children": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "composition-safety-v4.schema.json#/$defs/slot"
+          }
+        }
+      }
+    },
+    "parentUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_path_sha256",
+        "capture_policy_sha256",
+        "parent_room_id",
+        "parent_logical_jat_id",
+        "expected_parent_logical_jat_id",
+        "capture_mode",
+        "children"
+      ],
+      "properties": {
+        "source_path_sha256": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/digest"
+        },
+        "capture_policy_sha256": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/digest"
+        },
+        "parent_room_id": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/id"
+        },
+        "parent_logical_jat_id": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/id"
+        },
+        "expected_parent_logical_jat_id": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/id"
+        },
+        "capture_mode": {
+          "$ref": "composition-safety-v4.schema.json#/$defs/mode"
+        },
+        "children": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "room_id",
+              "logical_jat_id"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "room_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                "not": {
+                  "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+                }
+              },
+              "logical_jat_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                "not": {
+                  "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

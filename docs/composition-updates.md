@@ -65,8 +65,9 @@ the parent. If the parent step fails, a child recovery point can already exist.
 
 The Rooms sidebar marks changes against each local Room's saved baseline,
 including terminal edits and changes found after reopening VS Code. Check
-**Activity** in the Josh Room sidebar for running operations, live steps,
-available cancellation, and recent results.
+the affected row in **Rooms** for live operation status. Click the Josh Room
+status item to view the current operation and available actions, such as
+cancelling, copying a recovery receipt, or opening the Output log.
 
 ## CLI
 

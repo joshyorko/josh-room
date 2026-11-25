@@ -54,6 +54,7 @@ from .composition_transaction import (
     prepare_parent,
     record_parent,
 )
+from .progress import report_progress
 from .room_store_operations import _validate_snapshot_entries, scan_workspace_for_status
 from .workspace_onboarding import _directory
 from .workspace_policy import load_capture_policy
@@ -512,7 +513,7 @@ def _parent_save_view(workspace, private, manifest, policy_sha256, root_files_on
     fd = _directory(workspace)
     try:
         policy = load_capture_policy(workspace, directory_fd=fd)
-        if policy.sha256 != policy_sha256 or policy.capture_mode != 'source-only' or any(
+        if policy.sha256 != policy_sha256 or any(
             not policy.is_excluded(row['path']) for row in manifest['children']
         ):
             raise ValueError('Catalog capture policy differs from the saved parent')
@@ -659,7 +660,7 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
         scan = scan_workspace_for_status(view)
         plan = {'source_path_sha256': plan_digest(request), 'capture_policy_sha256': scan.capture_policy_sha256,
                 'parent_room_id': room, 'parent_logical_jat_id': output, 'expected_parent_logical_jat_id': baseline,
-                'capture_mode': 'source-only', 'children': [{'path': row['path'], 'room_id': row['room_id'],
+                'capture_mode': previous.to_dict()['capture_mode'], 'children': [{'path': row['path'], 'room_id': row['room_id'],
                     'logical_jat_id': row['snapshot_id']} for row in manifest['children']]}
         if old and canonical(old['plan']) != canonical(plan):
             raise ValueError('reserved parent refresh pins differ')
@@ -766,11 +767,15 @@ def save_catalog_workspace(workspace, dimension, namespace, room, baseline, oper
                 'children_to_update': list(pins)}
     if approval != digest:
         raise ValueError('Catalog Save approval is stale')
-    for _, args, preview in reviews:
+    ordered = [(row, args, preview) for row, args, preview in reviews if row['path'] in pins]
+    for index, (_, args, preview) in enumerate(ordered):
+        report_progress('catalog-save', 'Saving child Room', current=index, total=len(ordered))
         if preview['changed']:
             saved = save_child(*args, *runtime, approval=preview['approval_sha256'])
             if not saved.get('ok') or not saved.get('marker_verified') or saved['snapshot_id'] != preview['snapshot_id']:
                 raise ValueError('one child recovery point requires reconciliation before publishing the Catalog')
+    if ordered:
+        report_progress('catalog-save', 'Saving Catalog parent', current=len(ordered), total=len(ordered))
     preview = refresh_parent(*parent_args, pins, *runtime, expected_content=content, **root_options)
     return refresh_parent(*parent_args, pins, *runtime, approval=preview['approval_sha256'],
                           expected_content=content, **root_options)
