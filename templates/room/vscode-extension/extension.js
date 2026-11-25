@@ -1026,6 +1026,7 @@ function shellQuote(value) {
 }
 
 function sanitizeControllerArgv(argv) {
+  if (argv[0] === "status" && argv.includes("--workspace")) return ["status", "[local workspace redacted]"];
   if (argv[0] === "recovery" && argv[1] === "observe") return ["recovery", "observe", "[selected file redacted]"];
   if (argv[0] === "composition") return ["composition", "plan", "[local selection redacted]"];
   if (argv[0] === "agents" && argv[1] === "inventory") return ["agents", "inventory", "[local workspace redacted]"];
@@ -1747,6 +1748,7 @@ function handleCapturePolicyChange(root) {
 }
 
 async function markWorkspaceChange(uri) {
+  queueWorkspaceDiskCheck();
   if (markCatalogChildChange(uri)) return;
   let root;
   try {
@@ -2571,6 +2573,64 @@ function openWorkspaceBinding() {
 let currentWorkspaceKind;
 let workspaceActionsRoot;
 const changedCatalogChildren = new Set();
+let workspaceDiskCheckTimer;
+let workspaceDiskCheckRunning = false;
+let workspaceDiskCheckPending = false;
+
+function queueWorkspaceDiskCheck() {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (folder?.uri.scheme !== "file" || !openWorkspaceBinding().marker) return;
+  clearTimeout(workspaceDiskCheckTimer);
+  workspaceDiskCheckTimer = setTimeout(() => void checkWorkspaceDisk(), 800);
+  workspaceDiskCheckTimer.unref?.();
+}
+
+async function checkWorkspaceDisk() {
+  if (workspaceDiskCheckRunning) {
+    workspaceDiskCheckPending = true;
+    return;
+  }
+  const { kind, root, marker } = openWorkspaceBinding();
+  if (!marker) return;
+  workspaceDiskCheckRunning = true;
+  const dirtyGeneration = workspaceEventGeneration;
+  try {
+    const result = await runJoshRoom(["status", "--workspace", root,
+      ...(kind === "catalog" ? ["--catalog-children"] : [])], root);
+    const binding = openWorkspaceBinding();
+    if (binding.root !== root || binding.marker?.snapshot_id !== marker.snapshot_id || !result.path_matches
+        || result.dimension_id !== marker.dimension_id || result.project_id !== marker.project_id
+        || result.snapshot_id !== marker.snapshot_id) return;
+    if (kind === "catalog" && Array.isArray(result.catalog_children)
+        && dirtyGeneration === workspaceEventGeneration) {
+      const local = localCatalogChildren(root);
+      changedCatalogChildren.clear();
+      for (const reported of result.catalog_children) {
+        if (reported.state === "changed" && local.some(row => row.path === reported.path
+            && row.room_id === reported.room_id && row.snapshot_id === reported.snapshot_id)) {
+          changedCatalogChildren.add(catalogChildChangeKey(marker, reported));
+        }
+      }
+      for (const document of vscode.workspace.textDocuments || []) {
+        if (document.isDirty) markCatalogChildChange(document.uri);
+      }
+    }
+    if (result.state === "changed" || result.state === "clean") {
+      if (result.state === "changed" || dirtyGeneration === workspaceEventGeneration) {
+        setRoomState(result.state === "changed" || dirtyBuffers.size ? "dirty" : "clean", { bindingTrusted: true });
+      }
+    }
+    roomsProvider?.emitter.fire(undefined);
+  } catch (error) {
+    outputChannel?.debug?.(`Local Room status unavailable: ${sanitizeControllerText(error.message)}`);
+  } finally {
+    workspaceDiskCheckRunning = false;
+    if (workspaceDiskCheckPending) {
+      workspaceDiskCheckPending = false;
+      queueWorkspaceDiskCheck();
+    }
+  }
+}
 
 function catalogChildChangeKey(marker, row) {
   return JSON.stringify([marker.composition_namespace, row.room_id, row.snapshot_id]);
@@ -2610,6 +2670,10 @@ function refreshWorkspaceActions() {
       workspaceCapturePolicy = root ? loadCapturePolicy(root) : undefined;
     } catch {
       workspaceCapturePolicy = undefined;
+    }
+    if (root && extensionContext && vscode.workspace.workspaceFolders?.[0]?.uri.scheme === "file") {
+      ensureWorkspaceWatched(extensionContext, root);
+      queueWorkspaceDiskCheck();
     }
   }
   if (currentWorkspaceKind === kind) return;
@@ -6701,6 +6765,12 @@ function activateNative(context) {
   statusItem.show();
   roomsProvider = new HierarchyRoomsProvider();
   refreshWorkspaceActions();
+  context.subscriptions.push({ dispose: () => clearTimeout(workspaceDiskCheckTimer) });
+  if (vscode.window.onDidChangeWindowState) {
+    context.subscriptions.push(vscode.window.onDidChangeWindowState(({ focused }) => {
+      if (focused) queueWorkspaceDiskCheck();
+    }));
+  }
   for (const document of vscode.workspace.textDocuments || []) markCatalogChildChange(document.uri, true);
   if (vscode.workspace.onDidOpenTextDocument) {
     context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => markCatalogChildChange(document.uri, true)));
@@ -6820,7 +6890,10 @@ function activateNative(context) {
   register(context, "joshRoom.verifyRoomStore", verifyRoomStore);
   register(context, "joshRoom.optimizeRoomStore", optimizeRoomStore);
   register(context, "joshRoom.reconcileRoomStore", reconcileRoomStore);
-  register(context, "joshRoom.refresh", () => roomsProvider.reload());
+  register(context, "joshRoom.refresh", () => {
+    queueWorkspaceDiskCheck();
+    return roomsProvider.reload();
+  });
   register(context, "joshRoom.prepare", () => roomsProvider.reload());
   register(context, "joshRoom.showLogs", () => outputChannel.show(true));
   register(context, "joshRoom.clearLocalFallback", clearLocalFallback);

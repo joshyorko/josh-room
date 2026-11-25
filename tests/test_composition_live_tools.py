@@ -538,16 +538,25 @@ def test_restore_after_parent_edit_keeps_edits_and_checks_manifest(runtime, monk
     monkeypatch.setattr(lifecycle, "scan_workspace_for_status", scan_after_editor_write)
     args = (r.dimension, NAMESPACE, "parent", result["parent_snapshot_id"],
             target, r.authority, r.factory, r.private)
-    receipt = hydrate_composition(*args, child_paths=["a"])
+    receipt = hydrate_composition(*args, child_paths=["a", "b"])
     assert receipt["status"] == "hydrated"
+    assert len(receipt["restored"]) == 2
     assert receipt["restored"][0]["local_changes"]
     assert receipt["restored"][0]["marker_verified"]
     assert (target / "notes.txt").read_text() == "unsaved changes"
     assert (target / "a/editor.txt").read_text() == "edit after promotion"
-    (target / ".josh-room-composition.json").write_text("{}")
+    from josh_room.composition_updates import catalog_workspace_status
+
+    status = catalog_workspace_status(target)
+    assert status["state"] == "changed"
+    assert [(row["path"], row["state"]) for row in status["catalog_children"]] == [("a", "changed"), ("b", "clean")]
+    assert (target / "b/.josh-room.json").is_file()
+    broken = r.tmp / "edited-manifest"
+    hydrate_composition(*args[:4], broken, *args[5:])
+    (broken / ".josh-room-composition.json").write_text("{}")
     with pytest.raises(ValueError, match="manifest, or capture policy changed"):
-        hydrate_composition(*args, child_path="b")
-    assert not (target / "b").exists()
+        hydrate_composition(*args[:4], broken, *args[5:], child_path="b")
+    assert not (broken / "b").exists()
     other = CompositionAuthority(
         SimpleNamespace(client=r.transport),
         r.dimension,

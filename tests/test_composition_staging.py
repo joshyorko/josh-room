@@ -359,7 +359,7 @@ def test_initial_component_approval_keeps_local_options_out_of_request(tmp_path,
         capture_plan(source, dimension, "1" * 32, "parent", assignments)
 
 
-@pytest.mark.parametrize("kind", ["tracked-policy", "deleted-working-copy", "gitlink-without-gitmodules"])
+@pytest.mark.parametrize("kind", ["tracked-policy", "deleted-working-copy", "configured-submodule"])
 def test_child_index_conflicts_are_refused_before_approval(tmp_path, kind):
     import subprocess
 
@@ -368,10 +368,11 @@ def test_child_index_conflicts_are_refused_before_approval(tmp_path, kind):
     subprocess.run(["git", "init", "-q", "--template=", child], check=True)
     policy = child / ".josh-roomignore"
     policy.write_text("# tracked child policy\n")
-    if kind == "gitlink-without-gitmodules":
+    if kind == "configured-submodule":
         subprocess.run(["git", "-C", child, "update-index", "--add", "--cacheinfo",
                         "160000," + "a" * 40 + ",dependency"], check=True)
-        expected = "gitlinks"
+        (child / ".gitmodules").write_text('[submodule "dependency"]\n path = dependency\n')
+        expected = "submodules"
     else:
         subprocess.run(["git", "-C", child, "add", ".josh-roomignore"], check=True)
         if kind == "deleted-working-copy":

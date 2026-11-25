@@ -108,6 +108,44 @@ def open_catalog_snapshot(dimension, namespace, room, snapshot, authority, store
             repository_info=repository, selected_record=record, selected_descriptor=descriptor)
 
 
+def catalog_workspace_status(workspace):
+    """Compare the current local parent and its bound children without contacting storage."""
+    from .workspace_state import local_status
+
+    parent = context_status(workspace)
+    if not parent.get('composition_namespace'):
+        return local_status(workspace)
+    result = local_status(workspace)
+    if not parent.get('path_matches'):
+        return result
+    fd = _directory(workspace)
+    try:
+        try:
+            manifest = parse_manifest(_read_regular(fd, MANIFEST, MAX_BYTES))
+        except (OSError, ValueError):
+            return result
+    finally:
+        os.close(fd)
+    children = []
+    for row in manifest['children']:
+        child = workspace / row['path']
+        try:
+            fd = _directory(child)
+        except (OSError, ValueError):
+            continue
+        os.close(fd)
+        current = context_status(child)
+        if (current.get('path_matches')
+                and current.get('composition_namespace') == parent['composition_namespace']
+                and current.get('dimension_id') == parent.get('dimension_id')
+                and current.get('encryption_domain_id') == parent.get('encryption_domain_id')
+                and current.get('project_id') == row['room_id']
+                and current.get('snapshot_id') == row['snapshot_id']):
+            children.append({'path': row['path'], 'room_id': row['room_id'],
+                             'snapshot_id': row['snapshot_id'], 'state': local_status(child)['state']})
+    return {**result, 'catalog_children': children}
+
+
 def _proof(store, descriptor, private):
     value = descriptor.to_dict()['workspace']
     if store.snapshot(value['snapshot_id']).tree_id != value['tree_id']:

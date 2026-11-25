@@ -472,6 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     status.add_argument("--include-context", action="store_true")
+    status.add_argument("--catalog-children", action="store_true", help="include local status for bound Catalog child Rooms")
     _json_option(status)
     check = commands.add_parser("workspace-check", help="validate workspace metadata without changing it")
     check.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -2501,7 +2502,12 @@ def dispatch(args, instance: Path) -> dict:
         save_private_config(config)
         return {"ok": True, "dimension": args.dimension, "updated": True}
     if args.command == "status":
-        result = {"ok": True, **local_status(args.workspace)}
+        if getattr(args, "catalog_children", False):
+            from .composition_updates import catalog_workspace_status
+
+            result = catalog_workspace_status(args.workspace)
+        else:
+            result = {"ok": True, **local_status(args.workspace)}
         if getattr(args, "include_context", False):
             return {"format_version": 1, **result, "context": context_status(args.workspace)}
         return result
