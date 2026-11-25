@@ -55,6 +55,39 @@ def entered(r):
     return result['parent_snapshot_id'], target, child
 
 
+def test_whole_catalog_save_publishes_root_and_edited_child_together(runtime):
+    from josh_room.composition_updates import save_catalog_workspace
+
+    r = runtime
+    baseline, root, child = entered(r)
+    (root / 'new-root.txt').write_text('new root payload')
+    (root / 'a/new-child.txt').write_text('new child payload')
+    args = (root, r.dimension, NAMESPACE, 'parent', baseline, 'full-save', r.authority, r.factory, r.private)
+    review = save_catalog_workspace(*args)
+    assert review['children_to_update'] == ['a']
+    prior_writes = r.transport.writes
+    (root / 'a/new-child.txt').write_text('changed after review')
+    with pytest.raises(ValueError, match='approval is stale'):
+        save_catalog_workspace(*args, approval=review['approval_sha256'])
+    assert r.transport.writes == prior_writes
+    (root / 'a/new-child.txt').write_text('new child payload')
+    review = save_catalog_workspace(*args)
+    updated = save_catalog_workspace(*args, approval=review['approval_sha256'])
+    assert updated['marker_verified']
+    assert context_status(root)['snapshot_id'] == updated['snapshot_id']
+    changed = context_status(root / 'a')
+    assert changed['snapshot_id'] != child['snapshot_id']
+    cold = r.tmp / 'whole-restored'
+    hydrate_composition(r.dimension, NAMESPACE, 'parent', updated['snapshot_id'], cold,
+                        r.authority, r.factory, r.private)
+    entered_child = hydrate_composition(r.dimension, NAMESPACE, 'parent', updated['snapshot_id'], cold,
+                                        r.authority, r.factory, r.private, child_path='a')
+    assert entered_child['snapshot_id'] == changed['snapshot_id']
+    assert (cold / 'new-root.txt').read_text() == 'new root payload'
+    assert (cold / 'a/new-child.txt').read_text() == 'new child payload'
+    assert not (cold / 'b').exists()
+
+
 def update(r, target, child, operation='update', approval=None):
     return save_child(target / 'a', r.dimension, NAMESPACE, child['room_id'], child['snapshot_id'], operation,
                       r.authority, r.factory, r.private, approval=approval)

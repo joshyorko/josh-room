@@ -535,7 +535,7 @@ def build_parser() -> argparse.ArgumentParser:
             operation.add_argument('--revision', type=int, help='namespace revision from the child list')
         _json_option(operation)
     for action in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins',
-                   'plan-catalog-save', 'save-catalog-root'):
+                   'plan-catalog-save', 'save-catalog-root', 'plan-whole-catalog-save', 'save-whole-catalog'):
         operation = composition_commands.add_parser(action)
         operation.add_argument('--dimension', required=True)
         operation.add_argument('--namespace', required=True)
@@ -548,11 +548,12 @@ def build_parser() -> argparse.ArgumentParser:
         else:
             operation.add_argument('--parent-room', required=True)
             operation.add_argument('--parent-snapshot', required=True)
-            operation.add_argument('--workspace', type=Path, required=action in ('plan-catalog-save', 'save-catalog-root'),
+            operation.add_argument('--workspace', type=Path, required=action in (
+                'plan-catalog-save', 'save-catalog-root', 'plan-whole-catalog-save', 'save-whole-catalog'),
                                    help='verify the entered parent marker and manifest')
             if action in ('plan-parent-refresh', 'refresh-parent-pins'):
                 operation.add_argument('--set-child', action='append', required=True, help='relative-path=exact-logical-snapshot')
-        if action in ('save-child', 'refresh-parent-pins', 'save-catalog-root'):
+        if action in ('save-child', 'refresh-parent-pins', 'save-catalog-root', 'save-whole-catalog'):
             operation.add_argument('--approve', required=True)
         _json_option(operation)
     context = commands.add_parser("context", help="read offline workspace linkage context")
@@ -1895,9 +1896,13 @@ def dispatch(args, instance: Path) -> dict:
                     return preview_retirement(*arguments)
                 return retire(*arguments, approved_plan_sha256=args.approve)
         if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins',
-                                        'plan-catalog-save', 'save-catalog-root'):
+                                        'plan-catalog-save', 'save-catalog-root', 'plan-whole-catalog-save', 'save-whole-catalog'):
             from .composition_lifecycle import provider_runtime
-            from .composition_updates import refresh_parent, save_child
+            from .composition_updates import (
+                refresh_parent,
+                save_catalog_workspace,
+                save_child,
+            )
             dimension = _effective_dimension(args)
             if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
                 raise ValueError('composition requires an explicit provider Dimension')
@@ -1905,6 +1910,10 @@ def dispatch(args, instance: Path) -> dict:
             options = _composition_component_options(encoded) if encoded is not None else None
             try:
                 with provider_runtime(instance, dimension, getattr(args, '_selected_encryption_material', None), args.namespace) as (authority, factory, private):
+                    if args.composition_command in ('plan-whole-catalog-save', 'save-whole-catalog'):
+                        return save_catalog_workspace(args.workspace, dimension, args.namespace, args.parent_room,
+                            args.parent_snapshot, args.operation_id, authority, factory, private,
+                            approval=getattr(args, 'approve', None))
                     if args.composition_command in ('plan-child-save', 'save-child'):
                         return save_child(args.workspace, dimension, args.namespace, args.room, args.child_snapshot,
                             args.operation_id, authority, factory, private, approval=getattr(args, 'approve', None),

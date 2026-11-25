@@ -146,8 +146,10 @@ the top of **Rooms** shows the current Catalog and its restored child count.
 Use **Restore missing children…** or expand **Child Rooms** for individual
 folder status. **Refresh Catalog Child Pins** is in the workspace row menu.
 **Save Catalog** in the open workspace creates a recovery point in the same
-Catalog for changes to its files. It keeps the child pins. Save each child
-from its own workspace to capture changes inside that child.
+Catalog. The review lists the restored child Rooms whose recovery points
+will change. The new Catalog point includes its root files and the updated
+child pins. Missing child Rooms keep their saved pins. **Save Child Room**
+still saves a child independently.
 The open workspace shows the Save action for its type. Use **New Room** in
 the Rooms toolbar when opening an unbound folder, or in the toolbar's menu
 when a Room or Catalog is open.

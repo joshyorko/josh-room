@@ -397,7 +397,8 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
     return { ok: true, status: "unchanged" };
   }
   const approved = await vscode.window.showWarningMessage(`${action}?`, { modal: true,
-    detail: kind === "catalog" ? "Save the Catalog’s files as a new recovery point. It will keep the current child Room pins."
+    detail: kind === "catalog" ? `Save the Catalog files as a new recovery point.${
+      preview.children_to_update?.length ? ` Update child Rooms: ${preview.children_to_update.join(", ")}.` : " Child recovery points stay as they are."}`
       : `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. ${describeComponents(preview.request?.plan, ticket.component_options)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
   if (approved !== action) return "cancelled";
   ticket = { ...ticket, approval: preview.approval_sha256, output: preview.snapshot_id };

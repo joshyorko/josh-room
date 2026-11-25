@@ -2755,7 +2755,7 @@ async function updateCompositionRoom(kind) {
   if (!dimension) throw new Error("The namespace Dimension is not configured.");
   const invoke = (ticket, apply) => {
     const command = kind === "child" ? (apply ? "save-child" : "plan-child-save")
-      : kind === "catalog" ? (apply ? "save-catalog-root" : "plan-catalog-save")
+      : kind === "catalog" ? (apply ? "save-whole-catalog" : "plan-whole-catalog-save")
       : (apply ? "refresh-parent-pins" : "plan-parent-refresh");
     const args = ["composition", command, "--dimension", marker.dimension_id, "--namespace", ticket.namespace, "--operation-id", ticket.operationId,
       ...(kind === "child" ? ["--room", ticket.room, "--child-snapshot", ticket.baseline, "--workspace", root]
