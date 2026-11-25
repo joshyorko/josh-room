@@ -355,7 +355,13 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     backend = SimpleNamespace(client=r.transport)
     catalog = discovery["catalogs"][0]
     assert [room["path"] for room in catalog["child_rooms"]] == ["a", "b"]
-    assert all(room["recovery_points"][0]["pinned"] for room in catalog["child_rooms"])
+    from josh_room.cli import _bounded_json_result
+
+    wire = _bounded_json_result({"ok": True, "dimensions": [discovery]})
+    wire_catalog = wire["dimensions"][0]["catalogs"][0]
+    assert wire_catalog["child_recovery_points"] == catalog["child_recovery_points"]
+    assert len(wire_catalog["child_recovery_points"]) == 2
+    assert all(point["pinned"] and point["created_at"] for point in wire_catalog["child_recovery_points"])
 
     def remove(kind, room=None, snapshot=None):
         args = r.authority, NAMESPACE, kind, room, snapshot
@@ -370,10 +376,10 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     with pytest.raises(ValueError, match="retired"):
         hydrate_composition(r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
                             r.tmp / "retired-parent", r.authority, r.factory, r.private)
+    for point in catalog["child_recovery_points"]:
+        assert not point["pinned"]
+        remove("recovery-point", point["room_id"], point["snapshot_id"])
     for room in catalog["child_rooms"]:
-        for point in room["recovery_points"]:
-            assert not point["pinned"]
-            remove("recovery-point", room["room_id"], point["snapshot_id"])
         remove("room", room["room_id"])
     remove("catalog")
     assert discover_catalogs(backend, r.dimension, r.authority.material)["catalogs"] == []

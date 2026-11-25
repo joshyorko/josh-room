@@ -2317,8 +2317,13 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
     if (scope === undefined) return "cancelled";
     selectedChildren = scope.map(row => row.label);
   }
-  const destination = await vscode.window.showSaveDialog({ title: "Restore Catalog Room to a new folder",
-    saveLabel: "Restore Catalog", defaultUri: vscode.Uri.file(path.join(root, "Restored Catalog")) });
+  const childName = child?.split("/").at(-1);
+  const destination = await vscode.window.showSaveDialog({
+    title: childName ? `Choose a restore folder for ${childName}` : "Restore Catalog Room to a new folder",
+    saveLabel: childName ? "Enter Child Room" : "Restore Catalog",
+    defaultUri: vscode.Uri.file(path.join(root, childName && !/[\\/:\x00-\x1f]/.test(childName)
+      && ![".", ".."].includes(childName) ? childName : "Restored Catalog")),
+  });
   if (!destination) return "cancelled";
   if (destination.scheme !== "file" || fs.lstatSync(destination.fsPath, { throwIfNoEntry: false })) {
     throw new Error("Choose a new, absent folder for Catalog restore.");

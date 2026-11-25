@@ -8393,7 +8393,11 @@ test("registered Catalog restore submits the selected exact pin and only opens a
   const item = provider.getTreeItem(childRow);
   assert.equal(item.command.title, "Enter Child Room");
   vscode.window.showQuickPick = async () => assert.fail("direct child entry skips the scope picker");
-  vscode.window.showSaveDialog = async () => undefined;
+  vscode.window.showSaveDialog = async (options) => {
+    assert.equal(options.title, "Choose a restore folder for a");
+    assert.equal(options.defaultUri.fsPath, path.join(root, "a"));
+    return undefined;
+  };
   assert.equal(await restore(...item.command.arguments), "cancelled");
 });
 

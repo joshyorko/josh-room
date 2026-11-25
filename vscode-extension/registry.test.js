@@ -466,9 +466,8 @@ test("Catalog child history and direct entry share one folder row across parent 
         { snapshot_id: "jat-old", created_at: "2026-01-01T00:00:00Z", child_count: 1, children: ["one"] },
         { snapshot_id: "jat-current", created_at: "2026-01-02T00:00:00Z", child_count: 1, children: ["one"] },
       ],
-      child_rooms: [{ room_id: "child", path: "one", recovery_points: [
-        { snapshot_id: "jat-child", created_at: "2026-01-01T00:00:00Z", pinned: true },
-      ] }] }],
+      child_rooms: [{ room_id: "child", path: "one" }],
+      child_recovery_points: [{ room_id: "child", snapshot_id: "jat-child", created_at: "2026-01-01T00:00:00Z", pinned: true }] }],
   }] });
   const parent = rows[0].children[0].children[0].children[0];
   const [newest, older, group] = parent.children;
@@ -480,6 +479,8 @@ test("Catalog child history and direct entry share one folder row across parent 
   assert.equal(room.description, "1 recovery point");
   assert.equal(room.point.snapshot_id, "jat-current");
   assert.equal(room.children[0].point.snapshot_id, "jat-child");
+  assert.equal(room.children[0].label, new Date("2026-01-01T00:00:00Z").toLocaleString());
+  assert.equal(room.children[0].description, "Pinned");
 });
 
 test("a Catalog with no parent points keeps its child Rooms visible for deletion", () => {

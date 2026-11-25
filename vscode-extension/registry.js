@@ -311,17 +311,26 @@ function catalogNodes(dimension) {
         if (typeof child === "string" && !pinnedByPath.has(child)) pinnedByPath.set(child, point);
       }
     }
+    const pointsByRoom = new Map();
+    for (const point of records(catalog.child_recovery_points, "snapshot_id")) {
+      const history = pointsByRoom.get(point.room_id) || [];
+      history.push(point);
+      pointsByRoom.set(point.room_id, history);
+    }
     const childRows = records(catalog.child_rooms, "room_id").map(room => {
       const point = pinnedByPath.get(room.path);
       pinnedByPath.delete(room.path);
-      const count = room.recovery_points.length;
+      const history = (pointsByRoom.get(room.room_id) || records(room.recovery_points, "snapshot_id"))
+        .filter(point => /^jat-[a-z0-9-]+$/.test(point.snapshot_id));
+      const count = history.length;
       return {
         kind: "catalog-child-room", id: `${parent.id}:room:${room.room_id}`, label: room.path,
         description: `${count} recovery ${count === 1 ? "point" : "points"}`,
         catalog, dimension, room, point, child: room.path,
-        children: room.recovery_points.map(point => ({
+        children: history.map(point => ({
           kind: "catalog-child-point", id: `${parent.id}:${room.room_id}:${point.snapshot_id}`,
-          label: new Date(point.created_at).toLocaleString(), description: point.pinned ? "Pinned" : "",
+          label: Number.isFinite(Date.parse(point.created_at)) ? new Date(point.created_at).toLocaleString() : "Date unavailable",
+          description: point.pinned === true ? "Pinned" : "",
           catalog, dimension, room, point,
         })),
       };

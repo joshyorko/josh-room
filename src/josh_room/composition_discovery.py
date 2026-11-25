@@ -35,13 +35,14 @@ def _child_history(parent, operations, active_rooms, projects):
             paths[room] = path
             if operation["parent_pin"]["logical_jat_id"] in active_points:
                 pinned.add((room, pin["logical_jat_id"]))
-    return [{
-        "room_id": room, "path": path, "recovery_points": [{
+    rooms = [{"room_id": room, "path": path} for room, path in sorted(paths.items(), key=lambda item: item[1])]
+    points = [{
+            "room_id": room,
             "snapshot_id": snapshot,
             "created_at": projects[room]["snapshots"][snapshot]["created_at"],
             "pinned": (room, snapshot) in pinned,
-        } for snapshot in active_rooms[room]["recovery_points"]],
-    } for room, path in sorted(paths.items(), key=lambda item: item[1])]
+    } for room in paths for snapshot in active_rooms[room]["recovery_points"]]
+    return rooms, points
 
 
 def discover_catalogs(backend, dimension, material):
@@ -120,10 +121,10 @@ def discover_catalogs(backend, dimension, material):
                         projects = catalog.body["projects"]
                         entry = {"namespace": namespace, "parent_room_id": parent,
                                  "display_name": projects[parent]["display_name"], "recovery_points": newest[:available]}
-                        history = _child_history(parent, operations, active_rooms, projects)
-                        history_size = len(json.dumps(history))
-                        if child_history_bytes + history_size <= _CHILD_HISTORY_BUDGET:
-                            entry["child_rooms"] = history
+                        rooms, history = _child_history(parent, operations, active_rooms, projects)
+                        history_size = len(json.dumps(rooms)) + len(json.dumps(history))
+                        if len(history) <= 128 and child_history_bytes + history_size <= _CHILD_HISTORY_BUDGET:
+                            entry.update(child_rooms=rooms, child_recovery_points=history)
                             child_history_bytes += history_size
                         else:
                             result["catalog_discovery_partial"] = True
