@@ -701,6 +701,8 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
                     for path, row in rows.items()}, 'parent_pin': None, 'manifest_sha256': None, 'parent_policy_sha256': None}
             candidate['revision'] += 1
             state = state.replace(candidate)
+            if before_publish is not None:
+                before_publish()
             envelope, etag = _commit(authority, envelope, etag, state)
         op = state.to_dict()['operations'][operation_id]
         if op['phase'] == 'reserved':
@@ -824,13 +826,22 @@ def _start_save(authority, envelope, etag, intent, child_plans, parent_plan):
     return IntentWriter(authority, intent["operation_id"])
 
 
-def _finish_saved_intent(authority, envelope, etag):
-    intent = envelope["save_intent"]
-    operation_id = intent["operation_id"]
+def _finish_saved_intent(authority, envelope, etag, operation_id, approval):
+    if envelope.get("completed_saves", {}).get(operation_id) == approval:
+        return envelope
+    intent = envelope.get("save_intent")
+    if not intent or (intent["operation_id"], intent["approval_sha256"]) != (operation_id, approval):
+        raise ValueError("terminal Catalog Save intent differs from its approved operation")
     writer = IntentWriter(authority, operation_id)
-    receipts = {**envelope["completed_saves"], operation_id: intent["approval_sha256"]}
+    receipts = {**envelope["completed_saves"], operation_id: approval}
     completed = {**envelope, "save_intent": None, "completed_saves": receipts}
-    writer.put(completed, etag)
+    try:
+        writer.put(completed, etag)
+    except ValueError:
+        observed, _ = authority.read()
+        if observed is None or observed.get("completed_saves", {}).get(operation_id) != approval:
+            raise
+        return observed
     return completed
 
 
@@ -854,7 +865,7 @@ def _repair_completed_save(authority, envelope, etag, operation, approval, paren
         raise ValueError("Catalog Save approval differs from the committed intent")
     if intent is not None:
         # Release the completed publication before inspecting edited local files.
-        _finish_saved_intent(authority, envelope, etag)
+        _finish_saved_intent(authority, envelope, etag, operation_id, approval)
     prior = {row["path"]: row["snapshot_id"] for row in original["children"]}
     pins = {path: pin["logical_jat_id"] for path, pin in operation["child_pins"].items()
             if pin["logical_jat_id"] != prior[path]}
@@ -975,7 +986,7 @@ def save_catalog_workspace(workspace, dimension, namespace, room, baseline, oper
                                 expected_content=content, before_publish=lambda: check_occupancy(terminal=True), **root_options)
         if writer is not None and result.get("ok") and result.get("marker_verified"):
             terminal, terminal_etag = authority.read()
-            _finish_saved_intent(authority, terminal, terminal_etag)
+            _finish_saved_intent(authority, terminal, terminal_etag, operation_id, approval)
         return {**result, "retained_missing_children": missing}
     except (ValueError, OSError, RuntimeError) as error:
         if not changed:
@@ -985,7 +996,7 @@ def save_catalog_workspace(workspace, dimension, namespace, room, baseline, oper
         if pending.get("parent_committed") and writer is not None and latest["save_intent"]["operation_id"] == operation_id:
             terminal, terminal_etag = authority.read()
             if terminal.get("save_intent") == pending["intent"]:
-                _finish_saved_intent(authority, terminal, terminal_etag)
+                _finish_saved_intent(authority, terminal, terminal_etag, operation_id, approval)
             pending["status"] = "saved-local-binding-unverified"
         reported = CompositionAdmissionError("composition-save-pending",
             "Catalog Save stopped. Inspect the operation and resume the same operation ID.")

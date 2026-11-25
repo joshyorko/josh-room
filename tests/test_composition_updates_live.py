@@ -780,3 +780,52 @@ def test_occupied_sibling_after_intent_admission_stops_before_first_child_reserv
     envelope, _ = r.authority.read()
     assert not envelope["state"].get("child_updates")
     assert (root / "b/local.txt").read_text() == "new occupied path"
+
+
+def test_root_only_save_checks_missing_child_before_reserving_parent(runtime, monkeypatch):
+    from josh_room import composition_updates as updates
+
+    r = runtime
+    baseline, root, _ = entered(r)
+    (root / "notes.txt").write_text("reviewed root bytes")
+    args = (root, r.dimension, NAMESPACE, "parent", baseline, "root-occupancy", r.authority, r.factory, r.private)
+    approval = updates.save_catalog_workspace(*args)["approval_sha256"]
+    refresh = updates.refresh_parent
+
+    def occupy(*args, **kwargs):
+        if kwargs.get("approval") is not None:
+            (root / "b").mkdir()
+        return refresh(*args, **kwargs)
+
+    before, _ = r.authority.read()
+    monkeypatch.setattr(updates, "refresh_parent", occupy)
+    with pytest.raises(ValueError, match="Catalog Save stopped"):
+        updates.save_catalog_workspace(*args, approval=approval)
+    after, _ = r.authority.read()
+    assert after["state"] == before["state"]
+    assert after["capture_claims"] == before["capture_claims"]
+
+
+def test_two_callers_with_same_ticket_can_finalize_one_parent(runtime, monkeypatch):
+    from josh_room import composition_updates as updates
+
+    r = runtime
+    baseline, root, _ = entered(r)
+    (root / "notes.txt").write_text("reviewed root bytes")
+    args = (root, r.dimension, NAMESPACE, "parent", baseline, "terminal-race", r.authority, r.factory, r.private)
+    plan = updates.save_catalog_workspace(*args)
+    approval = plan["approval_sha256"]
+    bind = updates._bind_parent_save
+
+    def finish_second(*args_to_bind, **kwargs):
+        bind(*args_to_bind, **kwargs)
+        monkeypatch.setattr(updates, "_bind_parent_save", bind)
+        retry = updates.save_catalog_workspace(*args, approval=approval)
+        assert retry["marker_verified"] and retry["snapshot_id"] == plan["snapshot_id"]
+
+    monkeypatch.setattr(updates, "_bind_parent_save", finish_second)
+    result = updates.save_catalog_workspace(*args, approval=approval)
+    assert result["marker_verified"]
+    authority, _ = r.authority.read()
+    assert authority["save_intent"] is None
+    assert authority["completed_saves"]["terminal-race"] == approval
