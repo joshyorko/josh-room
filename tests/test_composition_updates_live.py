@@ -595,6 +595,10 @@ def test_preservation_catalog_keeps_nested_repository_and_optional_child(runtime
     assert (root / 'b/file.txt').is_file() is not split
     assert not (root / 'local').exists()
     (root / 'a/new.txt').write_text('retained nested edit')
+    if split:
+        hydrate_composition(r.dimension, NAMESPACE, 'parent', parent, root,
+                            r.authority, r.factory, r.private, child_path='b')
+        (root / 'b/new.txt').write_text('retained child edit')
     operation = (root, r.dimension, NAMESPACE, 'parent', parent, 'preserved-save',
                  r.authority, r.factory, r.private)
     approval = save_catalog_workspace(*operation)
@@ -604,3 +608,8 @@ def test_preservation_catalog_keeps_nested_repository_and_optional_child(runtime
                         r.authority, r.factory, r.private)
     assert git(restored / 'a', 'rev-parse', 'HEAD').strip() == git_head
     assert (restored / 'a/new.txt').read_text() == 'retained nested edit'
+    if split:
+        hydrate_composition(r.dimension, NAMESPACE, 'parent', saved['snapshot_id'], restored,
+                            r.authority, r.factory, r.private, child_path='b')
+        assert (restored / 'b/new.txt').read_text() == 'retained child edit'
+        assert r.authority.read()[0]['state']['contract'] == 'composition-safety-v5'

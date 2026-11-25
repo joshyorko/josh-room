@@ -43,6 +43,7 @@ from .composition_lifecycle import (
     _verify_descriptor_contract,
 )
 from .composition_safety import (
+    _CONTRACTS,
     MAX_BYTES,
     CompositionSafetyState,
     _identifier,
@@ -372,10 +373,8 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
                     'marker_verified': context_status(workspace).get('snapshot_id') == baseline}
         if old is None:
             body = state.to_dict()
-            if selected is not None or body['contract'] == 'composition-safety-v4':
-                body['contract'] = 'composition-safety-v4'
-            else:
-                body['contract'] = 'composition-safety-v3'
+            required_contract = 'composition-safety-v4' if selected is not None else 'composition-safety-v3'
+            body['contract'] = max(required_contract, body['contract'], key=_CONTRACTS.index)
             body.setdefault('child_updates', {})
             body['child_updates'][operation_id] = {'plan': plan, 'plan_sha256': plan_digest(plan), 'phase': 'reserved', 'pin': None}
             body['revision'] += 1
