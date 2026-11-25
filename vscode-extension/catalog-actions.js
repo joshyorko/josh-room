@@ -315,7 +315,7 @@ async function enterChild(vscode, { root, marker, listChildren, enter, open, chi
   return result;
 }
 
-async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch, childPaths, localState = () => "missing" }) {
+async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch, childPaths, notify = true, localState = () => "missing" }) {
   const { choices } = await pinnedChildChoices(marker, listChildren, false);
   const missing = choices.filter(choice => localState(choice.row) === "missing");
   if (childPaths === undefined && !missing.length) {
@@ -342,7 +342,7 @@ async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch,
   if (batch.status !== "hydrated" || restored.length !== children.length) {
     throw new Error("The controller returned an incomplete batch restore receipt. Check Open Workspace for folder status.");
   }
-  void vscode.window.showInformationMessage(`Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`);
+  if (notify) void vscode.window.showInformationMessage(`Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`);
   return { ok: true, restored };
 }
 

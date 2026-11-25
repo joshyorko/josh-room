@@ -8391,8 +8391,16 @@ test("registered Catalog restore submits the selected exact pin and only opens a
   assert.equal(calls, 1, JSON.stringify(fixture.errorCalls));
   assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 0);
   verified = true;
+  vscode.window.showInformationMessage = async (message, open, stay) => {
+    assert.match(message, /Synthetic Catalog.*Open the folder in VS Code/);
+    assert.equal(open, "Open Folder");
+    return stay;
+  };
   assert.equal((await restore(point)).snapshot_id, "jat-older");
-  assert.equal(calls, 2);
+  assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 0);
+  vscode.window.showInformationMessage = async (_, open) => open;
+  assert.equal((await restore(point)).snapshot_id, "jat-older");
+  assert.equal(calls, 3);
   assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 1);
   const provider = new extension.__test__.HierarchyRoomsProvider();
   const childRow = { ...point, kind: "catalog-child-room", label: "a", child: "a",
@@ -8434,11 +8442,16 @@ test("opening an exact Catalog parent only offers restoration once and makes no 
   const [current] = provider.getChildren();
   assert.equal(current.label, "Open Workspace");
   assert.match(current.description, /Synthetic Catalog/);
+  assert.match(current.description, /0 of 2 restored/);
   const rows = provider.getChildren(current);
+  assert.deepEqual(rows.map(row => row.label), ["Restore missing children…", "Child Rooms"]);
+  assert.equal(provider.getTreeItem(current).contextValue, "open-catalog-workspace");
+  assert.equal(provider.getTreeItem(rows[1]).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
   assert.equal(rows[0].command.command, "joshRoom.restoreCatalogChildren");
-  assert.deepEqual(rows.find(row => row.label === "a").command.arguments, ["a"]);
-  assert.equal(rows.find(row => row.label === "b").description, "Folder occupied");
-  assert.equal(rows.find(row => row.label === "b").command, undefined);
+  const children = provider.getChildren(rows[1]);
+  assert.deepEqual(children.find(row => row.label === "a").command.arguments, ["a"]);
+  assert.equal(children.find(row => row.label === "b").description, "Folder occupied");
+  assert.equal(children.find(row => row.label === "b").command, undefined);
   const state = new Map();
   const context = { globalState: { get: key => state.get(key), update: async (key, value) => state.set(key, value) } };
   await extension.__test__.offerCatalogChildOnOpen(context);

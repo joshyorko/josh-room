@@ -490,6 +490,11 @@
       ],
       "view/item/context": [
         {
+          "command": "joshRoom.refreshCatalogPins",
+          "when": "view == joshRoom.rooms && viewItem == open-catalog-workspace",
+          "group": "catalog@1"
+        },
+        {
           "command": "joshRoom.manageCatalogDeletion",
           "when": "view == joshRoom.rooms && viewItem == catalog-parent-deletable",
           "group": "inline@1"

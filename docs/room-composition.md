@@ -137,9 +137,12 @@ context menu, check the folders you want, or use **Select All**. One restore
 job checks the parent and restores the selected children in order. If a child
 cannot be restored, the job stops and reports how many completed. Open a dated
 point to choose one child, several children, or just the parent before choosing
-the destination. **Open Workspace** at the top of **Rooms** shows the open
-Catalog, child folder status and actions to restore missing children or refresh
-pins. Select a restored child to open it, or select a missing child to restore
+the destination. When the restore finishes, choose **Open Folder** to switch
+workspaces or **Stay Here** to continue where you are. **Open Workspace** at
+the top of **Rooms** shows the current Catalog and its restored child count.
+Use **Restore missing children…** or expand **Child Rooms** for individual
+folder status. **Refresh Catalog Child Pins** is in the workspace row menu.
+Select a restored child to open it, or select a missing child to restore
 and open it. The bulk picker lists missing children only. When an existing Catalog parent opens with a child that is not
 yet on disk, Josh Room offers the checkbox picker once for that folder and
 recovery point. Each restore requires an explicit choice and never overwrites

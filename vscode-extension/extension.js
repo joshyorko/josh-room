@@ -2343,21 +2343,16 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
   await extensionContext?.globalState?.update(catalogPromptKey(destination.fsPath, restoredMarker), true);
   if (child) return enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, child);
   if (selectedChildren?.length) {
-    await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, undefined, true, selectedChildren);
+    await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, undefined, true, selectedChildren, false);
+  } else if (selectedChildren === undefined && (restoreChildren || point.child_count > 0)) {
+    await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, undefined, true, undefined, false);
   }
-  const next = selectedChildren !== undefined ? undefined : restoreChildren ? { id: "children" } : await vscode.window.showQuickPick([
-    { id: "child", label: "Choose a child Room", description: "Restore one of this Catalog’s pinned folders" },
-    { id: "children", label: "Restore child Rooms…", description: "Select all folders or just the ones you need" },
-    { id: "parent", label: "Open Catalog parent", description: "Open the root files and Catalog links" },
-  ], { title: `${catalog.display_name || "Catalog Room"} restored` });
-  if (next?.id === "child") {
-    const entered = await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension);
-    if (entered !== "cancelled") return entered;
+  const open = "Open Folder";
+  if (await vscode.window.showInformationMessage(
+    `“${catalog.display_name || "Catalog Room"}” restored. Open the folder in VS Code?`, open, "Stay Here",
+  ) === open) {
+    await vscode.commands.executeCommand("vscode.openFolder", destination, false);
   }
-  if (next?.id === "children") {
-    await enterCatalogChildAt(destination.fsPath, restoredMarker, dimension, undefined, true);
-  }
-  await vscode.commands.executeCommand("vscode.openFolder", destination, false);
   return result;
 }
 
@@ -2498,10 +2493,10 @@ async function enterChildRoom(multiple = false, childPath) {
   return enterCatalogChildAt(root, marker, dimension, childPath, multiple);
 }
 
-function enterCatalogChildAt(root, marker, dimension, childPath, multiple = false, childPaths) {
+function enterCatalogChildAt(root, marker, dimension, childPath, multiple = false, childPaths, notify = true) {
   const actions = require("./catalog-actions");
   return (multiple ? actions.hydrateChildren : actions.enterChild)(vscode, {
-    root, marker, childPath, childPaths, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
+    root, marker, childPath, childPaths, notify, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     localState: row => catalogChildLocalState(root, marker, row),
     enter: ({ namespace, child }) => runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
       "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
@@ -2563,21 +2558,29 @@ function openWorkspaceRows() {
   const command = (label, icon, id, args = []) => ({ kind: "workspace-action", id: [id, ...args].join(":"),
     label, icon, command: { command: id, title: label, arguments: args } });
   const actions = isChild ? [command("Save Child Room", "save", "joshRoom.saveChild")]
-    : isCatalog ? [command("Restore Child Rooms…", "cloud-download", "joshRoom.restoreCatalogChildren"),
-      command("Refresh Child Pins…", "link", "joshRoom.refreshCatalogPins")]
+    : isCatalog ? []
       : [command("Save Room", "save", "joshRoom.save")];
+  let description = `${marker.display_name} · ${isChild ? "Child Room" : "Room"}`;
   if (isCatalog && !isChild) {
+    const children = [];
+    let missing = 0;
+    let restored = 0;
     for (const row of localCatalogChildren(root)) {
       const state = catalogChildLocalState(root, marker, row);
+      if (state === "missing") missing += 1;
+      if (state === "restored") restored += 1;
       const item = command(row.path, state === "missing" ? "cloud-download" : state === "restored" ? "folder-active" : "warning",
         "joshRoom.enterChild", [row.path]);
       item.description = { missing: "Not restored", restored: "Restored", occupied: "Folder occupied" }[state];
       if (state === "occupied") delete item.command;
-      actions.push(item);
+      children.push(item);
     }
+    description = children.length ? `${marker.display_name} · ${restored} of ${children.length} restored` : marker.display_name;
+    if (missing) actions.push(command("Restore missing children…", "cloud-download", "joshRoom.restoreCatalogChildren"));
+    if (children.length) actions.push({ kind: "workspace-children", id: "open-workspace-children", label: "Child Rooms", children });
   }
   return [{ kind: "open-workspace", id: "open-workspace", label: "Open Workspace",
-    description: `${marker.display_name} · ${isChild ? "Child Room" : isCatalog ? "Catalog" : "Room"}`, children: actions }];
+    contextValue: isCatalog && !isChild ? "open-catalog-workspace" : undefined, description, children: actions }];
 }
 
 async function offerCatalogChildOnOpen(context) {
@@ -5340,12 +5343,15 @@ class HierarchyRoomsProvider {
   }
 
   getTreeItem(item) {
-    if (item.kind === "open-workspace" || item.kind === "workspace-action") {
-      const group = item.kind === "open-workspace";
-      const treeItem = new vscode.TreeItem(item.label, group
-        ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+    if (["open-workspace", "workspace-children", "workspace-action"].includes(item.kind)) {
+      const workspace = item.kind === "open-workspace";
+      const group = item.kind === "workspace-children";
+      const treeItem = new vscode.TreeItem(item.label, workspace && item.children.length
+        ? vscode.TreeItemCollapsibleState.Expanded : group
+          ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
       treeItem.id = `${item.kind}:${item.id}`;
-      treeItem.iconPath = new vscode.ThemeIcon(group ? "window" : item.icon);
+      treeItem.iconPath = new vscode.ThemeIcon(workspace ? "window" : group ? "folder-library" : item.icon);
+      treeItem.contextValue = item.contextValue;
       treeItem.description = item.description;
       treeItem.command = item.command;
       return treeItem;
