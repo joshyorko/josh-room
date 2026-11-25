@@ -6095,7 +6095,10 @@ test("Windows handoff fails before material or controller execution without nati
   }
 });
 
-test("selected encryption handoff is removed after failure, cancellation, and timeout", async () => {
+test("selected encryption handoff is removed after failure, cancellation, and timeout", async (t) => {
+  // A real spawned child keeps Node alive while the unref'ed timeout runs.
+  const childHandle = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(childHandle));
   const cases = [
     { name: "failure", response: { stdout: JSON.stringify({ ok: false, error: "synthetic failure" }), code: 2 } },
     { name: "cancellation", response: { autoClose: false }, cancel: true },
