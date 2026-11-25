@@ -146,8 +146,10 @@ recovery point. Each restore requires an explicit choice and never overwrites
 an occupied child. If discovery is marked incomplete, the receipt and CLI
 still allow restoring a known exact recovery point.
 
-In **Rooms**, use **Delete…** on the exact Catalog recovery point, child
-recovery point, child Room, or Catalog. Every saved Catalog recovery point
+In **Rooms**, use **Manage Catalog Deletion…** on the Catalog row. It shows
+the next eligible items and asks you to confirm each deletion individually.
+Use **Delete…** on a specific recovery point or child Room to delete it
+directly. Every saved Catalog recovery point
 protects the child recovery points it pins. Delete the parent recovery points
 to release those pins. Then delete child recovery points and their empty
 Rooms. The Catalog can be deleted after its last child Room and recovery

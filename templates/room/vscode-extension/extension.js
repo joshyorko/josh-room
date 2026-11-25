@@ -2359,7 +2359,50 @@ async function restoreCatalogRoom(item, restoreChildren = false) {
   return result;
 }
 
-async function deleteCatalogItem(item) {
+async function manageCatalogDeletion(item) {
+  if (item?.kind !== "catalog-parent" || !item.retirement) return "cancelled";
+  const binding = row => row.dimension.id || row.dimension.dimension_id;
+  const dimensionId = binding(item);
+  const namespace = item.catalog.namespace;
+  const parentId = item.catalog.parent_room_id;
+  let catalog = await roomsProvider.reload();
+  for (;;) {
+    const parent = nativeRegistry.buildProviderTree(catalog).flatMap(provider => provider.children || [])
+      .flatMap(connection => connection.children || []).flatMap(dimension => dimension.children || [])
+      .find(row => row.kind === "catalog-parent" && binding(row) === dimensionId
+        && row.catalog.namespace === namespace && row.catalog.parent_room_id === parentId);
+    if (!parent?.retirement) {
+      void vscode.window.showWarningMessage("The Catalog deletion inventory is unavailable. Refresh Rooms and try again.");
+      return "blocked";
+    }
+    const parentPoints = parent.children.filter(row => row.kind === "catalog-point");
+    const childRooms = parent.children.find(row => row.kind === "catalog-child-history")?.children
+      .filter(row => row.kind === "catalog-child-room") || [];
+    const childPoints = childRooms.flatMap(row => row.children.map(point => ({ point, child: row.label })));
+    let rows, instruction;
+    if (parentPoints.length) {
+      rows = parentPoints.map(row => ({ label: row.label, description: row.description, row }));
+      instruction = "Choose a Catalog recovery point to release its child pins.";
+    } else if (childPoints.length) {
+      rows = childPoints.map(({ point, child }) => ({ label: child, description: point.label, row: point }));
+      instruction = "Choose a child recovery point to delete.";
+    } else if (childRooms.length) {
+      rows = childRooms.map(row => ({ label: row.label, description: row.description, row }));
+      instruction = "Choose an empty child Room to delete.";
+    } else {
+      return deleteCatalogItem(parent);
+    }
+    const choice = await vscode.window.showQuickPick(rows, {
+      title: `Delete from ${parent.label}`, placeHolder: instruction, matchOnDescription: true,
+    });
+    if (!choice) return "cancelled";
+    const result = await deleteCatalogItem(choice.row, { refresh: false });
+    if (result?.status !== "retired") return result;
+    catalog = await roomsProvider.reload();
+  }
+}
+
+async function deleteCatalogItem(item, { refresh = true } = {}) {
   const kind = {
     "catalog-parent": "catalog",
     "catalog-point": "recovery-point",
@@ -2423,8 +2466,10 @@ async function deleteCatalogItem(item) {
   if (!result?.ok || result.status !== "retired" || result.namespace !== namespace || !matches(result.target)) {
     throw new Error("The controller could not verify the Catalog deletion. Refresh Rooms before retrying.");
   }
-  try { await roomsProvider?.reload(); }
-  catch (error) { outputChannel?.warn(sanitizeControllerText(error.message)); }
+  if (refresh) {
+    try { await roomsProvider?.reload(); }
+    catch (error) { outputChannel?.warn(sanitizeControllerText(error.message)); }
+  }
   void vscode.window.showInformationMessage(`${unit} deleted from Rooms.`);
   return result;
 }
@@ -4042,7 +4087,8 @@ function activate(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
-  register(context, "joshRoom.deleteCatalogItem", deleteCatalogItem);
+  register(context, "joshRoom.deleteCatalogItem", item => deleteCatalogItem(item));
+  register(context, "joshRoom.manageCatalogDeletion", manageCatalogDeletion);
   register(context, "joshRoom.enterChild", childPath => enterChildRoom(false, childPath));
   register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
@@ -6544,7 +6590,8 @@ function activateNative(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.restoreCatalog", (item) => restoreCatalogRoom(item));
-  register(context, "joshRoom.deleteCatalogItem", deleteCatalogItem);
+  register(context, "joshRoom.deleteCatalogItem", item => deleteCatalogItem(item));
+  register(context, "joshRoom.manageCatalogDeletion", manageCatalogDeletion);
   register(context, "joshRoom.enterChild", childPath => enterChildRoom(false, childPath));
   register(context, "joshRoom.restoreCatalogChildren", item => item ? restoreCatalogRoom(item, true) : enterChildRoom(true));
   register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
