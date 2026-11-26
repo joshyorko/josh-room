@@ -54,4 +54,4 @@ controllers, web hosts and public forwarding URLs remain unsupported. See
 Rooms puts the current workspace above Storage. Expand a Catalog to reach
 its Child Rooms and Recovery Points. Save from the current workspace row, or
 use the status bar menu to inspect a running operation or copy a verified
-recovery receipt. See the [VS Code guide](../docs/vscode-ux.md).
+recovery receipt. See the [VS Code guide](https://github.com/joshyorko/josh-room/blob/main/docs/vscode-ux.md).
