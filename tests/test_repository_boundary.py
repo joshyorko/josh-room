@@ -130,7 +130,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "showQuickPick" in extension and "showInputBox" in extension and "showWarningMessage" in extension
     assert "already has a working folder" in extension
     assert "Replace Latest" in extension
-    assert "Delete Snapshot" in extension and "also deletes the Room" in extension
+    assert "Delete Recovery Point" in extension and "also deletes the Room" in extension
     assert "Opening existing" in extension
     assert '"--snapshot"' in extension
     assert "showOpenDialog" in extension and '"--source"' in extension
@@ -138,11 +138,12 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "createTreeView" in extension and "createOutputChannel" in extension
     assert "childProcess.spawn" in extension and "onCancellationRequested" in extension
     assert "SIGTERM" in extension
-    assert "No saved Rooms" in extension and "Couldn't load Rooms" in extension
+    assert "No saved Rooms" in str(package["contributes"]["viewsWelcome"])
+    assert "Couldn't load Storage" in extension
     assert "is already open" in extension
     assert "forceCreate" in extension
     assert "createStatusBarItem" in extension and "sync~spin" in extension
-    assert "createFileSystemWatcher" in extension and "onDidChangeTextDocument" in extension and "Needs save" in extension
+    assert "createFileSystemWatcher" in extension and "onDidChangeTextDocument" in extension and "Changes to save" in extension
     assert "onStartupFinished" in package["activationEvents"]
     assert "createTerminal" in extension and "runtime.command" in extension
     assert "Include local OCI images" in extension and '"--all-images"' in extension
@@ -202,6 +203,9 @@ def test_real_vsix_contains_the_owned_runtime_contract(tmp_path):
     with zipfile.ZipFile(output) as archive:
         names = set(archive.namelist())
         assert "extension/room-view.js" in names
+        assert {"extension/messaging.js", "extension/flow-picker.js"} <= names
+        for step in ("connect", "encrypt", "identity", "room", "catalog"):
+            assert f"extension/media/walkthrough/{step}.md" in names
         assert "extension/room-view-target.js" in names
         assert "extension/runtime.js" in names
         assert "extension/runtime/manifest.json" in names
@@ -223,8 +227,11 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     recipe = (ROOT / "vscode-extension/runtime/controller/robot.yaml").read_text()
     assert "shell: python -m josh_room\n" in recipe
     assert "python -m josh_room.cli" not in recipe
-    remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
-    assert remove_menu["group"].startswith("inline")
+    destructive = {"joshRoom.remove", "joshRoom.deleteRecoveryPoint", "joshRoom.deleteRoom",
+                   "joshRoom.manageCatalogDeletion", "joshRoom.deleteCatalogItem"}
+    menus = package["contributes"]["menus"]["view/item/context"]
+    assert any(item.get("command") == "joshRoom.deleteRecoveryPoint" for item in menus)
+    assert all(item["group"].startswith("9_danger") for item in menus if item.get("command") in destructive)
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
     assert f"joshyorko.josh-room-{package['version']}" in bootstrap
@@ -236,6 +243,9 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
 def test_vscode_extension_root_and_template_copies_are_byte_identical():
     for name in (
         "extension.js", "package.json", "room-view.js", "room-view-target.js", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js", "inventory-picker.js",
+        "messaging.js", "flow-picker.js", "catalog-actions.js", "room-operations.js", "recovery-actions.js",
+        "media/walkthrough/connect.md", "media/walkthrough/encrypt.md", "media/walkthrough/identity.md",
+        "media/walkthrough/room.md", "media/walkthrough/catalog.md",
         "runtime/manifest.json", "runtime/controller/robot.yaml", "runtime/controller/conda.yaml",
         "runtime/controller/environment_linux_amd64_freeze.yaml", "media/room.svg",
     ):

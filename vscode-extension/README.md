@@ -48,3 +48,10 @@ use a Linux devcontainer/attached-container/SSH workspace through VS Code's
 private loopback forwarding (`remote.localPortHost: localhost`). Native Windows
 controllers, web hosts and public forwarding URLs remain unsupported. See
 [Room View](https://github.com/joshyorko/josh-room/blob/main/docs/room-view.md) for lifecycle and security limits.
+
+## Rooms and progress
+
+Rooms puts the current workspace above Storage. Expand a Catalog to reach
+its Child Rooms and Recovery Points. Save from the current workspace row, or
+use the status bar menu to inspect a running operation or copy a verified
+recovery receipt. See the [VS Code guide](../docs/vscode-ux.md).
