@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -95,67 +95,67 @@
     "commands": [
       {
         "command": "joshRoom.new",
-        "title": "New Room…",
+        "title": "New Room\u2026",
         "icon": "$(add)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.addStorage",
-        "title": "Connect Storage…",
+        "title": "Connect Storage\u2026",
         "icon": "$(cloud)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.connectCloudflare",
-        "title": "Connect Cloudflare…",
+        "title": "Connect Cloudflare\u2026",
         "icon": "$(plug)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.reconnectCloudflare",
-        "title": "Reconnect Cloudflare…",
+        "title": "Reconnect Cloudflare\u2026",
         "icon": "$(sync)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.initializeEncryption",
-        "title": "Initialize Encryption…",
+        "title": "Initialize Encryption\u2026",
         "icon": "$(key)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.migrateEncryption",
-        "title": "Migrate Encryption…",
+        "title": "Migrate Encryption\u2026",
         "icon": "$(key)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.resumeEncryption",
-        "title": "Resume Encryption Migration…",
+        "title": "Resume Encryption Migration\u2026",
         "icon": "$(sync)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.exportRecovery",
-        "title": "Export Recovery Identity…",
+        "title": "Export Recovery Identity\u2026",
         "icon": "$(export)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.importRecovery",
-        "title": "Import Recovery Identity…",
+        "title": "Import Recovery Identity\u2026",
         "icon": "$(clippy)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.connectStorage",
-        "title": "Connect Storage…",
+        "title": "Connect Storage\u2026",
         "icon": "$(plug)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.reconnectStorage",
-        "title": "Reconnect Storage…",
+        "title": "Reconnect Storage\u2026",
         "icon": "$(sync)",
         "category": "Josh Room"
       },
@@ -167,25 +167,25 @@
       },
       {
         "command": "joshRoom.disconnectStorage",
-        "title": "Disconnect Storage…",
+        "title": "Disconnect Storage\u2026",
         "icon": "$(debug-disconnect)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.editStorageSettings",
-        "title": "Edit Storage Settings…",
+        "title": "Edit Storage Settings\u2026",
         "icon": "$(settings-gear)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.link",
-        "title": "Link Existing Folder…",
+        "title": "Link Existing Folder\u2026",
         "icon": "$(link)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.repair",
-        "title": "Repair Room Ledger…",
+        "title": "Repair Room Ledger\u2026",
         "icon": "$(wrench)",
         "category": "Josh Room"
       },
@@ -197,7 +197,7 @@
       },
       {
         "command": "joshRoom.saveFolderAs",
-        "title": "Save Folder As Room…",
+        "title": "Save Folder As Room\u2026",
         "icon": "$(save-as)",
         "category": "Josh Room"
       },
@@ -209,13 +209,13 @@
       },
       {
         "command": "joshRoom.enter",
-        "title": "Enter Room…",
+        "title": "Enter Room\u2026",
         "icon": "$(folder-opened)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.remove",
-        "title": "Delete Recovery Point…",
+        "title": "Delete Recovery Point\u2026",
         "icon": "$(trash)",
         "category": "Josh Room"
       },
@@ -227,19 +227,19 @@
       },
       {
         "command": "joshRoom.deleteRoom",
-        "title": "Delete Room…",
+        "title": "Delete Room\u2026",
         "icon": "$(trash)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.serve",
-        "title": "Serve Room Content…",
+        "title": "Serve Room Content\u2026",
         "icon": "$(server-process)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.serveLogicalSnapshot",
-        "title": "Serve Recovery Point…",
+        "title": "Serve Recovery Point\u2026",
         "icon": "$(server-process)",
         "category": "Josh Room"
       },
@@ -251,7 +251,7 @@
       },
       {
         "command": "joshRoom.agentSessionsStatus",
-        "title": "Agent Sessions…",
+        "title": "Agent Sessions\u2026",
         "icon": "$(comment-discussion)",
         "category": "Josh Room"
       },
@@ -263,25 +263,25 @@
       },
       {
         "command": "joshRoom.captureAgentRecovery",
-        "title": "Capture Agent History Reference…",
+        "title": "Capture Agent History Reference\u2026",
         "icon": "$(archive)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.restoreAgentRecovery",
-        "title": "Restore Native Agent History…",
+        "title": "Restore Native Agent History\u2026",
         "icon": "$(history)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.exportPortableJat",
-        "title": "Export Portable Copy…",
+        "title": "Export Portable Copy\u2026",
         "icon": "$(export)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.extractLogicalSnapshot",
-        "title": "Extract Files…",
+        "title": "Extract Files\u2026",
         "icon": "$(go-to-file)",
         "category": "Josh Room"
       },
@@ -293,7 +293,7 @@
       },
       {
         "command": "joshRoom.optimizeRoomStore",
-        "title": "Optimize Storage…",
+        "title": "Optimize Storage\u2026",
         "icon": "$(tools)",
         "category": "Josh Room"
       },
@@ -334,7 +334,7 @@
       },
       {
         "command": "joshRoom.jatBuild",
-        "title": "Pack Folder into Haul…",
+        "title": "Pack Folder into Haul\u2026",
         "icon": "$(package)",
         "category": "JAT"
       },
@@ -346,76 +346,76 @@
       },
       {
         "command": "joshRoom.jatExtract",
-        "title": "Extract from Haul…",
+        "title": "Extract from Haul\u2026",
         "icon": "$(go-to-file)",
         "category": "JAT"
       },
       {
         "command": "joshRoom.jatRestore",
-        "title": "Restore Workspace from Haul…",
+        "title": "Restore Workspace from Haul\u2026",
         "icon": "$(folder-library)",
         "category": "JAT"
       },
       {
         "command": "joshRoom.jatServe",
-        "title": "Serve Haul…",
+        "title": "Serve Haul\u2026",
         "icon": "$(server-process)",
         "category": "JAT"
       },
       {
         "command": "joshRoom.jatExport",
-        "title": "Export Images…",
+        "title": "Export Images\u2026",
         "icon": "$(archive)",
         "category": "JAT"
       },
       {
         "command": "joshRoom.jatCopy",
-        "title": "Copy / Seed Haul…",
+        "title": "Copy / Seed Haul\u2026",
         "icon": "$(copy)",
         "category": "JAT"
       },
       {
         "command": "joshRoom.splitWorkspace",
-        "title": "Split Workspace into Rooms (Preview)…",
+        "title": "Split Workspace into Rooms (Preview)\u2026",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.saveCatalog",
-        "title": "Save Catalog…",
+        "title": "Save Catalog\u2026",
         "icon": "$(library)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.restoreCatalog",
-        "title": "Restore Catalog…",
+        "title": "Restore Catalog\u2026",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.manageCatalogDeletion",
-        "title": "Delete Catalog…",
+        "title": "Delete Catalog\u2026",
         "icon": "$(trash)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.deleteCatalogItem",
-        "title": "Delete…",
+        "title": "Delete\u2026",
         "icon": "$(trash)",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.restoreCatalogChildren",
-        "title": "Restore Child Rooms…",
+        "title": "Restore Child Rooms\u2026",
         "category": "Josh Room",
         "icon": "$(cloud-download)"
       },
       {
         "command": "joshRoom.enterChild",
-        "title": "Enter Child Room…",
+        "title": "Enter Child Room\u2026",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.saveChild",
-        "title": "Save Child Room…",
+        "title": "Save Child Room\u2026",
         "category": "Josh Room"
       },
       {
@@ -425,12 +425,12 @@
       },
       {
         "command": "joshRoom.browseRecoveryPoint",
-        "title": "Browse Recovery Point…",
+        "title": "Browse Recovery Point\u2026",
         "category": "Josh Room"
       },
       {
         "command": "joshRoom.explore3D",
-        "title": "Explore Room in 3D…",
+        "title": "Explore Room in 3D\u2026",
         "icon": "$(globe)",
         "category": "Josh Room"
       },
@@ -472,7 +472,7 @@
       },
       {
         "view": "joshRoom.rooms",
-        "contents": "Loading Storage…",
+        "contents": "Loading Storage\u2026",
         "when": "joshRoom.viewState == preparing"
       },
       {

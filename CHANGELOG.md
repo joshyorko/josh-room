@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.3]
+
+- Land Josh Room VS Code navigation and Catalog UX on main (#248) (#249)
+- Discover, restore, save, and delete Catalog Rooms from Rooms (#247)
+- Preserve standalone Catalog Git history with worktreeConfig enabled (#246)
+- Allow unselected nonportable directories in Catalog plans (#245)
+- test(rpa): verify installed Catalog recovery in an isolated pilot (#244)
+- Fix Catalog folder selection and capture review (#243)
+
 ## [1.0.0]
 
 - Add the read-only Room viewer and self-contained offline snapshot exports.
