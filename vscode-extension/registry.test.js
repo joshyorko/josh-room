@@ -436,3 +436,65 @@ test("pull references require the reported registry authority and matching immut
     assert.equal(verify(unsafe), undefined);
   }
 });
+
+test("Catalog parents and exact points are separate from ordinary Rooms", () => {
+  const tree = buildProviderTree({ dimensions: [{
+    id: "synthetic", provider: "minio", display_name: "Synthetic bucket",
+    rooms: [{ id: "ordinary", display_name: "Ordinary Room" }],
+    catalogs: [{ namespace: "1".repeat(32), parent_room_id: "parent", display_name: "Catalog Room", recovery_points: [
+      { snapshot_id: "jat-old", created_at: "2026-01-01T00:00:00Z", child_count: 2, children: ["a", "b"] },
+      { snapshot_id: "jat-new", created_at: "2026-01-02T00:00:00Z", child_count: 3, children: ["a", "b", "c"] },
+      { snapshot_id: "latest", created_at: "2026-01-03T00:00:00Z", child_count: 4 },
+    ] }],
+    catalog_discovery_partial: true,
+  }] });
+  const bucket = tree[0].children[0].children[0];
+  assert.deepEqual(bucket.children.map(child => child.kind), ["catalog-parent", "catalog-partial", "room"]);
+  const parent = bucket.children[0];
+  assert.equal(parent.label, "Catalog Room");
+  const [newest, older, childGroup] = parent.children;
+  assert.deepEqual([newest, older].map(row => row.point.snapshot_id), ["jat-new", "jat-old"]);
+  assert.ok([newest, older].every(row => row.kind === "catalog-point" && row.dimension.id === "synthetic" && !row.children));
+  assert.deepEqual(childGroup.children.map(row => [row.kind, row.child, row.point.snapshot_id]),
+    [["catalog-child", "a", "jat-new"], ["catalog-child", "b", "jat-new"], ["catalog-child", "c", "jat-new"]]);
+});
+
+test("Catalog child history and direct entry share one folder row across parent points", () => {
+  const rows = buildProviderTree({ dimensions: [{ id: "synthetic", provider: "minio",
+    catalogs: [{ namespace: "1".repeat(32), parent_room_id: "parent", display_name: "Example",
+      recovery_points: [
+        { snapshot_id: "jat-old", created_at: "2026-01-01T00:00:00Z", child_count: 1, children: ["one"] },
+        { snapshot_id: "jat-current", created_at: "2026-01-02T00:00:00Z", child_count: 1, children: ["one"] },
+      ],
+      child_rooms: [{ room_id: "child", path: "one" }],
+      child_recovery_points: [{ room_id: "child", snapshot_id: "jat-child", created_at: "2026-01-01T00:00:00Z", pinned: true }] }],
+  }] });
+  const parent = rows[0].children[0].children[0].children[0];
+  const [newest, older, group] = parent.children;
+  assert.deepEqual([newest.children, older.children], [undefined, undefined]);
+  assert.equal(group.label, "Child Rooms");
+  assert.equal(group.children.length, 1);
+  const [room] = group.children;
+  assert.equal(room.label, "one");
+  assert.equal(room.description, "1 recovery point");
+  assert.equal(room.point.snapshot_id, "jat-current");
+  assert.equal(room.children[0].point.snapshot_id, "jat-child");
+  assert.equal(room.children[0].label, new Date("2026-01-01T00:00:00Z").toLocaleString());
+  assert.equal(room.children[0].description, "Pinned");
+});
+
+test("a Catalog with no parent points keeps its child Rooms visible for deletion", () => {
+  const rows = buildProviderTree({ dimensions: [{ id: "synthetic", provider: "minio",
+    catalogs: [{ namespace: "1".repeat(32), parent_room_id: "parent", display_name: "Example",
+      recovery_points: [], child_rooms: [{ room_id: "child", path: "one", recovery_points: [
+        { snapshot_id: "jat-child", created_at: "2026-01-02T00:00:00Z", pinned: false },
+      ] }] }],
+  }] });
+  const parent = rows[0].children[0].children[0].children[0];
+  assert.equal(parent.label, "Example");
+  assert.equal(parent.description, "No recovery points");
+  const [room] = parent.children[0].children;
+  assert.equal(room.label, "one");
+  assert.equal(room.point, undefined);
+  assert.equal(room.children[0].point.snapshot_id, "jat-child");
+});

@@ -10,8 +10,11 @@ import json
 import os
 import stat
 import sys
+import tempfile
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 from .catalog import Catalog, corroborate_logical_snapshot
 from .composition import (
@@ -22,6 +25,7 @@ from .composition import (
     validate_manifest,
     validate_payload_path,
 )
+from .composition_child_admission import admit_catalog_child
 from .composition_component_contract import verify_component_snapshots
 from .composition_git_integrity import verify_staged_git
 from .composition_lifecycle import (
@@ -30,6 +34,7 @@ from .composition_lifecycle import (
     CompositionAdmissionError,
     _admitted_source,
     _capture,
+    _catalog_root_scan,
     _commit,
     _content_digest,
     _copy_paths,
@@ -39,10 +44,17 @@ from .composition_lifecycle import (
     _verify_descriptor_contract,
 )
 from .composition_safety import (
+    _CONTRACTS,
     MAX_BYTES,
     CompositionSafetyState,
     _identifier,
     plan_digest,
+)
+from .composition_save_intent import (
+    INTENT_FORMAT,
+    IntentWriter,
+    projected_capacity,
+    require_writer,
 )
 from .composition_transaction import (
     canonical,
@@ -50,6 +62,7 @@ from .composition_transaction import (
     prepare_parent,
     record_parent,
 )
+from .progress import report_progress
 from .room_store_operations import _validate_snapshot_entries, scan_workspace_for_status
 from .workspace_onboarding import _directory
 from .workspace_policy import load_capture_policy
@@ -57,15 +70,20 @@ from .workspace_state import context_status, write_stat_workspace_marker
 
 
 def _open(authority, namespace):
+    from .composition_retirement import require_active
     if not sys.platform.startswith('linux') or namespace != authority.namespace:
         raise ValueError('namespace updates require the selected Linux authority')
     envelope, etag = authority.read()
     if envelope is None or envelope['state'] is None:
         raise ValueError('namespace is unavailable')
-    return envelope, etag, CompositionSafetyState.from_dict(envelope['state'])
+    require_active(envelope)
+    return envelope, etag, CompositionSafetyState.from_envelope(envelope)
 
 
 def _descriptor(authority, state, room, snapshot):
+    from .composition_retirement import require_active
+    envelope, _ = authority.read()
+    require_active(envelope, room, snapshot)
     _identifier(room)
     _identifier(snapshot)
     record = Catalog.from_body(state.to_dict()['dimension_catalog']).resolve_snapshot(room, snapshot)
@@ -76,6 +94,66 @@ def _descriptor(authority, state, room, snapshot):
         raise ValueError('descriptor repository differs from namespace')
     _verify_descriptor_contract(state, descriptor)
     return record, descriptor
+
+
+@contextmanager
+def open_catalog_snapshot(dimension, namespace, room, snapshot, authority, store_factory, private):
+    """Resolve a committed Catalog recovery point in its own encrypted repository."""
+    _identifier(snapshot)
+    envelope, _, state = _open(authority, namespace)
+    body = state.to_dict()
+    pins = [pin for op in body['operations'].values() if op['phase'] == 'committed'
+            for pin in (op['parent_pin'], *op['child_pins'].values())]
+    pins.extend(op['pin'] for op in body.get('child_updates', {}).values() if op['phase'] == 'committed')
+    record, descriptor = _descriptor(authority, state, room, snapshot)
+    if not any((pin['room_id'], pin['logical_jat_id'], pin['descriptor_sha256'])
+               == (room, snapshot, record['ciphertext_sha256']) for pin in pins):
+        raise ValueError('selected Catalog recovery point is not committed')
+    with store_factory(envelope['secret']) as store:
+        repository = store.open_existing()
+        if repository.repository_id != envelope['repository_id']:
+            raise ValueError('Catalog snapshot repository differs')
+        yield SimpleNamespace(project_id=room, catalog=Catalog.from_body(body['dimension_catalog']),
+            store=store, private_dir=private, material=authority.material, dimension=dimension,
+            repository_info=repository, selected_record=record, selected_descriptor=descriptor)
+
+
+def catalog_workspace_status(workspace):
+    """Compare the current local parent and its bound children without contacting storage."""
+    from .workspace_state import local_status
+
+    parent = context_status(workspace)
+    if not parent.get('composition_namespace'):
+        return local_status(workspace)
+    result = local_status(workspace)
+    if not parent.get('path_matches'):
+        return result
+    fd = _directory(workspace)
+    try:
+        try:
+            manifest = parse_manifest(_read_regular(fd, MANIFEST, MAX_BYTES))
+        except (OSError, ValueError):
+            return result
+    finally:
+        os.close(fd)
+    children = []
+    for row in manifest['children']:
+        child = workspace / row['path']
+        try:
+            fd = _directory(child)
+        except (OSError, ValueError):
+            continue
+        os.close(fd)
+        current = context_status(child)
+        if (current.get('path_matches')
+                and current.get('composition_namespace') == parent['composition_namespace']
+                and current.get('dimension_id') == parent.get('dimension_id')
+                and current.get('encryption_domain_id') == parent.get('encryption_domain_id')
+                and current.get('project_id') == row['room_id']
+                and current.get('snapshot_id') == row['snapshot_id']):
+            children.append({'path': row['path'], 'room_id': row['room_id'],
+                             'snapshot_id': row['snapshot_id'], 'state': local_status(child)['state']})
+    return {**result, 'catalog_children': children}
 
 
 def _proof(store, descriptor, private):
@@ -154,7 +232,7 @@ def _child_view(workspace, private, namespace, room, baseline, accepted, expecte
         validate_child_git(workspace, scan.paths, policy.capture_mode)
         for path in scan.paths:
             if path != '.josh-roomignore':
-                validate_payload_path(path)
+                validate_payload_path(path, allow_nested_policy=True)
         records = _records(workspace, scan.paths, fd)
         # Marker/guard replacement changes the root's mtime but no payload.
         evidence_records = {**records, '.': records['.'][:3]}
@@ -239,10 +317,14 @@ def _binding_failure(namespace, room, snapshot, operation_id, new_snapshot):
 
 
 def save_child(workspace, dimension, namespace, room, baseline, operation_id,
-               authority, store_factory, private, *, approval=None, component_options=None):
+               authority, store_factory, private, *, approval=None, component_options=None, before_publish=None):
     """Plan or apply an independent child Save; never refresh a parent implicitly."""
     _identifier(operation_id)
     envelope, etag, state = _open(authority, namespace)
+    from .composition_retirement import require_active
+    require_active(envelope, room, baseline)
+    if approval is not None:
+        require_writer(envelope, getattr(authority, "operation_id", None))
     if not _child_origin(state, room):
         raise ValueError('Room is not a child in this namespace')
     old = state.to_dict().get('child_updates', {}).get(operation_id)
@@ -252,7 +334,8 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
     if old and (old['plan']['room_id'], old['plan']['expected_logical_jat_id'], old['plan']['logical_jat_id']) != (room, baseline, output):
         raise ValueError('operation ID already binds another child update')
     accepted = {baseline, output} if old and old['phase'] == 'committed' else {baseline}
-    latest = state.to_dict()['dimension_catalog']['projects'][room]['latest']
+    from .composition_retirement import active_inventory
+    latest = active_inventory(envelope)['rooms'].get(room, {}).get('latest')
     if latest not in accepted:
         raise ValueError('child latest advanced; select its exact baseline')
     record, previous = _descriptor(authority, state, room, baseline)
@@ -300,16 +383,16 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline,
                     'namespace': namespace, 'capture_mode': mode, 'components': prior_components, 'catalog_writes': False, 'parent_refreshed': False,
                     'marker_verified': context_status(workspace).get('snapshot_id') == baseline}
+        if before_publish is not None:
+            before_publish()
         if old is None:
             body = state.to_dict()
-            if selected is not None or body['contract'] == 'composition-safety-v4':
-                body['contract'] = 'composition-safety-v4'
-            else:
-                body['contract'] = 'composition-safety-v3'
+            required_contract = 'composition-safety-v4' if selected is not None else 'composition-safety-v3'
+            body['contract'] = max(required_contract, body['contract'], key=_CONTRACTS.index)
             body.setdefault('child_updates', {})
             body['child_updates'][operation_id] = {'plan': plan, 'plan_sha256': plan_digest(plan), 'phase': 'reserved', 'pin': None}
             body['revision'] += 1
-            state = CompositionSafetyState.from_dict(body)
+            state = state.replace(body)
             envelope, etag = _commit(authority, envelope, etag, state)
         if state.to_dict()['child_updates'][operation_id]['phase'] != 'committed':
             def claim(name=None):
@@ -338,13 +421,15 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             body['dimension_catalog'] = catalog.body
             body['child_updates'][operation_id].update(phase='committed', pin={'room_id': room, 'logical_jat_id': output, 'descriptor_sha256': ref.sha256})
             body['revision'] += 1
-            state = CompositionSafetyState.from_dict(body)
+            state = state.replace(body)
             with _admitted_source(Path(workspace), plan) as fd:
                 if selected is not None and component_plan(
                     workspace, dimension, room, expected_policy, component_options, previous, source=view
                 ) != selected:
                     raise ValueError("child component source changed before publication")
                 _recheck_source(workspace, fd, plan)
+                if before_publish is not None:
+                    before_publish()
                 envelope, etag = _commit(authority, envelope, etag, state)
         else:
             _, descriptor = _descriptor(authority, state, room, output)
@@ -358,7 +443,7 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
                 'snapshot_id': output, 'capture_mode': mode, 'components': descriptor.to_dict()['components'], 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
 
 
-def _verify_parent_workspace(workspace, authority, room, snapshot, operation):
+def _verify_parent_workspace(workspace, authority, room, snapshot, operation, *alternate_manifest_digests):
     marker = context_status(workspace)
     if (not marker.get('path_matches') or marker.get('composition_namespace') != authority.namespace
             or marker.get('dimension_id') != authority.binding['dimension_id']
@@ -370,15 +455,19 @@ def _verify_parent_workspace(workspace, authority, room, snapshot, operation):
         raw = _read_regular(fd, MANIFEST, MAX_BYTES)
     finally:
         os.close(fd)
-    if hashlib.sha256(raw).hexdigest() != operation['manifest_sha256']:
+    if hashlib.sha256(raw).hexdigest() not in (operation['manifest_sha256'], *alternate_manifest_digests):
         raise ValueError('local parent manifest differs from its saved recovery point')
 
 
 def parent_children(workspace, authority, namespace, room, snapshot, *, child_path=None, offset=0, revision=None):
     """Read immutable choices for the exact entered parent from its namespace ledger."""
-    _, _, state = _open(authority, namespace)
+    envelope, _, state = _open(authority, namespace)
+    from .composition_retirement import active_inventory, require_active
+    require_active(envelope, room, snapshot)
+    active = active_inventory(envelope)['rooms']
     body = state.to_dict()
-    if ((revision is not None and revision != body['revision'])
+    picker_revision = body['revision'] + len(envelope.get('retirements', []))
+    if ((revision is not None and revision != picker_revision)
             or (offset or child_path is not None) and revision is None):
         raise CompositionAdmissionError('composition-picker-stale', 'Catalog choices changed; reopen the picker')
     committed = [op for op in body['operations'].values() if op['phase'] == 'committed']
@@ -395,9 +484,11 @@ def parent_children(workspace, authority, namespace, room, snapshot, *, child_pa
         if update['phase'] == 'committed':
             pin = update['pin']
             history.setdefault(pin['room_id'], set()).add(pin['logical_jat_id'])
+    history = {child: points.intersection(active.get(child, {}).get('recovery_points', []))
+               for child, points in history.items()}
     projects = body['dimension_catalog']['projects']
     result = {'ok': True, 'namespace': namespace, 'parent_room_id': room, 'parent_snapshot_id': snapshot,
-              'revision': body['revision'], 'current_parent': projects[room]['latest'] == snapshot}
+              'revision': picker_revision, 'current_parent': active[room]['latest'] == snapshot}
     if child_path is None:
         rows = [{'path': path, 'room_id': pin['room_id'], 'snapshot_id': pin['logical_jat_id'],
                  'other_point_count': len(history[pin['room_id']]) - 1}
@@ -433,27 +524,118 @@ def _picker_page(result, key, rows, offset):
     return {**result, key: page, 'next_offset': end if end < len(rows) else None}
 
 
+def _parent_save_view(workspace, private, manifest, policy_sha256, root_files_only, *alternate_manifests):
+    fd = _directory(workspace)
+    try:
+        policy = load_capture_policy(workspace, directory_fd=fd)
+        if policy.sha256 != policy_sha256 or any(
+            not policy.is_excluded(row['path']) for row in manifest['children']
+        ):
+            raise ValueError('Catalog capture policy differs from the saved parent')
+        if _read_regular(fd, MANIFEST, MAX_BYTES) not in (
+            canonical(manifest), *(canonical(value) for value in alternate_manifests),
+        ):
+            raise ValueError('local Catalog manifest differs from the saved parent')
+        scan = _catalog_root_scan(policy, fd, []) if root_files_only else scan_workspace_for_status(workspace)
+        records = _records(workspace, scan.paths, fd)
+        paths = set(scan.paths) - {MANIFEST, '.josh-roomignore'}
+        if root_files_only:
+            paths = {path for path in paths if stat.S_ISREG(records[path][2])}
+        for path in paths:
+            validate_payload_path(path, allow_nested_policy=True)
+        view = private / ('parent-save-view-' + uuid.uuid4().hex)
+        view.mkdir(mode=0o700)
+        ignore, modes = _copy_paths(workspace, view, paths, source_fd=fd, records=records)
+        (view / '.josh-roomignore').write_text(ignore)
+        (view / MANIFEST).write_bytes(canonical(manifest))
+        _finish_view(view, paths | {'.josh-roomignore', MANIFEST}, modes)
+        if load_capture_policy(view).sha256 != policy_sha256:
+            raise ValueError('staged Catalog capture policy differs')
+        if _records(workspace, scan.paths, fd) != records:
+            raise ValueError('Catalog source changed during staging')
+        return view
+    finally:
+        os.close(fd)
+
+
+def _bind_parent_save(workspace, dimension, authority, namespace, room, snapshot, display_name,
+                      private, original_manifest, policy_sha256, root_files_only, accepted,
+                      previous_op, committed_manifest, content_sha256, replace_manifest=None):
+    fd = _directory(workspace)
+    try:
+        opened = os.fstat(fd)
+        scan = scan_workspace_for_status(workspace)
+        live = _parent_save_view(workspace, private, original_manifest, policy_sha256, root_files_only,
+                                 *((parse_manifest(replace_manifest),) if committed_manifest and replace_manifest else ()))
+        after = scan_workspace_for_status(workspace)
+        _verify_parent_workspace(workspace, authority, room, accepted, previous_op, *committed_manifest)
+        current = workspace.lstat()
+        if (scan.signature != after.signature or after.capture_policy_sha256 != policy_sha256
+                or _content_digest(live) != content_sha256
+                or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)):
+            raise ValueError('Catalog was saved, but its local files changed before the marker could be updated')
+        held = Path(f'/proc/{os.getpid()}/fd/{fd}')
+        if replace_manifest and _read_regular(fd, MANIFEST, MAX_BYTES) != replace_manifest:
+            with tempfile.NamedTemporaryFile(prefix='.catalog-manifest-', dir=held, delete=False) as handle:
+                temporary = Path(handle.name)
+                try:
+                    handle.write(replace_manifest)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    os.replace(temporary, held / MANIFEST)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            after = scan_workspace_for_status(workspace)
+        write_stat_workspace_marker(held, dimension_id=dimension.dimension_id,
+            encryption_domain_id=authority.binding['encryption_domain_id'], project_id=room, snapshot_id=snapshot,
+            display_name=display_name,
+            workspace_signature=after.signature, signature_algorithm=after.signature_algorithm,
+            capture_policy_sha256=after.capture_policy_sha256, path_binding=workspace, composition_namespace=namespace)
+    finally:
+        os.close(fd)
+
+
+def _parent_plan(request, policy_sha256, mode, output, children):
+    return {
+        "source_path_sha256": plan_digest(request), "capture_policy_sha256": policy_sha256,
+        "parent_room_id": request["room_id"], "parent_logical_jat_id": output,
+        "expected_parent_logical_jat_id": request["baseline"], "capture_mode": mode,
+        "children": [{"path": row["path"], "room_id": row["room_id"], "logical_jat_id": row["snapshot_id"]}
+                     for row in children],
+    }
+
+
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
-                   authority, store_factory, private, *, approval=None, workspace=None):
+                   authority, store_factory, private, *, approval=None, workspace=None, save_root=False,
+                   expected_content=None, before_publish=None):
     """Publish a new immutable parent from saved bytes and explicitly selected pins."""
     _identifier(operation_id)
     envelope, etag, state = _open(authority, namespace)
+    from .composition_retirement import require_active
+    require_active(envelope, room, baseline)
+    if approval is not None:
+        require_writer(envelope, getattr(authority, "operation_id", None))
     body = state.to_dict()
     previous_op = next((op for op in body['operations'].values() if op['phase'] == 'committed'
         and op['parent_pin']['room_id'] == room and op['parent_pin']['logical_jat_id'] == baseline), None)
     if previous_op is None:
         raise ValueError('parent baseline is not committed')
-    if workspace is not None:
-        _verify_parent_workspace(workspace, authority, room, baseline, previous_op)
     old = body['operations'].get(operation_id)
-    output = 'jat-' + _slot(namespace, 'parent-refresh:' + operation_id)
+    committed_manifest = (old['manifest_sha256'],) if save_root and old and old['phase'] == 'committed' else ()
+    action = 'save-catalog-root' if save_root else 'refresh-parent'
+    output = 'jat-' + _slot(namespace, ('parent-save:' if save_root else 'parent-refresh:') + operation_id)
     if old and (old['plan']['expected_parent_logical_jat_id'], old['plan']['parent_logical_jat_id']) != (baseline, output):
         raise ValueError('operation ID already binds another parent refresh')
-    latest = body['dimension_catalog']['projects'][room]['latest']
+    if workspace is not None:
+        marker_snapshot = context_status(workspace).get('snapshot_id')
+        accepted = output if save_root and old and old['phase'] == 'committed' and marker_snapshot == output else baseline
+        _verify_parent_workspace(workspace, authority, room, accepted, previous_op, *committed_manifest)
+    from .composition_retirement import active_inventory
+    latest = active_inventory(envelope)['rooms'].get(room, {}).get('latest')
     if latest != baseline and not (old and old['phase'] == 'committed' and latest == output):
         raise ValueError('parent latest advanced; select its exact baseline')
     _, previous = _descriptor(authority, state, room, baseline)
-    if not isinstance(pins, dict) or not pins:
+    if not isinstance(pins, dict) or (save_root and workspace is None) or (not save_root and not pins):
         raise ValueError('select at least one exact child pin')
     with store_factory(envelope['secret']) as store:
         _repository(store, envelope)
@@ -476,22 +658,39 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
             rows[path]['snapshot_id'] = snapshot
         manifest = validate_manifest(manifest)
         changed = canonical(manifest) != raw
-        request = {'action': 'refresh-parent', 'namespace': namespace, 'binding': authority.binding,
+        request = {'action': action, 'namespace': namespace, 'binding': authority.binding,
                    'operation_id': operation_id, 'room_id': room, 'baseline': baseline, 'pins': pins}
+        if save_root:
+            root_files_only = envelope['request'].get('root_files_only', False)
+            policy_sha256 = previous.to_dict()['capture_policy_sha256']
+            workspace = Path(workspace).resolve(strict=True)
+            saved_content = _content_digest(view)
+            view = _parent_save_view(workspace, private, original_manifest, policy_sha256, root_files_only,
+                                     *((manifest,) if committed_manifest else ()))
+            request['content_sha256'] = _content_digest(view)
+            if expected_content is not None and request['content_sha256'] != expected_content:
+                raise ValueError('Catalog root files changed after approval')
+            request['workspace_sha256'] = hashlib.sha256(os.fsencode(workspace)).hexdigest()
+            changed = changed or request['content_sha256'] != saved_content
         digest = plan_digest(request)
         if approval is None:
             return {'ok': True, 'status': 'approval-required', 'request': request, 'approval_sha256': digest,
-                    'changed': changed, 'snapshot_id': output if changed else baseline}
+                    'changed': changed, 'snapshot_id': output if changed else baseline,
+                    'capture_policy_sha256': previous.to_dict()['capture_policy_sha256']}
         if approval != digest:
             raise ValueError('parent refresh approval differs')
+        display_name = body['dimension_catalog']['projects'][room]['display_name']
         if not changed and old is None:
-            return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline, 'catalog_writes': False}
+            if save_root:
+                _bind_parent_save(workspace, dimension, authority, namespace, room, baseline, display_name,
+                                  private, original_manifest, policy_sha256, root_files_only, accepted,
+                                  previous_op, committed_manifest, request['content_sha256'])
+            return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline, 'catalog_writes': False,
+                    **({'marker_verified': True} if save_root else {})}
         (view / MANIFEST).write_bytes(canonical(manifest))
         scan = scan_workspace_for_status(view)
-        plan = {'source_path_sha256': plan_digest(request), 'capture_policy_sha256': scan.capture_policy_sha256,
-                'parent_room_id': room, 'parent_logical_jat_id': output, 'expected_parent_logical_jat_id': baseline,
-                'capture_mode': 'source-only', 'children': [{'path': row['path'], 'room_id': row['room_id'],
-                    'logical_jat_id': row['snapshot_id']} for row in manifest['children']]}
+        plan = _parent_plan(request, scan.capture_policy_sha256, previous.to_dict()["capture_mode"], output,
+                            manifest["children"])
         if old and canonical(old['plan']) != canonical(plan):
             raise ValueError('reserved parent refresh pins differ')
         if old is None:
@@ -501,14 +700,16 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
                     'descriptor_sha256': body['dimension_catalog']['projects'][row['room_id']]['snapshots'][row['snapshot_id']]['ciphertext_sha256']}
                     for path, row in rows.items()}, 'parent_pin': None, 'manifest_sha256': None, 'parent_policy_sha256': None}
             candidate['revision'] += 1
-            state = CompositionSafetyState.from_dict(candidate)
+            state = state.replace(candidate)
+            if before_publish is not None:
+                before_publish()
             envelope, etag = _commit(authority, envelope, etag, state)
         op = state.to_dict()['operations'][operation_id]
         if op['phase'] == 'reserved':
             candidate = state.to_dict()
             candidate['operations'][operation_id]['phase'] = 'children-recorded'
             candidate['revision'] += 1
-            state = CompositionSafetyState.from_dict(candidate)
+            state = state.replace(candidate)
             envelope, etag = _commit(authority, envelope, etag, state)
         state = prepare_parent(state, operation_id, plan_digest(plan), policy_sha256=scan.capture_policy_sha256)
         if canonical(state.to_dict()) != canonical(envelope['state']):
@@ -523,12 +724,282 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
             restored = _proof(store, descriptor, private)
             if (restored / MANIFEST).read_bytes() != canonical(manifest) or _content_digest(restored) != _content_digest(view):
                 raise ValueError('refreshed parent payload differs')
+            ref = authority.put_descriptor(descriptor)
             state = record_parent(state, operation_id, plan_digest(plan), descriptor=descriptor,
-                object_ref=authority.put_descriptor(descriptor), workspace_signature=saved_scan.signature, display_name='Catalog Room')
+                object_ref=ref, workspace_signature=saved_scan.signature,
+                display_name=state.to_dict()['dimension_catalog']['projects'][room]['display_name'])
+            if before_publish is not None:
+                before_publish()
             envelope, etag = _commit(authority, envelope, etag, state)
         else:
             _, committed = _descriptor(authority, state, room, output)
             if _content_digest(_proof(store, committed, private)) != _content_digest(view):
                 raise ValueError('committed parent output differs; preserve history')
+        if save_root:
+            _bind_parent_save(workspace, dimension, authority, namespace, room, output, display_name,
+                              private, original_manifest, policy_sha256, root_files_only, accepted,
+                              previous_op, committed_manifest, request['content_sha256'],
+                              canonical(manifest) if canonical(manifest) != raw else None)
         return {'ok': True, 'status': 'saved', 'namespace': namespace, 'room_id': room,
-                'snapshot_id': output, 'workspace_modified': False, 'previous_parent_snapshot_id': baseline}
+                'snapshot_id': output, 'workspace_modified': save_root, 'previous_parent_snapshot_id': baseline,
+                **({'marker_verified': context_status(workspace).get('snapshot_id') == output} if save_root else {})}
+
+
+def _admit_aggregate_children(workspace, manifest, envelope, operation_id):
+    body = envelope["state"]
+    children, missing = [], []
+    namespace = envelope["namespace"]
+    for row in manifest["children"]:
+        child_operation = _slot(namespace, operation_id + ":child:" + row["path"])
+        pending = body.get("child_updates", {}).get(child_operation)
+        split = None
+        if pending and pending["phase"] == "committed":
+            plan = pending["plan"]
+            split = (plan["expected_logical_jat_id"], plan["logical_jat_id"])
+        try:
+            marker = admit_catalog_child(workspace, row, envelope["binding"], namespace, split)
+        except ValueError:
+            raise CompositionAdmissionError(
+                "composition-child-occupied",
+                "A Catalog child folder is occupied, unreadable or has a mismatched Room binding.",
+                child=row["path"],
+            ) from None
+        if marker is None:
+            missing.append(row["path"])
+        else:
+            child_baseline = pending["plan"]["expected_logical_jat_id"] if pending else marker["snapshot_id"]
+            children.append((row, child_operation, child_baseline))
+    return children, missing
+
+
+def _pending_save_status(envelope):
+    intent = envelope.get("save_intent")
+    if intent is None:
+        return {"ok": True, "status": "no-pending-save"}
+    state = envelope["state"]
+    outputs = state.get("child_updates", {})
+    claims = envelope["capture_claims"]
+    children = []
+    for row in intent["children"]:
+        update = outputs.get(row["operation_id"], {})
+        phase = update.get("phase", "pending" if row["writes_snapshot"] else "retained")
+        children.append({
+            "path": row["path"], "snapshot_id": row["approved_output"], "status": phase,
+            "capture_claimed": row["approved_output"] in claims,
+        })
+    return {
+        "ok": True, "status": "pending-save", "intent": intent,
+        "parent_committed": state["operations"].get(intent["operation_id"], {}).get("phase") == "committed",
+        "parent_capture_claimed": intent["parent_output"] in claims,
+        "children": children,
+    }
+
+
+def inspect_catalog_save(authority, namespace):
+    envelope, _, _ = _open(authority, namespace)
+    return _pending_save_status(envelope)
+
+
+def _start_save(authority, envelope, etag, intent, child_plans, parent_plan):
+    previous = envelope.get("save_intent")
+    if previous is not None:
+        if previous != intent:
+            raise ValueError("Catalog Save retry differs from its pending intent")
+        return IntentWriter(authority, intent["operation_id"])
+    state = envelope["state"]
+    if (any(op["phase"] != "committed" for op in state["operations"].values())
+            or any(op["phase"] != "committed" for op in state.get("child_updates", {}).values())):
+        raise ValueError("reconcile the pending namespace operation before saving the Catalog")
+    from .composition_retirement import completed_capture_claims
+
+    if set(envelope["capture_claims"]) - completed_capture_claims(envelope):
+        raise ValueError("reconcile the incomplete capture claim before saving the Catalog")
+    projected_capacity(envelope, intent, child_plans, parent_plan)
+    candidate = {**envelope, "format": INTENT_FORMAT, "save_intent": intent,
+                 "retirements": envelope.get("retirements", []), "completed_saves": envelope.get("completed_saves", {})}
+    try:
+        authority.put(candidate, etag, intent_id=intent["operation_id"])
+    except ValueError:
+        observed, _ = authority.read()
+        if observed is None or observed.get("save_intent") != intent:
+            raise ValueError("Catalog Save authority changed before exclusive admission; review again") from None
+    return IntentWriter(authority, intent["operation_id"])
+
+
+def _finish_saved_intent(authority, envelope, etag, operation_id, approval):
+    if envelope.get("completed_saves", {}).get(operation_id) == approval:
+        return envelope
+    intent = envelope.get("save_intent")
+    if not intent or (intent["operation_id"], intent["approval_sha256"]) != (operation_id, approval):
+        raise ValueError("terminal Catalog Save intent differs from its approved operation")
+    writer = IntentWriter(authority, operation_id)
+    receipts = {**envelope["completed_saves"], operation_id: approval}
+    completed = {**envelope, "save_intent": None, "completed_saves": receipts}
+    try:
+        writer.put(completed, etag)
+    except ValueError:
+        observed, _ = authority.read()
+        if observed is None or observed.get("completed_saves", {}).get(operation_id) != approval:
+            raise
+        return observed
+    return completed
+
+
+def _repair_completed_save(authority, envelope, etag, operation, approval, parent_args, runtime, workspace, original):
+    operation_id = parent_args[-1]
+    baseline = parent_args[-2]
+    intent = envelope.get("save_intent")
+    if intent is not None and intent["operation_id"] != operation_id:
+        raise ValueError("another Catalog Save intent is pending")
+    expected = intent["approval_sha256"] if intent else envelope.get("completed_saves", {}).get(operation_id)
+    if expected is None:
+        raise ValueError("operation ID already belongs to a committed Catalog operation")
+    if operation["plan"]["expected_parent_logical_jat_id"] != baseline:
+        raise ValueError("committed Catalog Save baseline differs")
+    output = operation["parent_pin"]["logical_jat_id"]
+    if approval is None:
+        return {"ok": True, "status": "approval-required", "approval_sha256": expected,
+                "changed": False, "snapshot_id": output, "children_to_update": [],
+                "retained_missing_children": []}
+    if approval != expected:
+        raise ValueError("Catalog Save approval differs from the committed intent")
+    if intent is not None:
+        # Release the completed publication before inspecting edited local files.
+        _finish_saved_intent(authority, envelope, etag, operation_id, approval)
+    prior = {row["path"]: row["snapshot_id"] for row in original["children"]}
+    pins = {path: pin["logical_jat_id"] for path, pin in operation["child_pins"].items()
+            if pin["logical_jat_id"] != prior[path]}
+    options = {"workspace": workspace, "save_root": True}
+    try:
+        preview = refresh_parent(*parent_args, pins, *runtime, **options)
+        return refresh_parent(*parent_args, pins, *runtime, approval=preview["approval_sha256"], **options)
+    except (OSError, ValueError, RuntimeError):
+        raise CompositionAdmissionError(
+            "composition-save-local-binding",
+            "Catalog recovery point is saved. Local metadata could not be rebound. Preserve local edits.",
+        ) from None
+
+
+def save_catalog_workspace(workspace, dimension, namespace, room, baseline, operation_id,
+                           authority, store_factory, private, *, approval=None):
+    """Review, reserve capacity, and publish one parent with exact child pins."""
+    _identifier(operation_id)
+    workspace = Path(workspace)
+    envelope, etag, state = _open(authority, namespace)
+    require_writer(envelope, operation_id)
+    body = state.to_dict()
+    origin = next(((key, op) for key, op in body['operations'].items() if op['phase'] == 'committed'
+                   and (op['parent_pin']['room_id'], op['parent_pin']['logical_jat_id']) == (room, baseline)), None)
+    if origin is None:
+        raise ValueError('Catalog baseline is not committed')
+    key, original_operation = origin
+    manifest = manifest_for(state, key, original_operation['plan_sha256'])
+    parent_args = dimension, namespace, room, baseline, operation_id
+    runtime = authority, store_factory, private
+    committed = body['operations'].get(operation_id)
+    if committed is not None and committed["phase"] == "committed":
+        return _repair_completed_save(authority, envelope, etag, committed, approval, parent_args, runtime, workspace, manifest)
+    candidates, missing = _admit_aggregate_children(workspace, manifest, envelope, operation_id)
+    previous = {row['path']: row['snapshot_id'] for row in manifest['children']}
+    root_options = {'workspace': workspace, 'save_root': True}
+    root_preview = refresh_parent(*parent_args, {}, *runtime, **root_options)
+    content = root_preview['request']['content_sha256']
+    workspace_digest = root_preview['request']['workspace_sha256']
+    root_approval = plan_digest({'content_sha256': content, 'workspace_sha256': workspace_digest, 'baseline': baseline})
+    reviews = []
+    for row, child_operation, child_baseline in candidates:
+        args = workspace / row['path'], dimension, namespace, row['room_id'], child_baseline, child_operation
+        preview = save_child(*args, *runtime)
+        reviews.append((row, args, preview))
+    pins = {row['path']: preview['snapshot_id'] for row, _, preview in reviews
+            if preview['snapshot_id'] != previous[row['path']]}
+    request = {'action': 'save-catalog', 'binding': authority.binding, 'namespace': namespace,
+               'operation_id': operation_id, 'room_id': room, 'baseline': baseline,
+               'root_approval': root_approval, 'retained_missing_children': missing,
+               'children': [{'path': row['path'], 'approval_sha256': preview['approval_sha256'],
+                             'snapshot_id': preview['snapshot_id']} for row, _, preview in reviews]}
+    digest = plan_digest(request)
+    changed = root_preview['changed'] or bool(pins)
+    output = 'jat-' + _slot(namespace, 'parent-save:' + operation_id) if changed else baseline
+    if approval is None:
+        return {'ok': True, 'status': 'approval-required', 'approval_sha256': digest,
+                'changed': changed, 'snapshot_id': output, 'children_to_update': list(pins),
+                'retained_missing_children': missing}
+    if approval != digest:
+        raise ValueError('Catalog Save approval is stale')
+    writer = None
+    if changed:
+        parent_request = {**root_preview["request"], "pins": pins}
+        parent_manifest = [{**row, "snapshot_id": pins.get(row["path"], row["snapshot_id"])}
+                           for row in manifest["children"]]
+        parent_plan = _parent_plan(parent_request, root_preview["capture_policy_sha256"],
+                                   original_operation["plan"]["capture_mode"], output, parent_manifest)
+        intent = {
+            "operation_id": operation_id, "room_id": room, "baseline": baseline, "approval_sha256": digest,
+            "root_approval": root_approval, "parent_output": output, "retained_missing_children": missing,
+            "parent_plan_sha256": plan_digest(parent_plan),
+            "children": [{"path": row["path"], "room_id": row["room_id"], "operation_id": args[-1],
+                           "approved_output": preview["snapshot_id"], "approval_sha256": preview["approval_sha256"],
+                           "writes_snapshot": preview["changed"]} for row, args, preview in reviews],
+        }
+        writer = _start_save(authority, envelope, etag, intent,
+                             {args[-1]: preview["request"]["plan"] for _, args, preview in reviews}, parent_plan)
+        runtime = writer, store_factory, private
+    def check_occupancy(*, terminal=False):
+        current, _, _ = _open(authority, namespace)
+        present, still_missing = _admit_aggregate_children(workspace, manifest, current, operation_id)
+        if still_missing != missing or [row["path"] for row, _, _ in present] != [row["path"] for row, _, _ in reviews]:
+            raise ValueError("Catalog child occupancy changed after approval")
+        for _, args, preview in reviews:
+            snapshot = context_status(args[0]).get("snapshot_id")
+            expected = {preview["snapshot_id"]}
+            if not terminal:
+                expected.add(args[-2])
+            if snapshot not in expected:
+                raise ValueError("Catalog child marker changed after approval")
+
+    ordered = [(row, args, preview) for row, args, preview in reviews if row['path'] in pins]
+    try:
+        check_occupancy()
+        for index, (_, args, preview) in enumerate(ordered):
+            report_progress('catalog-save', 'Saving child Room', current=index, total=len(ordered))
+            if preview['changed']:
+                saved = save_child(*args, *runtime, approval=preview['approval_sha256'], before_publish=check_occupancy)
+                if not saved.get('ok') or not saved.get('marker_verified') or saved['snapshot_id'] != preview['snapshot_id']:
+                    raise ValueError('one child recovery point requires reconciliation before publishing the Catalog')
+        # A byte-identical rewrite can make the stat marker stale. Rebind it
+        # against the already verified descriptor without publishing a point.
+        for row, args, preview in reviews:
+            if preview["changed"]:
+                continue
+            marker = context_status(args[0])
+            plan = preview["request"]["plan"]
+            if marker.get("workspace_signature") != plan["source_signature"]:
+                saved = save_child(*args, *runtime, approval=preview["approval_sha256"])
+                if not saved.get("ok") or not saved.get("marker_verified"):
+                    raise ValueError("unchanged child marker could not be rebound")
+        if ordered:
+            report_progress('catalog-save', 'Saving Catalog parent', current=len(ordered), total=len(ordered))
+        check_occupancy(terminal=True)
+        preview = refresh_parent(*parent_args, pins, *runtime, expected_content=content, **root_options)
+        result = refresh_parent(*parent_args, pins, *runtime, approval=preview['approval_sha256'],
+                                expected_content=content, before_publish=lambda: check_occupancy(terminal=True), **root_options)
+        if writer is not None and result.get("ok") and result.get("marker_verified"):
+            terminal, terminal_etag = authority.read()
+            _finish_saved_intent(authority, terminal, terminal_etag, operation_id, approval)
+        return {**result, "retained_missing_children": missing}
+    except (ValueError, OSError, RuntimeError) as error:
+        if not changed:
+            raise
+        latest, _ = authority.read()
+        pending = _pending_save_status(latest)
+        if pending.get("parent_committed") and writer is not None and latest["save_intent"]["operation_id"] == operation_id:
+            terminal, terminal_etag = authority.read()
+            if terminal.get("save_intent") == pending["intent"]:
+                _finish_saved_intent(authority, terminal, terminal_etag, operation_id, approval)
+            pending["status"] = "saved-local-binding-unverified"
+        reported = CompositionAdmissionError("composition-save-pending",
+            "Catalog Save stopped. Inspect the operation and resume the same operation ID.")
+        reported.result.update(pending)
+        reported.result.pop("ok", None)
+        raise reported from error

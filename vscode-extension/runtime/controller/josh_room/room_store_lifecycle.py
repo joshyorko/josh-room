@@ -190,15 +190,33 @@ def inspect_selected_room_store(context) -> dict[str, Any]:
     return result
 
 
+def inspect_catalog_room_store(context) -> dict[str, Any]:
+    from .composition_oci import verify_oci_archive
+
+    record, descriptor = _selected_logical_record(context)
+    result = inspect_logical_jat(record, descriptor)
+    component = result["components"]["hauler_content"]
+    if component and any("reference_sha256" in row for row in component["references"]):
+        with materialize_components(descriptor, context.store, context.private_dir) as files:
+            rows = verify_oci_archive(files.hauler_archive, component["references"])
+            component["references"] = [{
+                "reference": row.get("annotations", {}).get("org.opencontainers.image.ref.name", row["digest"]),
+                "digest": row["digest"], "media_type": row["mediaType"],
+            } for row in rows]
+    return result
+
+
 def export_logical_jat(
     context,
     *,
     jat_root,
     output,
     cancellation=None,
+    include_agent_recovery=True,
 ) -> dict[str, Any]:
     _record, descriptor = _selected_logical_record(context)
-    native_agent_reference.preflight_export(context, output)
+    if include_agent_recovery:
+        native_agent_reference.preflight_export(context, output)
     try:
         result = export_portable_jat(
             descriptor=descriptor,
@@ -224,7 +242,7 @@ def export_logical_jat(
         "available_bytes": result.available_bytes,
     }
     try:
-        agent_recovery = native_agent_reference.export_reference(context, output)
+        agent_recovery = native_agent_reference.export_reference(context, output) if include_agent_recovery else None
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, KeyboardInterrupt, CLICancelled):
         raise RoomStoreLifecycleError(
             "portable export completed but agent recovery export requires reconciliation",

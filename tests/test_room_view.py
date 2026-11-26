@@ -582,6 +582,41 @@ def test_scoped_filesystem_transport_boundary(tmp_path):
         assert "filesystem" not in generic.collector.current_payload()["server"]
 
 
+@pytest.mark.parametrize("control", [".josh-room-composition.json", ".josh-room-split.json"])
+def test_view_lists_only_payload_for_a_bound_catalog_root(tmp_path, control):
+    from josh_room.workspace_state import write_stat_workspace_marker
+
+    (tmp_path / "payload.txt").write_text("synthetic payload")
+    (tmp_path / control).write_text("{}")
+    nested = tmp_path / "other-room"
+    nested.mkdir()
+    (nested / control).write_text("{}")
+    (nested / "private.txt").write_text("another Room")
+
+    def listing():
+        with RoomViewServer(RoomWorkspaceProvider(tmp_path), require_token=True) as server:
+            headers = {"X-Josh-Room-View-Token": server.token}
+            status, _, body = _raw_http(server.port, "GET", "/fs/list?id=root", headers=headers)
+            assert status == 200
+            result = json.loads(body)
+            if result["entries"]:
+                child = next(row for row in result["entries"] if row["label"] == "other-room")
+                route = f'/fs/list?id={child["id"]}&generation={result["generation"]}'
+                status, _, body = _raw_http(server.port, "GET", route, headers=headers)
+                assert status == 200
+                assert json.loads(body)["coverage"] == "reserved-boundary"
+            return result
+
+    assert listing()["coverage"] == "reserved-boundary"
+    write_stat_workspace_marker(
+        tmp_path, dimension_id="synthetic", project_id="room", snapshot_id="jat-point",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001", display_name="Synthetic Catalog",
+        workspace_signature="a" * 64, capture_policy_sha256="b" * 64,
+        signature_algorithm="josh-room-stat-v1", composition_namespace="1" * 32,
+    )
+    assert {row["label"] for row in listing()["entries"]} == {"payload.txt", "other-room"}
+
+
 def test_foreground_listing_can_follow_an_active_directory_sample(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event

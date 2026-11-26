@@ -45,6 +45,54 @@ def test_catalog_preserves_git_history_with_inactive_worktree_config(tmp_path):
     assert (stage / ".git/config").read_bytes() == (root / ".git/config").read_bytes()
 
 
+@pytest.mark.parametrize("index_kind", ["sparse", "unconfigured-gitlink", "split"])
+def test_catalog_preserves_portable_git_index(tmp_path, index_kind):
+    source = tmp_path / "source"
+    source.mkdir()
+    root = repository(source)
+
+    def git(*args, worktree=root):
+        return subprocess.check_output(["git", "-C", worktree, *args])
+
+    if index_kind == "sparse":
+        for name in ["keep", "omit"]:
+            (root / name).mkdir()
+            (root / name / "file").write_text(name)
+        git("add", ".")
+        git("-c", "user.name=Fixture", "-c", "user.email=test@example.invalid", "commit", "-qm", "nested files")
+        git("sparse-checkout", "set", "--cone", "--sparse-index", "keep")
+        assert b"040000 " in git("ls-files", "--stage", "--sparse")
+    elif index_kind == "unconfigured-gitlink":
+        oid = "1" * 40
+        git("update-index", "--add", "--cacheinfo", f"160000,{oid},embedded")
+        (root / "embedded").mkdir()
+        (root / "embedded" / "payload.txt").write_text("nested working file")
+        assert b"160000 " in git("ls-files", "--stage")
+    else:
+        git("update-index", "--split-index")
+        assert list((root / ".git").glob("sharedindex.*"))
+    expected = git("ls-files", "--stage", "--sparse")
+    source_index = (root / ".git/index").read_bytes()
+    dimension = DimensionConfig(
+        "synthetic", "Synthetic", "minio", "https://storage.example.invalid",
+        "synthetic-bucket", "synthetic-profile", connection_id="synthetic",
+        encryption_domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    preview = capture_plan(source, dimension, "1" * 32, "parent",
+                           [{"path": "child", "outcome": "child"}], root_files_only=True)
+    staged = tmp_path / "staged"
+    _child_view(source, "child", staged, preview["request"])
+    verify_staged_git(staged, inventory(staged), "full-repository", tmp_path)
+    assert (staged / ".git/index").read_bytes() == source_index
+    assert git("ls-files", "--stage", "--sparse", worktree=staged) == expected
+    assert (root / ".git/index").read_bytes() == source_index
+    if index_kind == "sparse":
+        assert not (staged / "omit").exists()
+        assert git("show", "HEAD:omit/file", worktree=staged) == b"omit"
+    elif index_kind == "unconfigured-gitlink":
+        assert (staged / "embedded/payload.txt").read_text() == "nested working file"
+
+
 @pytest.mark.parametrize("ref", ["HEAD", ":file"])
 def test_private_verification_refuses_missing_commit_or_staged_blob(tmp_path, ref):
     root = repository(tmp_path)

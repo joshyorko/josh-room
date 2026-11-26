@@ -2,12 +2,13 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { saveCatalog, enterChild, relativeSource, updateRoom } = require("./catalog-actions");
+const { saveCatalog, enterChild, hydrateChildren, relativeSource, updateRoom } = require("./catalog-actions");
 
 const binding = { provider: "minio", dimension_id: "dimension", connection_id: "synthetic-connection",
   encryption_domain_id: "00000000-0000-4000-8000-000000000001", physical_bucket: "minio:https://storage.example.invalid:fixture" };
 
 function installReviewPicker(vscode, interact) {
+  vscode.window.showInputBox ??= async options => options.value;
   vscode.QuickPickItemKind = { Separator: -1 };
   vscode.window.createQuickPick = () => {
     let accepted, hidden, disposed = false;
@@ -43,8 +44,13 @@ test("catalog confirmation assigns only checked child folders and explains root-
     showOpenDialog: async () => dialogs.shift(), showQuickPick: async () => picks.shift(),
     showInformationMessage: async (_, action) => { assert.equal(action, "Copy recovery receipt"); return action; },
   } };
+  vscode.window.showInputBox = async options => {
+    assert.equal(options.value, "root");
+    assert.ok(options.validateInput("  "));
+    return "  Synthetic Catalog  ";
+  };
   installReviewPicker(vscode, (picker, accept) => {
-    assert.match(picker.title, /root → Storage · 1 child Room/);
+    assert.match(picker.title, /Synthetic Catalog → Storage · 1 child Room/);
     assert.deepEqual(picker.items.filter(item => item.kind === -1).map(item => item.label),
       ["Destination", "Capture", "Actions", "Child Rooms"]);
     const destination = picker.items.find(item => item.label === "Storage");
@@ -62,7 +68,7 @@ test("catalog confirmation assigns only checked child folders and explains root-
   });
   const result = await saveCatalog(vscode, {
     selectChildren: async root => { assert.equal(root, "/synthetic/root"); return ["a"]; }, dimensions: async () => [{ id: "dimension", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" }],
-    plan: async (selection) => { assert.equal(approved, false); assert.deepEqual(selection.assignments, [{ path: "a", outcome: "child" }]); return { request: { destination_binding: binding, child_evidence: { a: { capture_mode: "full-repository" } } }, approval_sha256: "approved" }; },
+    plan: async (selection) => { assert.equal(approved, false); assert.equal(selection.name, "Synthetic Catalog"); assert.deepEqual(selection.assignments, [{ path: "a", outcome: "child" }]); return { request: { destination_binding: binding, child_evidence: { a: { capture_mode: "full-repository" } } }, approval_sha256: "approved" }; },
     save: async (selection, approval) => { assert.equal(approved, true); assert.equal(approval, "approved"); return { ok: true, namespace: selection.namespace, parent_room_id: selection.parentRoom, parent_snapshot_id: "exact-pin" }; },
   });
   assert.equal(result.ok, true);
@@ -172,6 +178,117 @@ test("Catalog previews explicit files-only and local-only choices before saving"
   assert.equal(plans, 3);
 });
 
+function preservedCatalog(plan, options = {}) {
+  const vscode = { window: {
+    showOpenDialog: async () => [{ fsPath: "/synthetic/work" }],
+    showInputBox: async options => options.value,
+    showQuickPick: async rows => rows[0],
+    showInformationMessage: () => assert.fail("verified Save should pass a receipt to the caller"),
+    ...options,
+  } };
+  const callbacks = {
+    preserveByDefault: true,
+    dimensions: async () => [{ id: "dimension", provider: "minio" }],
+    selectChildren: () => assert.fail("child selection is opt-in"),
+    plan,
+    save: () => assert.fail("Save requires approval"),
+    onSaved: () => assert.fail("receipt requires a successful Save"),
+  };
+  return { vscode, callbacks };
+}
+
+function preservationPreview(selection, approval) {
+  return {
+    approval_sha256: approval,
+    request: {
+      destination_binding: binding,
+      preserve_content: true,
+      capture_mode: "full-repository",
+      parent_git_count: 2,
+      assignments: [{ path: ".", outcome: "parent" }, ...selection.assignments],
+      child_evidence: Object.fromEntries(selection.assignments.filter(row => row.outcome === "child")
+        .map(row => [row.path, { capture_mode: row.capture_mode || "full-repository" }])),
+    },
+  };
+}
+
+test("new preservation review keeps eligible folders and Git in the parent by default", async () => {
+  const { vscode, callbacks } = preservedCatalog(async selection => {
+    assert.deepEqual(selection.assignments, []);
+    return preservationPreview(selection, "preserve-whole");
+  });
+  installReviewPicker(vscode, (picker, accept) => {
+    assert.match(picker.title, /0 child Rooms/);
+    assert.equal(picker.activeItem.description, "Eligible files and folders");
+    assert.match(picker.activeItem.detail, /2 Git repositories in the Catalog parent/);
+    assert.match(picker.activeItem.detail, /Capture policy exclusions stay local/);
+    assert.ok(action(picker, "Split folders into Rooms…"));
+    assert.equal(action(picker, "Advanced settings"), undefined);
+    accept(action(picker, "Save catalog"));
+  });
+  callbacks.save = async (selection, approval) => {
+    assert.deepEqual(selection.assignments, []);
+    assert.equal(approval, "preserve-whole");
+    return { ok: true, namespace: selection.namespace, parent_room_id: selection.parentRoom, parent_snapshot_id: "exact-pin" };
+  };
+  let savedReceipt;
+  callbacks.onSaved = async receipt => { savedReceipt = receipt; };
+  const result = await saveCatalog(vscode, callbacks);
+  assert.deepEqual(savedReceipt, { dimension_id: "dimension", namespace: result.namespace,
+    parent_room_id: result.parent_room_id, parent_snapshot_id: "exact-pin" });
+});
+
+test("opting in to a split and then clearing it both produce fresh preservation plans", async () => {
+  const { vscode, callbacks } = preservedCatalog(async selection => {
+    const expected = [[], [{ path: "service", outcome: "child" }], []];
+    assert.deepEqual(selection.assignments, expected[planCount]);
+    return preservationPreview(selection, `preserve-${++planCount}`);
+  });
+  let pickerCount = 0;
+  let planCount = 0;
+  callbacks.selectChildren = async (root, selected) => {
+    assert.equal(root, "/synthetic/work");
+    assert.deepEqual(selected, pickerCount++ === 0 ? [] : ["service"]);
+    return pickerCount === 1 ? ["service"] : [];
+  };
+  callbacks.save = async (selection, approval) => {
+    assert.deepEqual(selection.assignments, []);
+    assert.equal(approval, "preserve-3");
+    return { ok: true, namespace: selection.namespace, parent_room_id: selection.parentRoom, parent_snapshot_id: "exact-pin" };
+  };
+  callbacks.onSaved = () => {};
+  installReviewPicker(vscode, (picker, accept) => {
+    assert.equal(picker.items.some(item => item.label === "$(folder) service"), planCount === 2);
+    accept(action(picker, planCount === 3 ? "Save catalog" : "Split folders into Rooms…"));
+  });
+  await saveCatalog(vscode, callbacks);
+  assert.equal(pickerCount, 2);
+  assert.equal(planCount, 3);
+});
+
+test("an unsupported preservation boundary requires an explicit decision before replanning", async () => {
+  const { vscode, callbacks } = preservedCatalog(async () => {
+    throw Object.assign(new Error("Finish the current Git operation before saving."), {
+      result: { error_code: "composition-preservation-git" },
+    });
+  }, { showWarningMessage: async (message, options, split) => {
+    assert.equal(message, "Catalog needs attention");
+    assert.equal(options.modal, true);
+    assert.match(options.detail, /Finish the current Git operation/);
+    assert.equal(split, "Split folders into Rooms…");
+  } });
+  assert.equal(await saveCatalog(vscode, callbacks), "cancelled");
+});
+
+test("a preservation request rejects controller changes to parent ownership before review", async () => {
+  const { vscode, callbacks } = preservedCatalog(async selection => {
+    const preview = preservationPreview(selection, "mismatched-parent");
+    preview.request.assignments[0].outcome = "local-only";
+    return preview;
+  });
+  await assert.rejects(saveCatalog(vscode, callbacks), /whole-folder capture plan/);
+});
+
 const parentMarker = { composition_namespace: "1".repeat(32), dimension_id: "dimension", project_id: "parent", snapshot_id: "parent-pin" };
 const children = { ok: true, namespace: parentMarker.composition_namespace, parent_room_id: "parent", parent_snapshot_id: "parent-pin",
   current_parent: true, revision: 1, next_offset: null, children: [{ path: "projects/a", room_id: "a", snapshot_id: "pinned-a",
@@ -180,7 +297,7 @@ const childHistory = { ...children, child_path: "projects/a", child_room_id: "a"
   recovery_points: [{ snapshot_id: "jat-child-new", created_at: "new" }] };
 
 test("whole child opens only after verified immutable entry", async () => {
-  const vscode = { window: { showQuickPick: async rows => rows[0], showInformationMessage: async () => {} } };
+  const vscode = { window: { showQuickPick: async rows => rows[0], showInformationMessage: () => new Promise(() => {}) } };
   let opened;
   const args = { root: "/synthetic/root", marker: parentMarker, listChildren: async () => children,
     enter: async selection => {
@@ -337,6 +454,7 @@ for (const [field, value] of Object.entries({
     encryption_domain_id: binding.encryption_domain_id, endpoint: "https://storage.example.invalid", bucket: "fixture" };
   const vscode = { window: { showOpenDialog: async () => dialogs.shift(), showQuickPick: async rows => rows[0],
     createQuickPick: () => assert.fail("unexpected approval") } };
+  vscode.window.showInputBox = async options => options.value;
   await assert.rejects(saveCatalog(vscode, { selectChildren: async () => ["a"], dimensions: async () => [dimension],
     plan: async () => ({ request: { destination_binding: { ...binding, [field === "endpoint" ? "physical_bucket" : field]: value },
       child_evidence: { a: { capture_mode: "full-repository" } } } }),
@@ -394,4 +512,57 @@ test("refresh pages all saved child paths and allows choosing a later history pa
       return { approval_sha256: "approved", snapshot_id: "new-parent", changed: true };
     }, save: async () => ({ ok: true, snapshot_id: "new-parent" }) });
   assert.deepEqual(reads.map(page => [page.offset, page.revision]), [[0, undefined], [1, 1], [0, 1], [64, 1]]);
+});
+
+test("Catalog hydration restores only the explicitly checked children at their pins", async () => {
+  const marker = { composition_namespace: "1".repeat(32), dimension_id: "synthetic",
+    project_id: "parent", snapshot_id: "jat-parent" };
+  const children = ["a", "b", "c"].map(path => ({ path, room_id: path, snapshot_id: `jat-${path}` }));
+  const batches = [];
+  const callbacks = { root: "/synthetic/root", marker,
+    listChildren: async () => ({ ok: true, namespace: marker.composition_namespace, revision: 1,
+      parent_room_id: "parent", parent_snapshot_id: "jat-parent", children, next_offset: null }),
+    enter: async ({ child }) => {
+      return { ok: true, marker_verified: true, namespace: marker.composition_namespace,
+        room_id: child, snapshot_id: `jat-${child}` };
+    },
+    enterBatch: async paths => {
+      batches.push(paths);
+      return { ok: true, status: "hydrated", namespace: marker.composition_namespace, parent_snapshot_id: marker.snapshot_id,
+        restored: await Promise.all(paths.map(child => callbacks.enter({ child }))) };
+    },
+  };
+  const vscode = { window: {
+    showQuickPick: async (rows, options) => {
+      assert.equal(options.canPickMany, true);
+      assert.deepEqual(rows.map(row => row.label), ["a", "b", "c"]);
+      return [rows[0], rows[2]];
+    },
+    showInformationMessage: async () => {},
+  } };
+  const result = await hydrateChildren(vscode, callbacks);
+  assert.deepEqual(batches, [["a", "c"]]);
+  assert.deepEqual(result.restored.map(row => row.snapshot_id), ["jat-a", "jat-c"]);
+  vscode.window.showQuickPick = async rows => rows;
+  const all = await hydrateChildren(vscode, callbacks);
+  assert.deepEqual(all.restored.map(row => row.snapshot_id), ["jat-a", "jat-b", "jat-c"]);
+  assert.deepEqual(batches, [["a", "c"], ["a", "b", "c"]]);
+  await assert.rejects(hydrateChildren(vscode, { ...callbacks, childPaths: ["a", "c"], enterBatch: async () => ({
+    ok: true, status: "partial", namespace: marker.composition_namespace, parent_snapshot_id: marker.snapshot_id,
+    restored: [await callbacks.enter({ child: "a" })], failed_index: 1,
+  }) }), /Restored 1 of 2 child Rooms.*stopped at c/);
+  vscode.window.showQuickPick = async () => undefined;
+  assert.equal(await hydrateChildren(vscode, { ...callbacks, enterBatch: assert.fail }), "cancelled");
+  const localState = row => row.path === "a" ? "restored" : row.path === "b" ? "occupied" : "missing";
+  vscode.window.showQuickPick = async rows => {
+    assert.deepEqual(rows.map(row => row.label), ["c"]);
+    return rows;
+  };
+  assert.equal((await hydrateChildren(vscode, { ...callbacks, localState })).restored[0].snapshot_id, "jat-c");
+  await assert.rejects(hydrateChildren(vscode, { ...callbacks, localState, childPaths: ["c", "b"], enterBatch: assert.fail }),
+    /selected child is unavailable/);
+  let opened;
+  assert.equal(await enterChild(vscode, { ...callbacks, childPath: "a", localState, enter: assert.fail,
+    open: async target => { opened = target; } }), "opened");
+  assert.equal(opened, require("node:path").resolve(callbacks.root, "a"));
 });

@@ -90,3 +90,19 @@ test("32 of 33 immediate folders can be checked", async () => {
     await tree.cleanup();
   }
 });
+
+test("split picker omits Git metadata, retains earlier choices, and accepts clearing every split", async () => {
+  const tree = await sourceTree(async root => {
+    for (const folder of [".git", "notes", "service"]) await fs.mkdir(path.join(root, folder));
+  });
+  try {
+    const vscode = { window: { showQuickPick: async (items, options) => {
+      assert.deepEqual(items, [{ label: "notes" }, { label: "service", picked: true }]);
+      assert.match(options.placeHolder, /Other eligible folders stay in the Catalog/);
+      return [];
+    } } };
+    assert.deepEqual(await selectCatalogChildren(vscode, tree.root, { selected: ["service"] }), []);
+  } finally {
+    await tree.cleanup();
+  }
+});

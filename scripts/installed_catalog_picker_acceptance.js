@@ -44,10 +44,8 @@ async function exercisePicker({ command, vscode, renderer, cli, base, ready, scr
     assert.ok(!fs.existsSync(path.join(root, selected)));
     const result = vscode.commands.executeCommand(command);
     await choosePath("Enter child Room");
-    await until(() => message("Child Room verified at exact recovery point " + pins.updated_child), "verified pinned child", 180000);
-    await vscode.commands.executeCommand("notifications.clearAll");
     await result;
-    await until(() => fs.existsSync(enterReceipt), "opened child editor");
+    await until(() => fs.existsSync(enterReceipt), "verified pinned child in opened editor", 180000);
     return;
   }
   assert.equal(command, "joshRoom.refreshCatalogPins");

@@ -6,6 +6,7 @@ installed VSIX qualification. All source names and identities are synthetic.
 
 import hashlib
 import io
+import json
 import os
 import shutil
 import sqlite3
@@ -46,6 +47,16 @@ class SQLiteS3:
         if row is None:
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
         return {"Body": io.BytesIO(row[0]), "ETag": hashlib.sha256(row[0]).hexdigest()}
+
+    def list_objects_v2(self, Bucket, Prefix, Delimiter, MaxKeys, ContinuationToken=None):
+        keys = [key for (key,) in self.db.execute("select key from objects where bucket=?", (Bucket,))
+                if key.startswith(Prefix)]
+        prefixes = sorted({Prefix + key[len(Prefix):].split(Delimiter, 1)[0] + Delimiter
+                           for key in keys if Delimiter in key[len(Prefix):]})
+        offset = int(ContinuationToken or 0)
+        end = offset + MaxKeys
+        return {"CommonPrefixes": [{"Prefix": prefix} for prefix in prefixes[offset:end]],
+                "IsTruncated": end < len(prefixes), "NextContinuationToken": str(end)}
 
     def put_object(self, Bucket, Key, Body, IfNoneMatch=None, IfMatch=None):
         with self.db:
@@ -111,7 +122,7 @@ def runtime(tmp_path):
             repository=tmp_path / "composition-repository",
             password_file=password,
             cache_dir=private / "cache",
-            executable=os.environ.get("JOSH_ROOM_TEST_RESTIC", shutil.which("restic")),
+            executable=executable,
         )
 
     source = tmp_path / "source"
@@ -134,6 +145,7 @@ def runtime(tmp_path):
         dimension=dimension,
         authority=authority,
         factory=factory,
+        restic_executable=executable,
         transport=transport,
         assignments=assignments,
         tmp=tmp_path,
@@ -271,21 +283,43 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     ]
     preview = capture_plan(
         r.source, r.dimension, NAMESPACE, "parent", assignments,
-        root_files_only=True,
+        root_files_only=True, parent_name="Synthetic Projects",
     )
     assert preview["request"]["root_files_only"] is True
     assert preview["request"]["assignments"] == assignments
+    assert preview["request"]["parent_name"] == "Synthetic Projects"
+    with pytest.raises(ValueError, match="approval is stale"):
+        save_composition(
+            r.source, r.dimension, NAMESPACE, "parent", assignments,
+            preview["approval_sha256"], r.authority, r.factory, r.private,
+            root_files_only=True, parent_name="Changed Catalog Name",
+        )
     saved = save_composition(
         r.source, r.dimension, NAMESPACE, "parent", assignments,
         preview["approval_sha256"], r.authority, r.factory, r.private,
-        root_files_only=True,
+        root_files_only=True, parent_name="Synthetic Projects",
     )
+    from josh_room.composition_discovery import discover_catalogs
+
+    other_namespace = "2" * 32
+    bucket = r.dimension.bucket
+    original = r.transport.get_object(Bucket=bucket, Key=f"composition/v1/{NAMESPACE}/authority.age")["Body"].read()
+    r.transport.put_object(Bucket=bucket, Key=f"composition/v1/{other_namespace}/authority.age", Body=original)
+    writes = r.transport.writes
+    discovery = discover_catalogs(SimpleNamespace(client=r.transport), r.dimension, r.authority.material)
+    assert discovery["catalog_discovery_partial"] is True
+    assert [(row["namespace"], row["parent_room_id"]) for row in discovery["catalogs"]] == [(NAMESPACE, "parent")]
+    assert discovery["catalogs"][0]["recovery_points"][0]["snapshot_id"] == saved["parent_snapshot_id"]
+    assert discovery["catalogs"][0]["display_name"] == "Synthetic Projects"
+    assert discovery["catalogs"][0]["recovery_points"][0]["children"] == ["a", "b"]
+    assert r.transport.writes == writes
     target = r.tmp / "root-files-only-entered"
     parent = hydrate_composition(
         r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
         target, r.authority, r.factory, r.private,
     )
     assert parent["marker_verified"]
+    assert json.loads((target / ".josh-room.json").read_text())["display_name"] == "Synthetic Projects"
     assert (target / "notes.txt").read_text() == "parent note\n"
     assert not any((target / path).exists() for path in ("a", "b", "local"))
 
@@ -297,6 +331,95 @@ def test_root_files_only_synthetic_transport_parent_restore_and_child_enter(runt
     assert (target / "a/grandchild/deep.txt").read_text() == "whole child payload\n"
     assert not (target / "b").exists()
     assert not (target / "local").exists()
+
+    args = (r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
+            target, r.authority, r.factory, r.private)
+    with pytest.raises(ValueError, match="not in the selected authority"):
+        hydrate_composition(*args, child_paths=["b", "absent"])
+    assert not (target / "b").exists()
+    (target / "b").mkdir()
+    (target / "b/user.txt").write_text("keep this")
+    partial = hydrate_composition(*args, child_paths=["a", "b"])
+    assert partial["status"] == "partial"
+    assert partial["failed_index"] == 1
+    assert partial["restored"] == [{**child, "status": "loaded"}]
+    assert (target / "b/user.txt").read_text() == "keep this"
+    (target / "b/user.txt").unlink()
+    (target / "b").rmdir()
+    batch = hydrate_composition(*args, child_paths=["a", "b"])
+    assert batch["status"] == "hydrated"
+    assert [row["status"] for row in batch["restored"]] == ["loaded", "hydrated"]
+    assert (target / "b").is_dir()
+
+    from josh_room.composition_updates import open_catalog_snapshot, refresh_parent
+    from josh_room.room_store_lifecycle import inspect_catalog_room_store
+
+    (target / "root-edit.txt").write_text("catalog edit\n")
+    (target / "local-only").mkdir()
+    (target / "local-only/private.txt").write_text("local only\n")
+    (target / "a/README.md").write_text("independent child edit\n")
+    parent_save = (r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"], "catalog-save",
+                   {}, r.authority, r.factory, r.private)
+    save_options = {"workspace": target, "save_root": True}
+    preview = refresh_parent(*parent_save, **save_options)
+    (target / "root-edit.txt").write_text("changed after review\n")
+    writes = r.transport.writes
+    with pytest.raises(ValueError, match="approval differs"):
+        refresh_parent(*parent_save, **save_options, approval=preview["approval_sha256"])
+    assert r.transport.writes == writes
+    (target / "root-edit.txt").write_text("catalog edit\n")
+    updated = refresh_parent(*parent_save, **save_options, approval=preview["approval_sha256"])
+    assert updated["marker_verified"]
+    assert json.loads((target / ".josh-room.json").read_text())["snapshot_id"] == updated["snapshot_id"]
+    recovered = r.tmp / "updated-catalog"
+    hydrate_composition(r.dimension, NAMESPACE, "parent", updated["snapshot_id"],
+                        recovered, r.authority, r.factory, r.private)
+    assert (recovered / "root-edit.txt").read_text() == "catalog edit\n"
+    assert (recovered / ".josh-room-composition.json").read_bytes() == (target / ".josh-room-composition.json").read_bytes()
+    assert not (recovered / "a").exists()
+    assert not (recovered / "local-only").exists()
+    with open_catalog_snapshot(r.dimension, NAMESPACE, child["room_id"], child["snapshot_id"],
+                               r.authority, r.factory, r.private) as context:
+        assert inspect_catalog_room_store(context)["logical_jat_id"] == child["snapshot_id"]
+
+    from josh_room.composition_retirement import preview_retirement, retire
+
+    backend = SimpleNamespace(client=r.transport)
+    catalog = discovery["catalogs"][0]
+    assert [room["path"] for room in catalog["child_rooms"]] == ["a", "b"]
+    from josh_room.cli import _bounded_json_result
+
+    wire = _bounded_json_result({"ok": True, "dimensions": [discovery]})
+    wire_catalog = wire["dimensions"][0]["catalogs"][0]
+    assert wire_catalog["child_recovery_points"] == catalog["child_recovery_points"]
+    assert len(wire_catalog["child_recovery_points"]) == 2
+    assert all(point["pinned"] and point["created_at"] for point in wire_catalog["child_recovery_points"])
+
+    def remove(kind, room=None, snapshot=None):
+        args = r.authority, NAMESPACE, kind, room, snapshot
+        preview = preview_retirement(*args)
+        assert preview["can_apply"]
+        return retire(*args, approved_plan_sha256=preview["approval_sha256"])
+
+    remove("recovery-point", "parent", saved["parent_snapshot_id"])
+    remove("recovery-point", "parent", updated["snapshot_id"])
+    catalog = discover_catalogs(backend, r.dimension, r.authority.material)["catalogs"][0]
+    assert catalog["recovery_points"] == []
+    assert len(catalog["child_rooms"]) == 2
+    with pytest.raises(ValueError, match="retired"):
+        hydrate_composition(r.dimension, NAMESPACE, "parent", saved["parent_snapshot_id"],
+                            r.tmp / "retired-parent", r.authority, r.factory, r.private)
+    for point in catalog["child_recovery_points"]:
+        assert not point["pinned"]
+        remove("recovery-point", point["room_id"], point["snapshot_id"])
+    for room in catalog["child_rooms"]:
+        remove("room", room["room_id"])
+    remove("catalog")
+    assert discover_catalogs(backend, r.dimension, r.authority.material)["catalogs"] == []
+    with (pytest.raises(ValueError, match="retired"),
+          open_catalog_snapshot(r.dimension, NAMESPACE, child["room_id"], child["snapshot_id"],
+                                r.authority, r.factory, r.private)):
+        pytest.fail("retired Catalog point exposed a store")
 
 
 def test_git_only_child_update_and_historical_cold_hydration(runtime):
@@ -391,7 +514,9 @@ def test_stale_approval_and_unassigned_capture_are_zero_provider_writes(runtime)
     assert r.transport.writes == 0
 
 
-def test_dirty_parent_and_wrong_namespace_never_create_child(runtime):
+def test_restore_after_parent_edit_keeps_edits_and_checks_manifest(runtime, monkeypatch):
+    from josh_room import composition_lifecycle as lifecycle
+
     r = runtime
     result = save(r)
     target = r.tmp / "entered-parent"
@@ -406,19 +531,33 @@ def test_dirty_parent_and_wrong_namespace_never_create_child(runtime):
         r.private,
     )
     (target / "notes.txt").write_text("unsaved changes")
-    with pytest.raises(ValueError, match="parent has changed"):
-        hydrate_composition(
-            r.dimension,
-            NAMESPACE,
-            "parent",
-            result["parent_snapshot_id"],
-            target,
-            r.authority,
-            r.factory,
-            r.private,
-            child_path="a",
-        )
-    assert not (target / "a").exists()
+    original_scan = lifecycle.scan_workspace_for_status
+    def scan_after_editor_write(workspace):
+        if workspace == target / "a":
+            (workspace / "editor.txt").write_text("edit after promotion")
+        return original_scan(workspace)
+    monkeypatch.setattr(lifecycle, "scan_workspace_for_status", scan_after_editor_write)
+    args = (r.dimension, NAMESPACE, "parent", result["parent_snapshot_id"],
+            target, r.authority, r.factory, r.private)
+    receipt = hydrate_composition(*args, child_paths=["a", "b"])
+    assert receipt["status"] == "hydrated"
+    assert len(receipt["restored"]) == 2
+    assert receipt["restored"][0]["local_changes"]
+    assert receipt["restored"][0]["marker_verified"]
+    assert (target / "notes.txt").read_text() == "unsaved changes"
+    assert (target / "a/editor.txt").read_text() == "edit after promotion"
+    from josh_room.composition_updates import catalog_workspace_status
+
+    status = catalog_workspace_status(target)
+    assert status["state"] == "changed"
+    assert [(row["path"], row["state"]) for row in status["catalog_children"]] == [("a", "changed"), ("b", "clean")]
+    assert (target / "b/.josh-room.json").is_file()
+    broken = r.tmp / "edited-manifest"
+    hydrate_composition(*args[:4], broken, *args[5:])
+    (broken / ".josh-room-composition.json").write_text("{}")
+    with pytest.raises(ValueError, match="manifest, or capture policy changed"):
+        hydrate_composition(*args[:4], broken, *args[5:], child_path="b")
+    assert not (broken / "b").exists()
     other = CompositionAuthority(
         SimpleNamespace(client=r.transport),
         r.dimension,
@@ -454,7 +593,7 @@ def test_inherited_exclusions_nested_child_and_legacy_optimize(runtime):
     git(r.source, "init", "-q")
     git(r.source, "add", ".")
     r.assignments[1]["path"] = "projects/a"
-    with pytest.raises(ValueError, match="cohesive Git repository"):
+    with pytest.raises(ValueError, match="Save it as one Room to preserve Git history"):
         capture_plan(r.source, r.dimension, NAMESPACE, "parent", r.assignments)
     assert r.transport.writes == 0
     (r.source / ".josh-roomignore").write_text("# josh-room capture-mode: source-only\nprojects/a/private/**\n")
@@ -494,7 +633,7 @@ def test_inherited_exclusions_nested_child_and_legacy_optimize(runtime):
         repository=r.tmp / "legacy-repository",
         cache_dir=r.private / "legacy-cache",
         password_file=password,
-        executable=os.environ["JOSH_ROOM_TEST_RESTIC"],
+        executable=r.restic_executable,
     ) as store:
         legacy_repo = store.initialize()
         store.backup(r.source / "b")
@@ -646,7 +785,7 @@ def test_provider_runtime_uses_actual_binding_and_composition_locator(
     monkeypatch.setattr(
         room_store_bridge,
         "_verified_restic_executable",
-        lambda **_: os.environ["JOSH_ROOM_TEST_RESTIC"],
+        lambda **_: r.restic_executable,
     )
     monkeypatch.setattr(room_store_bridge, "_provider_environment", lambda _: {})
     locators = []

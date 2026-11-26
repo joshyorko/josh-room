@@ -285,6 +285,73 @@ function snapshotRecords(project) {
   }));
 }
 
+function catalogNodes(dimension) {
+  const parents = records(dimension.catalogs, "parent_room_id").flatMap(catalog => {
+    if (!/^[a-f0-9]{32}$/.test(catalog.namespace) || !catalog.parent_room_id) return [];
+    const points = records(catalog.recovery_points, "snapshot_id").filter(point => /^jat-[a-z0-9-]+$/.test(point.snapshot_id)
+      && Number.isFinite(Date.parse(point.created_at)))
+      .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+    const retirement = Array.isArray(catalog.child_rooms);
+    if (!points.length && !retirement) return [];
+    const parent = {
+      kind: "catalog-parent", id: `${catalog.namespace}:${catalog.parent_room_id}`,
+      label: catalog.display_name || "Catalog Room",
+      description: points.length ? new Date(points[0].created_at).toLocaleString() : "No recovery points",
+      catalog, dimension, retirement,
+    };
+    parent.children = points.map(point => ({
+      kind: "catalog-point", id: `${parent.id}:${point.snapshot_id}`,
+      label: new Date(point.created_at).toLocaleString(),
+      description: `${point.child_count} child ${point.child_count === 1 ? "Room" : "Rooms"}`,
+      catalog, point, dimension, retirement,
+    }));
+    const pinnedByPath = new Map();
+    for (const point of points) {
+      for (const child of Array.isArray(point.children) ? point.children : []) {
+        if (typeof child === "string" && !pinnedByPath.has(child)) pinnedByPath.set(child, point);
+      }
+    }
+    const pointsByRoom = new Map();
+    for (const point of records(catalog.child_recovery_points, "snapshot_id")) {
+      const history = pointsByRoom.get(point.room_id) || [];
+      history.push(point);
+      pointsByRoom.set(point.room_id, history);
+    }
+    const childRows = records(catalog.child_rooms, "room_id").map(room => {
+      const point = pinnedByPath.get(room.path);
+      pinnedByPath.delete(room.path);
+      const history = (pointsByRoom.get(room.room_id) || records(room.recovery_points, "snapshot_id"))
+        .filter(point => /^jat-[a-z0-9-]+$/.test(point.snapshot_id));
+      const count = history.length;
+      return {
+        kind: "catalog-child-room", id: `${parent.id}:room:${room.room_id}`, label: room.path,
+        description: `${count} recovery ${count === 1 ? "point" : "points"}`,
+        catalog, dimension, room, point, child: room.path,
+        children: history.map(point => ({
+          kind: "catalog-child-point", id: `${parent.id}:${room.room_id}:${point.snapshot_id}`,
+          label: Number.isFinite(Date.parse(point.created_at)) ? new Date(point.created_at).toLocaleString() : "Date unavailable",
+          description: point.pinned === true ? "Pinned" : "",
+          catalog, dimension, room, point,
+        })),
+      };
+    });
+    for (const [child, point] of pinnedByPath) {
+      childRows.push({ kind: "catalog-child", id: `${parent.id}:child:${child}`,
+        label: child, catalog, point, dimension, child });
+    }
+    if (childRows.length) parent.children.push({
+      kind: "catalog-child-history", id: `${parent.id}:history`, label: "Child Rooms",
+      description: String(childRows.length), children: childRows,
+    });
+    return [parent];
+  });
+  if (dimension.catalog_discovery_partial) parents.push({
+    kind: "catalog-partial", id: "catalog-partial", label: "Catalog discovery incomplete", dimension,
+    description: "Some Catalogs could not be checked",
+  });
+  return parents;
+}
+
 function buildProviderTree(catalog = {}) {
   const dimensions = records(catalog.dimensions);
   const connections = connectionRecords(catalog);
@@ -378,7 +445,7 @@ function buildProviderTree(catalog = {}) {
         error: loadError,
         dimension,
         connection,
-      }] : connectionState === "connected" ? roomNodes : [],
+      }] : connectionState === "connected" ? [...catalogNodes(dimension), ...roomNodes] : [],
     };
     let connectionNode = connectionNodes.get(`${providerId}:${connectionId}`);
     if (!connectionNode) {

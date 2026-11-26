@@ -2,6 +2,8 @@
 const path = require("path");
 const crypto = require("crypto");
 
+const SPLIT_CHILDREN = "Split folders into Rooms…";
+
 function relativeSource(root, value) {
   const relative = path.relative(root, value);
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -62,17 +64,17 @@ function reviewedDestination(dimension, binding) {
   };
 }
 
-function reviewCatalog(vscode, root, destination, children) {
+function reviewCatalog(vscode, name, destination, children, preservation) {
   const heading = label => ({ label, kind: vscode.QuickPickItemKind.Separator });
   const parent = {
     label: "$(root-folder) Catalog parent",
-    description: "Eligible root files and child Room links",
-    detail: "Checked folders include nested content. Unchecked folders stay local.",
+    description: preservation ? "Eligible files and folders" : "Eligible root files and child Room links",
+    detail: preservation ? preservation.detail : "Checked folders include nested content. Unchecked folders stay local.",
     alwaysShow: true,
   };
   const picker = vscode.window.createQuickPick();
-  picker.title = `Review Catalog · ${path.basename(root) || root} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
-  picker.placeholder = "Review the plan, then choose Save catalog, Advanced settings, or Cancel";
+  picker.title = `Review Catalog · ${name} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
+  picker.placeholder = "Review what will be saved";
   picker.matchOnDescription = true;
   picker.matchOnDetail = true;
   picker.ignoreFocusOut = true;
@@ -81,11 +83,16 @@ function reviewCatalog(vscode, root, destination, children) {
     { label: "Connection", description: destination.connection },
     { label: "Dimension", description: destination.dimension },
     heading("Capture"), parent,
+    ...(preservation?.localOnly.length ? [
+      heading("Stays on this device"),
+      ...preservation.localOnly.map(relative => ({ label: relative.replaceAll("$(", "\\$("), description: "Left local by request" })),
+    ] : []),
     heading("Actions"),
     { label: "$(check) Save catalog", action: "Save catalog" },
-    { label: "$(settings-gear) Advanced settings", action: "Advanced settings" },
+    ...(preservation ? [{ label: `$(split-horizontal) ${SPLIT_CHILDREN}`, action: SPLIT_CHILDREN }] : []),
+    ...(children.length ? [{ label: "$(settings-gear) Advanced settings", action: "Advanced settings" }] : []),
     { label: "$(close) Cancel", action: "Cancel" },
-    heading("Child Rooms"), ...children,
+    ...(children.length ? [heading("Child Rooms"), ...children] : []),
   ];
   return new Promise(resolve => {
     let action;
@@ -140,28 +147,54 @@ async function catalogSettings(vscode, root, assignments, chooseComponents) {
   }
 }
 
-async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponents, plan, save }) {
+async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponents, plan, save, preserveByDefault = false, onSaved }) {
   const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!source?.length) return "cancelled";
   const root = source[0].fsPath;
-  const children = await selectChildren(root);
-  if (!children?.length) return "cancelled";
+  const children = preserveByDefault ? [] : await selectChildren(root);
+  if (!children || (!preserveByDefault && !children.length)) return "cancelled";
+  const validateName = value => !value.trim() || [...value.trim()].length > 100 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
+    ? "Enter a Catalog name on one line, up to 100 characters." : undefined;
+  const name = await vscode.window.showInputBox({ title: "Name the Catalog Room",
+    value: path.basename(root) || "Catalog Room", validateInput: validateName });
+  if (name === undefined) return "cancelled";
+  if (validateName(name)) throw new Error(validateName(name));
   let assignments = children.map(path => ({ path, outcome: "child" }));
+  const editSplits = async () => {
+    const selected = await selectChildren(root, assignments.filter(row => row.outcome === "child").map(row => row.path));
+    if (selected === undefined) return;
+    const old = new Map(assignments.filter(row => row.outcome === "child").map(row => [row.path, row]));
+    assignments = [
+      ...selected.map(path => old.get(path) || { path, outcome: "child" }),
+      ...assignments.filter(row => row.outcome === "local-only" && !selected.includes(row.path)),
+    ];
+  };
   const configured = await dimensions(root);
   const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Where should this catalog be saved?" });
   if (!choice) return "cancelled";
   const namespace = crypto.randomUUID().replaceAll("-", "");
   const parentRoom = `catalog-${namespace}`;
-  let selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
+  const sourceSelection = { root, namespace, parentRoom, name: name.trim(), dimension: choice.dimension };
   for (;;) {
+    const selection = { ...sourceSelection, assignments };
     let preview;
     try {
       preview = await plan(selection);
     } catch (error) {
       const failure = error.result;
+      if (preserveByDefault && ["composition-preservation-git", "composition-preservation-boundary"].includes(failure?.error_code)) {
+        const retry = "Check again";
+        const decision = await vscode.window.showWarningMessage("Catalog needs attention", {
+          modal: true, detail: error.message,
+        }, SPLIT_CHILDREN, retry);
+        if (decision === SPLIT_CHILDREN) await editSplits();
+        else if (decision !== retry) return "cancelled";
+        continue;
+      }
       const filesOnly = failure?.error_code === "composition-child-git-files-only";
       if (!filesOnly && failure?.error_code !== "composition-child-room-metadata") throw error;
-      const child = assignments.find(row => crypto.createHash("sha256").update(row.path).digest("hex") === failure.child_path_sha256);
+      const child = assignments.find(row => row.outcome === "child"
+        && crypto.createHash("sha256").update(row.path).digest("hex") === failure.child_path_sha256);
       if (!child || (filesOnly && child.capture_mode === "source-only")) throw error;
       const action = filesOnly ? "Review files only" : "Leave folder local";
       const detail = filesOnly
@@ -170,18 +203,20 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
       if (await vscode.window.showWarningMessage(child.path, { modal: true, detail }, action) !== action) return "cancelled";
       assignments = filesOnly
         ? assignments.map(row => row === child ? { ...row, capture_mode: "source-only" } : row)
-        : assignments.filter(row => row !== child);
-      if (!assignments.length) return "cancelled";
-      selection = { ...selection, assignments };
+        : preserveByDefault
+          ? assignments.map(row => row === child ? { path: row.path, outcome: "local-only" } : row)
+          : assignments.filter(row => row !== child);
+      if (!preserveByDefault && !assignments.length) return "cancelled";
       continue;
     }
     if (preview === undefined) return "cancelled";
     const destination = reviewedDestination(choice.dimension, preview.request?.destination_binding);
+    const childAssignments = assignments.filter(row => row.outcome === "child");
     const evidenceByChild = preview.request.child_evidence;
-    if (Object.keys(evidenceByChild || {}).length !== assignments.length) {
+    if (Object.keys(evidenceByChild || {}).length !== childAssignments.length) {
       throw new Error("The controller returned different Catalog child folders. Review the selection again.");
     }
-    const childSummary = assignments.map(row => {
+    const childSummary = childAssignments.map(row => {
       const evidence = Object.hasOwn(evidenceByChild, row.path) ? evidenceByChild[row.path] : undefined;
       const mode = describeMode(evidence?.capture_mode);
       const git = mode === "Files and Git history" ? "Files + Git if present" : "Files only";
@@ -192,30 +227,64 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
         ...(components === "Workspace only" ? {} : { detail: components }),
       };
     });
-    const approved = await reviewCatalog(vscode, root, destination, childSummary);
+    let preservation;
+    if (preserveByDefault) {
+      const expected = new Map([[".", "parent"], ...assignments.map(row => [row.path, row.outcome])]);
+      const reviewed = preview.request.assignments;
+      if (preview.request.preserve_content !== true || !Array.isArray(reviewed) || reviewed.length !== expected.size
+          || !reviewed.every(row => row && expected.get(row.path) === row.outcome && expected.delete(row.path))) {
+        throw new Error("The controller did not verify the whole-folder capture plan.");
+      }
+      const mode = describeMode(preview.request.capture_mode);
+      const count = preview.request.parent_git_count ?? preview.parent_git_count;
+      const git = mode === "Files and Git history"
+        ? Number.isSafeInteger(count) && count >= 0
+          ? `${count} Git ${count === 1 ? "repository" : "repositories"} in the Catalog parent.`
+          : "Eligible Git repositories stay with their folders."
+        : "The source policy excludes Git history.";
+      preservation = {
+        detail: `${git} Capture policy exclusions stay local.`,
+        localOnly: assignments.filter(row => row.outcome === "local-only").map(row => row.path),
+      };
+    }
+    const approved = await reviewCatalog(vscode, selection.name, destination, childSummary, preservation);
+    if (approved === SPLIT_CHILDREN) {
+      await editSplits();
+      continue;
+    }
     if (approved === "Advanced settings") {
-      const edited = await catalogSettings(vscode, root, assignments, chooseComponents);
+      const edited = await catalogSettings(vscode, root, childAssignments, chooseComponents);
       if (!edited) return "cancelled";
-      assignments = edited;
-      selection = { ...selection, assignments };
+      assignments = [...edited, ...assignments.filter(row => row.outcome === "local-only")];
       continue;
     }
     if (approved !== "Save catalog") return "cancelled";
     const result = await save(selection, preview.approval_sha256);
+    if (onSaved && (result?.ok !== true || result.namespace !== selection.namespace
+        || result.parent_room_id !== selection.parentRoom || typeof result.parent_snapshot_id !== "string"
+        || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(result.parent_snapshot_id)
+        || result.parent_snapshot_id.toLowerCase() === "latest")) {
+      throw new Error("The controller could not verify the saved Catalog recovery point.");
+    }
+    const receipt = {
+      dimension_id: preview.request.destination_binding.dimension_id,
+      namespace: result.namespace,
+      parent_room_id: result.parent_room_id,
+      parent_snapshot_id: result.parent_snapshot_id,
+    };
+    if (onSaved) {
+      await onSaved(receipt);
+      return result;
+    }
     const copy = "Copy recovery receipt";
-    if (await vscode.window.showInformationMessage(`Catalog saved with ${assignments.length} child Room${assignments.length === 1 ? "" : "s"}.`, copy) === copy) {
-      await vscode.env.clipboard.writeText(JSON.stringify({
-        dimension_id: preview.request.destination_binding.dimension_id,
-        namespace: result.namespace,
-        parent_room_id: result.parent_room_id,
-        parent_snapshot_id: result.parent_snapshot_id,
-      }, null, 2));
+    if (await vscode.window.showInformationMessage(`Catalog saved with ${childAssignments.length} child Room${childAssignments.length === 1 ? "" : "s"}.`, copy) === copy) {
+      await vscode.env.clipboard.writeText(JSON.stringify(receipt, null, 2));
     }
     return result;
   }
 }
 
-async function chooseChild(vscode, marker, listChildren, refresh) {
+async function pinnedChildChoices(marker, listChildren, refresh) {
   if (!marker?.composition_namespace || !marker?.project_id || !marker?.snapshot_id || !marker?.dimension_id) {
     throw new Error("Open a restored Catalog parent first.");
   }
@@ -233,6 +302,16 @@ async function chooseChild(vscode, marker, listChildren, refresh) {
     }
     offset = page.next_offset;
   } while (offset !== null);
+  return { choices, revision };
+}
+
+async function chooseChild(vscode, marker, listChildren, refresh, childPath) {
+  const { choices, revision } = await pinnedChildChoices(marker, listChildren, refresh);
+  if (childPath !== undefined) {
+    const pinned = choices.find(choice => choice.row.path === childPath);
+    if (!pinned) throw new Error("The selected child is unavailable at this Catalog recovery point.");
+    return { ...pinned.row, revision };
+  }
   if (!choices.length) {
     await vscode.window.showInformationMessage(refresh ? "All child Rooms are pinned to their only saved recovery point." : "This parent has no child Rooms.");
     return undefined;
@@ -267,19 +346,81 @@ async function chooseRecoveryPoint(vscode, marker, child, listChildren) {
   }
 }
 
-async function enterChild(vscode, { root, marker, listChildren, enter, open }) {
-  const row = await chooseChild(vscode, marker, listChildren, false);
-  if (!row) return "cancelled";
+async function hydratePinnedChild(root, marker, row, enter) {
   const target = path.resolve(root, row.path);
   relativeSource(root, target);
   const result = await enter({ namespace: marker.composition_namespace, child: row.path, marker });
-  if (!result?.ok || !result.marker_verified || result.namespace !== marker.composition_namespace
-      || result.room_id !== row.room_id || result.snapshot_id !== row.snapshot_id) {
+  if (!matchesPinnedChild(marker, row, result)) {
     throw new Error("Child entry did not verify the selected recovery point. Preserve the destination.");
   }
-  await vscode.window.showInformationMessage(`Child Room verified at exact recovery point ${result.snapshot_id}.`);
+  return { result, target };
+}
+
+function matchesPinnedChild(marker, row, result) {
+  return result?.ok && result.marker_verified && result.namespace === marker.composition_namespace
+    && result.room_id === row.room_id && result.snapshot_id === row.snapshot_id;
+}
+
+async function enterChild(vscode, { root, marker, listChildren, enter, open, childPath, notify = true, localState = () => "missing" }) {
+  const row = await chooseChild(vscode, marker, listChildren, false, childPath);
+  if (!row) return "cancelled";
+  const state = localState(row);
+  if (state === "restored") {
+    const target = path.resolve(root, row.path);
+    relativeSource(root, target);
+    await open(target);
+    return "opened";
+  }
+  if (state === "occupied") throw new Error("The child folder is occupied. Choose a new Catalog restore location.");
+  const { result, target } = await hydratePinnedChild(root, marker, row, enter);
+  if (notify || result.local_changes) {
+    void vscode.window.showInformationMessage(result.local_changes
+      ? "Child Room restored. Local files changed after restore."
+      : `Child Room verified at exact recovery point ${result.snapshot_id}.`);
+  }
   await open(target);
   return result;
+}
+
+async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch, childPaths, notify = true, localState = () => "missing" }) {
+  const { choices } = await pinnedChildChoices(marker, listChildren, false);
+  const missing = choices.filter(choice => localState(choice.row) === "missing");
+  if (childPaths === undefined && !missing.length) {
+    void vscode.window.showInformationMessage("No child Rooms are available to restore here. Check Open Workspace for folder status.");
+    return "cancelled";
+  }
+  const selected = childPaths ?? (await vscode.window.showQuickPick(missing, { canPickMany: true,
+    title: "Restore Catalog child Rooms", placeHolder: "Check the missing child Rooms to restore, or use Select All." }))?.map(choice => choice.label);
+  if (!selected?.length) return "cancelled";
+  const pinned = [...new Set(selected)].map(label => missing.find(choice => choice.label === label));
+  if (pinned.some(choice => !choice)) throw new Error("A selected child is unavailable at this Catalog recovery point.");
+  const children = pinned.map(choice => choice.row);
+  for (const row of children) relativeSource(root, path.resolve(root, row.path));
+  const batch = await enterBatch(children.map(row => row.path));
+  const restored = batch?.restored;
+  if (!batch?.ok || batch.namespace !== marker.composition_namespace || batch.parent_snapshot_id !== marker.snapshot_id
+      || !Array.isArray(restored) || restored.length > children.length
+      || !restored.every((result, index) => matchesPinnedChild(marker, children[index], result))) {
+    throw new Error("The controller could not verify the batch restore. Check Open Workspace for folder status.");
+  }
+  if (batch.status === "partial" && batch.failed_index === restored.length && restored.length < children.length) {
+    const reason = {
+      "child-destination-present": "The folder already exists. Open it to check its contents.",
+      "child-insufficient-space": "There is insufficient disk space.",
+      "parent-binding-changed": "The Catalog binding or capture policy changed.",
+      "child-validation-failed": "The controller could not verify the child payload.",
+    }[batch.failure];
+    throw new Error(`Restored ${restored.length} of ${children.length} child Rooms. Restore stopped at ${children[batch.failed_index].path}.${reason ? ` ${reason}` : ""}`);
+  }
+  if (batch.status !== "hydrated" || restored.length !== children.length) {
+    throw new Error("The controller returned an incomplete batch restore receipt. Check Open Workspace for folder status.");
+  }
+  if (notify) {
+    const changed = restored.filter(result => result.local_changes === true).length;
+    const summary = `Restored ${restored.length} child ${restored.length === 1 ? "Room" : "Rooms"}.`;
+    void vscode.window.showInformationMessage(changed ? `${summary} Local files changed after restore in ${changed}.` : summary);
+  }
+  return { ok: true, restored };
 }
 
 function savedComponents(components) {
@@ -315,18 +456,29 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
   }
   const preview = await plan(ticket);
   if (ticket.approval && ticket.approval !== preview.approval_sha256) throw new Error("Pending approval changed. Preserve the operation receipt; do not start a blind retry.");
-  const action = kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
+  const action = kind === "catalog" ? "Save Catalog" : kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
+  if (kind === "catalog" && !preview.changed && !pending) {
+    const result = await save({ ...ticket, approval: preview.approval_sha256 });
+    if (!result?.ok || result.status !== "unchanged" || !result.marker_verified) {
+      throw new Error("The saved Catalog baseline could not be verified.");
+    }
+    return result;
+  }
   const approved = await vscode.window.showWarningMessage(`${action}?`, { modal: true,
-    detail: `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. ${describeComponents(preview.request?.plan, ticket.component_options)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
+    detail: kind === "catalog" ? `Save the Catalog files as a new recovery point.${
+      preview.children_to_update?.length ? ` Update child Rooms: ${preview.children_to_update.join(", ")}.` : " Child recovery points stay as they are."}${
+      preview.retained_missing_children?.length ? ` Missing children keep their saved pins: ${preview.retained_missing_children.join(", ")}.` : ""}`
+      : `${kind === "child" ? `Child capture from disk: ${describeMode(preview.request?.plan?.capture_mode)}. ${describeComponents(preview.request?.plan, ticket.component_options)}. Editor buffers are not captured. Parent pins remain unchanged.` : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
   if (approved !== action) return "cancelled";
   ticket = { ...ticket, approval: preview.approval_sha256, output: preview.snapshot_id };
   const { component_options, ...retryTicket } = ticket;
   await remember(retryTicket);
   const result = await save(ticket);
-  if (!result?.ok || (kind === "child" && !result.marker_verified)) throw new Error("Composition update was not verified. Retain the pending operation for retry.");
+  if (!result?.ok || (kind !== "parent" && !result.marker_verified)) throw new Error("Composition update was not verified. Retain the pending operation for retry.");
   await remember(undefined);
+  if (kind === "catalog") return result;
   await vscode.window.showInformationMessage(`${kind === "child" ? "Child saved; parent pins unchanged" : "Parent pin published; working folders unchanged"}. Exact recovery point ${result.snapshot_id}.${kind === "child" ? ` ${savedComponents(result.components)}.` : ""}`);
   return result;
 }
 
-module.exports = { saveCatalog, enterChild, relativeSource, updateRoom };
+module.exports = { saveCatalog, enterChild, hydrateChildren, relativeSource, updateRoom };

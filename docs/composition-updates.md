@@ -53,6 +53,36 @@ baseline stays source-only. Recovering Git history requires a new capture from a
 repository that still has the objects and refs. Old parents retain their exact
 child points across updates and explicit parent refreshes.
 
+
+## Save an open Catalog
+
+Choose **Save Catalog** in the Rooms sidebar to review changes to the Catalog
+root and its entered child Rooms. The review lists which child pins will
+advance. Child Rooms that have yet to be restored keep their pinned recovery
+points. An occupied folder, link, unreadable path, or invalid child binding
+blocks the Save before publication. To save a child without advancing the
+parent, open that child and use **Save**.
+
+A changing whole-Catalog Save reserves encrypted authority capacity for its
+exact reviewed output before publishing any child point. While the intent is
+pending, other Saves and retirement are blocked in that Catalog. If the
+operation stops, run `composition save-intent --dimension <id> --namespace <id> --json`
+to recover its operation ID, approval digest, and child publication status.
+Resume with the same sources and approval. A child point can already be saved
+when the parent fails. A completed remote publication retains the exact
+operation binding for local marker repair. An uncommitted claimed slot can
+require operator reconciliation. A claim alone does not prove that the backup
+exists, and retry does not take over a claimed slot with no verified output.
+
+The reservation upgrades that Catalog's authority format. Older controllers
+refuse the new format. The existing ledger size and record limits still apply.
+
+The Rooms sidebar marks changes against each local Room's saved baseline,
+including terminal edits and changes found after reopening VS Code. Check
+the affected row in **Rooms** for live operation status. Click the Josh Room
+status item to view the current operation and available actions, such as
+cancelling, copying a recovery receipt, or opening the Output log.
+
 ## CLI
 
 Use `composition plan-child-save` with `--dimension`, `--namespace`, `--room`,

@@ -131,13 +131,15 @@ class Workbench:
             self.call(self.page.evaluate, "navigator.clipboard.writeText('')")
             if self.call(self.page.evaluate, "navigator.clipboard.readText()") != "":
                 raise AssertionError("Disposable clipboard did not clear")
-            saved_notice = self.page.locator(".notification-list-item").filter(
-                has_text="Catalog saved with 1 child Room."
-            )
-            receipt_button = saved_notice.get_by_text("Copy recovery receipt", exact=True)
-            if not receipt_button.is_visible():
-                self.call(self.page.locator('[id="status.notifications"]').click)
-            self.call(receipt_button.filter(visible=True).click)
+            if "joshRoom.showOperation" in self.titles:
+                self.command("joshRoom.showOperation")
+                self.choose("Copy Recovery Receipt")
+            else:
+                saved_notice = self.page.locator(".notification-list-item").filter(has_text="Catalog saved with")
+                receipt_button = saved_notice.get_by_text("Copy recovery receipt", exact=True)
+                if not receipt_button.is_visible():
+                    self.call(self.page.locator('[id="status.notifications"]').click)
+                self.call(receipt_button.filter(visible=True).click)
             point = read_receipt(self.page, self.call)
             if set(point) != {"dimension_id", "namespace", "parent_room_id", "parent_snapshot_id"} or any(not isinstance(x, str) or not re.fullmatch(r"[a-z0-9-]{1,100}", x) for x in point.values()):
                 raise ValueError("Unexpected recovery receipt contract")

@@ -31,12 +31,26 @@ def object_format(store):
                     result = value
                 elif (key == "worktreeconfig" and value is not None and value.lower() == "true"
                       and not any(os.path.lexists(store / entry)
-                                  for entry in ("config.worktree", "commondir", "gitdir", "worktrees"))):
-                    # An enabled flag without a worktree config or linked store is inert.
+                                  for entry in ("commondir", "gitdir", "worktrees"))
+                      and _portable_sparse_config(store / "config.worktree")):
                     continue
                 else:
                     raise ValueError("Catalog capture cannot verify this Git repository extension")
     return result
+
+
+def _portable_sparse_config(path):
+    if not os.path.lexists(path):
+        return True
+    config = configparser.RawConfigParser(strict=False, allow_no_value=True)
+    config.read_string(_text(path))
+    allowed = {"core": {"sparsecheckout", "sparsecheckoutcone"}, "index": {"sparse"}}
+    return bool(config.sections()) and not config.defaults() and all(
+        section.lower() in allowed and all(
+            key in allowed[section.lower()] and value is not None and value.lower() in {"true", "false"}
+            for key, value in config.items(section)
+        ) for section in config.sections()
+    )
 
 
 def verify_staged_git(root, paths, mode, private):
@@ -68,7 +82,7 @@ def verify_staged_git(root, paths, mode, private):
                 if source.exists():
                     (proof / name).symlink_to(source.absolute())
             for index in store.glob("sharedindex.*"):
-                (proof / index.name).symlink_to(index.absolute())
+                shutil.copyfile(index, proof / index.name)
             if format_name == "sha256":
                 (proof / "config").write_text("[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = sha256\n")
             env = {"PATH": os.defpath, "HOME": directory, "GIT_CONFIG_NOSYSTEM": "1",

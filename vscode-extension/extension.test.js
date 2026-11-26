@@ -3927,6 +3927,7 @@ test("fresh activation exposes an actionable idle runtime load without starting 
 test("registered prepare action starts once, reports sanitized runtime progress and publishes the loaded tree", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-prepare-action-"));
   const { vscode, commandCallbacks, treeViewCalls, progressReports, logLines, progressCalls } = createVscodeMock(root);
+  vscode.window.createOutputChannel().info = line => logLines.push(line);
   let catalogReads = 0;
   const spawnHarness = createSpawnHarness(({ args }) => {
     assert.deepEqual(args.slice(args.indexOf("--") + 1), ["python", "-m", "josh_room", "dimensions", "list", "--json"]);
@@ -3947,10 +3948,13 @@ test("registered prepare action starts once, reports sanitized runtime progress 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(acquisition.starts, 1);
   assert.equal(spawnHarness.calls.length, 0);
-  assert.equal(provider.getTreeItem(provider.getChildren()[0]).iconPath.id, "sync~spin");
+  assert.deepEqual(provider.getChildren(), []);
   assert.equal(progressCalls.length, 1);
-  assert.match(JSON.stringify(progressReports), /Downloading RCC/);
-  assert.match(JSON.stringify(progressReports), /RCC importing environment/);
+  assert.deepEqual(progressCalls[0].options.location, { viewId: "joshRoom.rooms" });
+  assert.deepEqual(treeViewCalls.map(call => call.id), ["joshRoom.rooms", "joshRoom.jatTools"]);
+  assert.doesNotMatch(JSON.stringify(progressReports), /Downloading RCC|RCC importing environment/);
+  assert.match(JSON.stringify(logLines), /Downloading RCC/);
+  assert.match(JSON.stringify(logLines), /RCC importing environment/);
   assert.doesNotMatch(JSON.stringify([progressReports, logLines]), /synthetic-private-result|synthetic-|runtime-token/);
   release();
   await Promise.all([first, second]);
@@ -4005,7 +4009,8 @@ test("runtime failure and cancellation expose real retry actions without startin
 
 test("cancelling one runtime consumer preserves preparation needed by another", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-shared-runtime-"));
-  const { vscode, progressCalls, progressReports } = createVscodeMock(root);
+  const { vscode, progressCalls, progressReports, logLines } = createVscodeMock(root);
+  vscode.window.createOutputChannel().info = line => logLines.push(line);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
   const extension = loadExtension(vscode, spawnHarness.spawn);
   let release;
@@ -4024,12 +4029,14 @@ test("cancelling one runtime consumer preserves preparation needed by another", 
   await Promise.all([rejection, second]);
   assert.equal(acquisition.starts, 1);
   assert.equal(spawnHarness.calls.length, 1);
-  assert.match(JSON.stringify(progressReports), /Importing controller Environment Artifact/);
+  assert.doesNotMatch(JSON.stringify(progressReports), /Importing controller Environment Artifact/);
+  assert.match(JSON.stringify(logLines), /Importing controller Environment Artifact/);
 });
 
 test("cancelling one JAT consumer preserves preparation and progress for another", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-shared-jat-"));
-  const { vscode, progressCalls, progressReports } = createVscodeMock(root);
+  const { vscode, progressCalls, progressReports, logLines } = createVscodeMock(root);
+  vscode.window.createOutputChannel().info = line => logLines.push(line);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
   const extension = loadExtension(vscode, spawnHarness.spawn);
   stubRuntimeAcquisition(t, extension);
@@ -4060,7 +4067,8 @@ test("cancelling one JAT consumer preserves preparation and progress for another
   assert.equal(cancelledSharedWork, false);
   assert.equal(starts, 1);
   assert.equal(spawnHarness.calls.length, 1);
-  assert.ok(progressReports.filter((report) => /Importing JAT runtime/.test(report.message)).length >= 2);
+  assert.doesNotMatch(JSON.stringify(progressReports), /Importing JAT runtime/);
+  assert.ok(logLines.filter(line => /Importing JAT runtime/.test(line)).length >= 2);
 });
 
 test("runtime acquisition failures redact stderr in logs, progress and native errors", async (t) => {
@@ -5404,7 +5412,7 @@ test("registered JAT commands wrap controller failures into the error message UX
 
   assert.equal(await commandCallbacks.get("joshRoom.jatInspect")(), "failed");
   assert.deepEqual(spawnHarness.calls[0].args.slice(0, 4), ["jat", "inspect", "--haul", path.join(root, "capsule.haul.tar.zst")]);
-  assert.deepEqual(extras.errorCalls, [["boom"]]);
+  assert.deepEqual(extras.errorCalls, [["boom", "Show Output Log"]]);
 });
 
 test("Pack Folder into JAT forwards every advanced capture input to the build controller", async () => {
@@ -5849,7 +5857,8 @@ test("JAT serve failure redacts structured progress material from every error si
   const sinks = [extras.errorCalls, statusItem, logLines, progressReports];
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(identity)), false);
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(recipient)), false);
-  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE IDENTITY]")), true);
+  assert.equal(progressReports.some((report) => report.message === "Encrypting"), true);
+  assert.match(JSON.stringify(logLines), /\[REDACTED AGE IDENTITY\]/);
 });
 
 test("cancelling a JAT operation kills the spawned controller child", async () => {
@@ -6095,7 +6104,10 @@ test("Windows handoff fails before material or controller execution without nati
   }
 });
 
-test("selected encryption handoff is removed after failure, cancellation, and timeout", async () => {
+test("selected encryption handoff is removed after failure, cancellation, and timeout", async (t) => {
+  // A real spawned child keeps Node alive while the unref'ed timeout runs.
+  const childHandle = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(childHandle));
   const cases = [
     { name: "failure", response: { stdout: JSON.stringify({ ok: false, error: "synthetic failure" }), code: 2 } },
     { name: "cancellation", response: { autoClose: false }, cancel: true },
@@ -6782,8 +6794,10 @@ test("structured progress events redact private age material before every visual
   const sinks = [progressReports, statusItem, logLines];
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(identity)), false);
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(recipient)), false);
-  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE IDENTITY]")), true);
-  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE RECIPIENT]")), true);
+  assert.ok(progressReports.some(report => report.message === "Encrypting"));
+  assert.doesNotMatch(JSON.stringify(progressReports), /REDACTED AGE/);
+  assert.match(JSON.stringify(logLines), /\[REDACTED AGE IDENTITY\]/);
+  assert.match(JSON.stringify(logLines), /\[REDACTED AGE RECIPIENT\]/);
 });
 
 test("non-JSON controller failures sanitize bounded stdout and stderr before rethrowing", async () => {
@@ -8240,7 +8254,7 @@ for (const [command, provider, readiness, expected] of [
   const operations = [];
   const harness = createSpawnHarness(({ args, options, child }) => {
     const result = body => ({ stdout: JSON.stringify({ ok: true, ...body }) });
-    assert.notEqual(args[1], "inventory", "Catalog selection must not recursively index the source");
+    assert.notEqual(args[1], "inventory", "Catalog review uses the capture plan");
     if (args[0] === "dimensions") {
       assert.deepEqual(args, ["dimensions", "list", "--json"]);
       return result({ dimensions: [dimension] });
@@ -8256,7 +8270,10 @@ for (const [command, provider, readiness, expected] of [
         encryption_domain_id: ["domain-mismatch", "ready"].includes(readiness) ? domain : undefined, key_generation: 1 });
     }
     assert.equal(args[0], "composition");
-    assert.ok(args.includes("--root-files-only"));
+    assert.ok(args.includes("--preserve-content"));
+    assert.ok(!args.includes("--root-files-only"));
+    assert.deepEqual(args.flatMap((value, index) => value === "--assign" ? [args[index + 1]] : []), [".=parent"]);
+    assert.ok(args.includes("--parent-name=Synthetic Projects"));
     operations.push(args[1]);
     assert.ok(!args.includes("--expected-domain"));
     assert.equal(Boolean(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL), provider === "minio");
@@ -8264,18 +8281,23 @@ for (const [command, provider, readiness, expected] of [
       return result({ approval_sha256: "verified", request: { destination_binding: {
         dimension_id: dimension.id, provider, connection_id: dimension.connection_id, encryption_domain_id: domain,
         physical_bucket: provider + ":https://storage.example.invalid:fixture",
-      }, child_evidence: { a: { capture_mode: "full-repository" } } } });
+      }, preserve_content: true, capture_mode: "full-repository", child_evidence: {},
+      assignments: [{ path: ".", outcome: "parent" }] } });
     }
     assert.equal(args[args.indexOf("--approve") + 1], "verified");
-    return result({ status: "saved", parent_snapshot_id: "parent", namespace: args[args.indexOf("--namespace") + 1] });
+    return result({ status: "saved", parent_snapshot_id: "parent", namespace: args[args.indexOf("--namespace") + 1],
+      parent_room_id: args[args.indexOf("--parent-room") + 1] });
   });
   const extension = loadExtension(vscode, harness.spawn);
   extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
     secrets: { get: async key => provider === "minio" && key.startsWith("josh-room.encryption.v1:")
       ? JSON.stringify({ identity: "synthetic-identity" }) : undefined } });
-  vscode.window.showInputBox = () => assert.fail("manual UUID requested");
+  vscode.window.showInputBox = options => {
+    assert.equal(options.title, "Name the Catalog Room");
+    return "Synthetic Projects";
+  };
   if (command === "joshRoom.new") fixture.quickPickResponses.push({ id: "catalog" });
-  fixture.quickPickResponses.push([{ label: "a" }], { dimension });
+  fixture.quickPickResponses.push({ dimension });
   fixture.openDialogResponses.push([{ fsPath: root }]);
   if (expected === "saved") {
     vscode.QuickPickItemKind = { Separator: -1 };
@@ -8333,4 +8355,334 @@ test("Catalog preview and Save hand off SecretStorage provider credentials while
     assert.equal(fs.existsSync(handoffs.at(-1)), false);
   }
   assert.equal(reads, 2);
+});
+
+test("registered Catalog restore submits the selected exact pin and only opens a verified parent", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-restore-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode, executeCalls } = fixture;
+  const namespace = "1".repeat(32);
+  const dimension = { id: "fixture", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" };
+  const target = path.join(root, "new-parent");
+  let calls = 0;
+  let verified = false;
+  const harness = createSpawnHarness(({ args }) => {
+    if (args[0] === "encryption") {
+      return { stdout: JSON.stringify({ ok: true, ...dimension, key_generation: 1 }) };
+    }
+    assert.deepEqual(args, ["composition", "restore-parent", "--dimension", "fixture", "--namespace", namespace,
+      "--parent-room", "parent", "--parent-snapshot", "jat-older", "--destination", target, "--json"]);
+    calls++;
+    return { stdout: JSON.stringify({ ok: true, marker_verified: verified, namespace, unit: "parent",
+      room_id: "parent", snapshot_id: "jat-older" }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
+  const restore = fixture.commandCallbacks.get("joshRoom.restoreCatalog");
+  const point = { kind: "catalog-point", dimension, catalog: { namespace, parent_room_id: "parent", display_name: "Synthetic Catalog" },
+    point: { snapshot_id: "jat-older", children: ["a", "b"] } };
+  vscode.window.showSaveDialog = async () => assert.fail("scope cancellation must stop before choosing a destination");
+  vscode.window.showQuickPick = async () => undefined;
+  assert.equal(await restore(point), "cancelled");
+  vscode.window.showQuickPick = async (rows, options) => {
+    assert.equal(options.canPickMany, true);
+    assert.deepEqual(rows.map(row => row.label), ["a", "b"]);
+    return [];
+  };
+  vscode.window.showSaveDialog = async options => {
+    assert.equal(options.defaultUri.fsPath, path.join(root, "Synthetic Catalog"));
+    return undefined;
+  };
+  assert.equal(await restore(point), "cancelled");
+  const parent = { ...point, kind: "catalog-parent", children: [point] };
+  vscode.window.showQuickPick = async (rows, options) => options.canPickMany ? rows : rows[0];
+  assert.equal(await restore(parent), "cancelled");
+  vscode.window.showQuickPick = async () => [];
+  assert.equal(calls, 0);
+  vscode.window.showSaveDialog = async () => ({ scheme: "file", fsPath: root });
+  assert.equal(await restore(point), "failed");
+  assert.equal(calls, 0);
+  vscode.window.showSaveDialog = async () => ({ scheme: "file", fsPath: target });
+  assert.equal(await restore(point), "failed");
+  assert.equal(calls, 1, JSON.stringify(fixture.errorCalls));
+  assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 0);
+  verified = true;
+  vscode.window.showInformationMessage = async (message, open, stay) => {
+    assert.match(message, /Synthetic Catalog.*Open the folder in VS Code/);
+    assert.equal(open, "Open Folder");
+    return stay;
+  };
+  assert.equal((await restore(point)).snapshot_id, "jat-older");
+  assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 0);
+  vscode.window.showInformationMessage = async (_, open) => open;
+  assert.equal((await restore(point)).snapshot_id, "jat-older");
+  assert.equal(calls, 3);
+  assert.equal(executeCalls.filter(call => call[0] === "vscode.openFolder").length, 1);
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const childRow = { ...point, kind: "catalog-child-room", label: "a", child: "a",
+    room: { room_id: "child" }, children: [{ kind: "catalog-child-point" }] };
+  const item = provider.getTreeItem(childRow);
+  assert.equal(item.command.title, "Enter Child Room");
+  vscode.window.showQuickPick = async () => assert.fail("direct child entry skips the scope picker");
+  vscode.window.showSaveDialog = async (options) => {
+    assert.equal(options.title, "Choose a restore folder for a");
+    assert.equal(options.defaultUri.fsPath, path.join(root, "a"));
+    return undefined;
+  };
+  assert.equal(await restore(...item.command.arguments), "cancelled");
+  vscode.window.showQuickPick = async () => [];
+  vscode.window.showSaveDialog = async options => {
+    assert.equal(options.defaultUri.fsPath, path.join(root, "_CON.repo - child"));
+    return undefined;
+  };
+  assert.equal(await restore({ ...point, catalog: { ...point.catalog, display_name: "CON.repo / child" } }), "cancelled");
+});
+
+test("opening an exact Catalog parent only offers restoration once and makes no storage calls", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-open-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  vscode.workspace.isTrusted = true;
+  const calls = [];
+  vscode.window.showInformationMessage = async (...args) => { calls.push(args); };
+  const extension = loadExtension(vscode, () => assert.fail("startup must not start the controller"));
+  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify({
+    format_version: 4, project_id: "parent", display_name: "Synthetic Catalog", snapshot_id: "jat-parent",
+    dimension_id: "synthetic", composition_namespace: "1".repeat(32), encryption_domain_id: "domain",
+    workspace_signature: "0".repeat(64), capture_policy_sha256: "0".repeat(64),
+    signature_algorithm: "josh-room-stat-v1", workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
+  }));
+  fs.mkdirSync(path.join(root, "b"));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "a" }, { path: "b" }] }));
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const [current] = provider.getChildren();
+  assert.equal(current.label, "Open Workspace");
+  assert.match(current.description, /Synthetic Catalog/);
+  assert.match(current.description, /0 of 2 restored/);
+  const rows = provider.getChildren(current);
+  assert.deepEqual(rows.map(row => row.label), ["Save Catalog", "Restore missing children…", "Child Rooms"]);
+  assert.equal(provider.getTreeItem(current).contextValue, "open-catalog-workspace");
+  assert.equal(provider.getTreeItem(rows[2]).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+  assert.equal(rows[0].command.command, "joshRoom.save");
+  assert.equal(rows[1].command.command, "joshRoom.restoreCatalogChildren");
+  const children = provider.getChildren(rows[2]);
+  assert.deepEqual(children.find(row => row.label === "a").command.arguments, ["a"]);
+  assert.equal(children.find(row => row.label === "b").description, "Folder occupied");
+  assert.equal(children.find(row => row.label === "b").command, undefined);
+  const state = new Map();
+  const context = { globalState: { get: key => state.get(key), update: async (key, value) => state.set(key, value) } };
+  await extension.__test__.offerCatalogChildOnOpen(context);
+  await extension.__test__.offerCatalogChildOnOpen(context);
+  assert.deepEqual(calls, [["This Catalog has child Rooms available to restore.", "Choose child Rooms"]]);
+});
+
+test("Rooms shows workspace actions for the current binding and saved tools on their own rows", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-workspace-actions-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode, executeCalls } = createVscodeMock(root);
+  vscode.workspace.isTrusted = true;
+  const extension = loadExtension(vscode, () => assert.fail("local action visibility must not start the controller"));
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const markerFile = path.join(root, ".josh-room.json");
+  const marker = {
+    format_version: 3, project_id: "room", display_name: "Synthetic Room", snapshot_id: "jat-point",
+    dimension_id: "synthetic", encryption_domain_id: "domain", workspace_signature: "0".repeat(64),
+    capture_policy_sha256: "0".repeat(64), signature_algorithm: "josh-room-stat-v1",
+    workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
+  };
+  const assertWorkspace = async (kind, expectedRows) => {
+    await provider.setCatalog({ dimensions: [] });
+    const context = executeCalls.filter(call => call[0] === "setContext" && call[1] === "joshRoom.workspaceKind").at(-1);
+    assert.equal(context[2], kind);
+    const row = provider.getChildren().find(item => item.kind === "open-workspace");
+    assert.deepEqual(row?.children.map(item => item.label) || [], expectedRows);
+  };
+  await assertWorkspace("folder", []);
+  fs.writeFileSync(markerFile, JSON.stringify(marker));
+  await assertWorkspace("room", ["Save Room"]);
+  fs.writeFileSync(markerFile, JSON.stringify({ ...marker, format_version: 4, composition_namespace: "1".repeat(32) }));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({ children: [{ path: "missing" }] }));
+  await assertWorkspace("catalog", ["Save Catalog", "Restore missing children…", "Child Rooms"]);
+  fs.rmSync(path.join(root, ".josh-room-composition.json"));
+  fs.writeFileSync(path.join(root, ".josh-room-split.json"), "{}");
+  await assertWorkspace("child", ["Save Child Room"]);
+  const title = require("./package.json").contributes.menus["view/title"];
+  assert.ok(!title.some(item => ["joshRoom.save", "joshRoom.saveCatalog", "joshRoom.restoreCatalog"].includes(item.command)));
+});
+
+test("Rooms marks edits on the Catalog root or the exact restored child row", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-dirty-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  vscode.workspace.isTrusted = true;
+  vscode.ThemeColor = class { constructor(id) { this.id = id; } };
+  let created;
+  vscode.workspace.onDidCreateFiles = callback => { created = callback; return { dispose() {} }; };
+  const extension = loadExtension(vscode, () => assert.fail("workspace change indicators are local"));
+  const marker = {
+    format_version: 4, project_id: "parent", display_name: "Synthetic Catalog", snapshot_id: "jat-parent",
+    dimension_id: "synthetic", composition_namespace: "1".repeat(32), encryption_domain_id: "domain",
+    workspace_signature: "0".repeat(64), capture_policy_sha256: "0".repeat(64),
+    signature_algorithm: "josh-room-stat-v1", workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(root)).digest("hex"),
+  };
+  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify(marker));
+  const childRoot = path.join(root, "child");
+  fs.mkdirSync(childRoot);
+  fs.writeFileSync(path.join(childRoot, ".josh-room.json"), JSON.stringify({
+    ...marker, project_id: "child", snapshot_id: "jat-child",
+    workspace_path_sha256: crypto.createHash("sha256").update(fs.realpathSync(childRoot)).digest("hex"),
+  }));
+  fs.writeFileSync(path.join(root, ".josh-room-composition.json"), JSON.stringify({
+    children: [{ path: "child", room_id: "child", snapshot_id: "jat-child" }],
+  }));
+  fs.writeFileSync(path.join(root, ".josh-roomignore"), "ignored.txt\n");
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [] });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(provider);
+  const item = () => provider.getTreeItem(provider.getChildren()[0]);
+  const childItem = () => provider.getTreeItem(provider.getChildren()[0].children
+    .find(row => row.kind === "workspace-children").children[0]);
+  const uri = name => ({ scheme: "file", fsPath: path.join(root, name) });
+  created({ files: [uri("ignored.txt"), uri("child/.josh-room.json")] });
+  assert.doesNotMatch(childItem().description, /Changes to save/);
+  created({ files: [uri("child/note.txt")] });
+  assert.doesNotMatch(item().description, /Changes to save/);
+  assert.match(childItem().description, /Changes to save/);
+  assert.equal(childItem().iconPath.id, "circle-filled");
+  created({ files: [uri("root-edit.txt")] });
+  assert.match(item().description, /Changes to save/);
+  assert.equal(item().iconPath.id, "circle-filled");
+});
+
+test("Catalog sidebar deletion shows dependencies and applies only the previewed approved target", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-delete-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode } = fixture;
+  const namespace = "1".repeat(32);
+  const dimension = { id: "fixture", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" };
+  const target = { kind: "recovery-point", room: "child", snapshot: "jat-exact" };
+  const approval = "b".repeat(64);
+  const expected = ["--dimension", dimension.id, "--namespace", namespace, "--kind", target.kind,
+    "--room", target.room, "--snapshot", target.snapshot];
+  const operations = [];
+  let canApply = false;
+  const harness = createSpawnHarness(({ args }) => {
+    if (args[0] === "encryption") return { stdout: JSON.stringify({ ok: true, ...dimension, key_generation: 1 }) };
+    if (args[0] !== "composition") return { stdout: JSON.stringify({ ok: true, dimensions: [] }) };
+    operations.push(args[1]);
+    if (args[1] === "retirement-preview") {
+      assert.deepEqual(args.slice(2), [...expected, "--json"]);
+      return { stdout: JSON.stringify({ ok: true, can_apply: canApply, approval_sha256: approval, physical_deletion: false,
+        plan: { namespace, binding: { dimension_id: dimension.id }, target, blockers: [{ reason: "retained-parent-pin" }] } }) };
+    }
+    assert.deepEqual(args.slice(2), [...expected, "--approve", approval, "--json"]);
+    return { stdout: JSON.stringify({ ok: true, status: "retired", namespace, target, physical_deletion: false }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
+  const remove = fixture.commandCallbacks.get("joshRoom.deleteCatalogItem");
+  const item = { kind: "catalog-child-point", dimension, catalog: { namespace, parent_room_id: "parent" },
+    point: { snapshot_id: target.snapshot }, room: { room_id: target.room }, label: "Synthetic point" };
+  vscode.window.showWarningMessage = async message => assert.match(message, /still pins/);
+  assert.equal(await remove(item), "blocked");
+  canApply = true;
+  vscode.window.showWarningMessage = async () => undefined;
+  assert.equal(await remove(item), "cancelled");
+  vscode.window.showWarningMessage = async (_, options, action) => {
+    assert.match(options.detail, /Encrypted payloads remain/);
+    return action;
+  };
+  assert.equal((await remove(item)).status, "retired");
+  assert.deepEqual(operations, ["retirement-preview", "retirement-preview", "retirement-preview", "retire"]);
+});
+
+test("Delete Catalog confirms a whole Catalog once and updates the sidebar without reloading storage", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-safe-delete-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode } = fixture;
+  const namespace = "1".repeat(32);
+  const dimension = { id: "fixture", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" };
+  const approval = "b".repeat(64);
+  const counts = { recovery_point_count: 3, child_room_count: 2 };
+  const operations = [];
+  const harness = createSpawnHarness(({ args }) => {
+    if (args[0] === "encryption") return { stdout: JSON.stringify({ ok: true, ...dimension, key_generation: 1 }) };
+    assert.equal(args[0], "composition");
+    operations.push(args[1]);
+    if (args[1] === "retirement-batch-preview") {
+      return { stdout: JSON.stringify({ ok: true, can_apply: true, approval_sha256: approval, physical_deletion: false,
+        plan: { format: "composition-retirement-batch-v1", namespace, binding: { dimension_id: dimension.id }, ...counts } }) };
+    }
+    assert.deepEqual(args.slice(-3), ["--approve", approval, "--json"]);
+    return { stdout: JSON.stringify({ ok: true, status: "retired", namespace, physical_deletion: false, ...counts }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "synthetic" }) : undefined } });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const catalog = { namespace, parent_room_id: "parent", display_name: "Synthetic Catalog", child_rooms: [], recovery_points: [] };
+  const other = { ...catalog, namespace: "2".repeat(32), display_name: "Other Catalog" };
+  await provider.setCatalog({ dimensions: [{ ...dimension, catalogs: [catalog, other] }] });
+  provider.reload = () => assert.fail("verified Catalog deletion must update the cached sidebar");
+  extension.__test__.setRoomsProvider(provider);
+  const parentRows = () => provider.roots[0].children[0].children[0].children;
+  let confirmations = 0;
+  vscode.window.showWarningMessage = async (message, options, action) => {
+    confirmations += 1;
+    assert.equal(message, "Delete Catalog “Synthetic Catalog”?");
+    assert.match(options.detail, /3 recovery points and 2 child Rooms/);
+    return confirmations === 2 ? action : undefined;
+  };
+  const remove = fixture.commandCallbacks.get("joshRoom.manageCatalogDeletion");
+  assert.equal(await remove(parentRows()[0]), "cancelled");
+  assert.equal(parentRows().length, 2);
+  assert.equal((await remove(parentRows()[0])).status, "retired");
+  assert.equal(confirmations, 2);
+  assert.deepEqual(operations, ["retirement-batch-preview", "retirement-batch-preview", "retire-batch"]);
+  assert.deepEqual(parentRows().map(row => row.label), ["Other Catalog"]);
+});
+
+test("retiring one parent reloads shared Child Room pins and fences child deletion on reload failure", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-pin-refresh-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode } = fixture;
+  vscode.workspace.isTrusted = true;
+  const extension = loadExtension(vscode, () => assert.fail("a child deletion needs authoritative pins before controller access"));
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [] });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(provider);
+  const id = "fixture";
+  const namespace = "1".repeat(32);
+  const dimension = { id, provider: "minio" };
+  const pinned = { room_id: "child", snapshot_id: "jat-child", pinned: true, created_at: "2026-01-01T00:00:00Z" };
+  const catalog = { namespace, parent_room_id: "parent", display_name: "Catalog", child_rooms: [{ room_id: "child", path: "child" }],
+    child_recovery_points: [pinned], recovery_points: [
+      { snapshot_id: "jat-first", child_count: 1, children: ["child"], created_at: "2026-01-01T00:00:00Z" },
+      { snapshot_id: "jat-second", child_count: 1, children: ["child"], created_at: "2026-01-02T00:00:00Z" },
+    ] };
+  const data = catalogs => ({ dimensions: [{ ...dimension, catalogs }] });
+  const childPoint = () => provider.roots[0].children[0].children[0].children
+    .find(row => row.kind === "catalog-parent").children.find(row => row.kind === "catalog-child-history").children[0].children[0];
+  await provider.setCatalog(data([catalog]));
+  let calls = 0;
+  provider.reload = async () => {
+    calls++;
+    if (calls > 1) throw new Error("synthetic unavailable");
+    await provider.setCatalog(data([{ ...catalog, recovery_points: [catalog.recovery_points[1]] }]), { authoritative: true });
+  };
+  await provider.applyCatalogDeletion(id, namespace, { kind: "recovery-point", room: "parent", snapshot: "jat-first" });
+  assert.equal(calls, 1);
+  assert.equal(childPoint().point.pinned, true);
+  assert.equal(provider.catalogPinsPending(id, namespace), false);
+  await provider.applyCatalogDeletion(id, namespace, { kind: "recovery-point", room: "parent", snapshot: "jat-second" });
+  assert.equal(calls, 2);
+  assert.equal(childPoint().point.pinned, true);
+  assert.equal(provider.getTreeItem(childPoint()).contextValue, "catalog-child-point-pins-unverified");
+  assert.equal(await fixture.commandCallbacks.get("joshRoom.deleteCatalogItem")(childPoint()), "blocked");
 });

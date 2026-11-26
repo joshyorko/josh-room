@@ -60,15 +60,19 @@ def portable_path(value: str) -> tuple[str, ...]:
     return tuple(unicodedata.normalize("NFC", p.casefold()) for p in parts)
 
 
-def validate_payload_path(value: str) -> None:
+def validate_payload_path(value: str, *, allow_nested_policy: bool = False) -> None:
     """Apply ordinary restore name checks, reserving composition control files."""
     from .room_store_operations import _relative_parts
 
     parts = _relative_parts(value)
-    for part in parts:
+    for index, part in enumerate(parts):
         if part == ".git":
             # Git refs and objects are ordinary payload, never selection identities.
             return
+        if allow_nested_policy and index > 0 and index == len(parts) - 1 and part == ".josh-roomignore":
+            # This is data belonging to an inner project. The restored Room
+            # loads its capture policy only from its own root.
+            continue
         if part.casefold() == ".git" or part.casefold().startswith(".josh-room"):
             raise ValueError("reserved composition payload path")
 
@@ -118,9 +122,10 @@ def validate_paths(paths) -> None:
 
 def validate_manifest(body: dict) -> dict:
     if (not isinstance(body, dict) or set(body) != {"format", "children"}
-            or body["format"] != "room-composition-v1"
             or not isinstance(body["children"], list)
-            or not 1 <= len(body["children"]) <= MAX_CHILDREN):
+            or (body["format"] == "room-composition-v1" and not 1 <= len(body["children"]) <= MAX_CHILDREN)
+            or (body["format"] == "room-composition-v2" and body["children"])
+            or body["format"] not in ("room-composition-v1", "room-composition-v2")):
         raise ValueError("invalid composition manifest")
     identities = set()
     for row in body["children"]:

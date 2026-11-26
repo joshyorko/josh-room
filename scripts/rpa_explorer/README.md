@@ -105,11 +105,12 @@ by the built image ID, not claimed immutable across rebuilds.
 
 After normal installed controller acquisition, `fixture/enroll` provisions the
 synthetic keyring/bucket/encryption through the managed environment. It is fixture
-setup, not UI enrollment coverage. Choose the observed destination, inspect the
-actual child/Git review, approve Save and assert its success notification.
-Then `copy_recovery_receipt` clicks the product’s explicit public receipt action
-and reads only its four validated identity fields in the disposable browser
-clipboard. It never captures keys or provider credentials.
+setup. Choose the observed destination, review which content stays in the
+Catalog and which folders have independent recovery points, then approve Save.
+Once Save completes, `copy_recovery_receipt` opens **Josh: Show Room Operation**
+and selects **Copy Recovery Receipt**. The robot reads four validated identity
+fields from the disposable browser clipboard. Older candidates expose the
+receipt action in a Save notification.
 
 `fixture/cold_restore` consumes that exact receipt, restores the parent through
 normal managed CLI into an absent destination and records absent children.

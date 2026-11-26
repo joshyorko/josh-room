@@ -106,9 +106,27 @@ exports.run = async () => {
   try {
     const result = vscode.commands.executeCommand(command);
     if (command === "joshRoom.new") await renderer.choose("Configure Catalog Room");
+    await until(async () => (await renderer.widget())?.text.includes("Name the Catalog Room"), "Catalog name");
+    await renderer.text("Synthetic Catalog");
+    await renderer.key("Enter", "Enter", 13);
+    await renderer.choose("Synthetic Composition");
+    const approvalText = async () => {
+      const widget = await renderer.widget();
+      return widget?.text.includes("Review Catalog") && widget.text;
+    };
+    const reviewAction = async label => {
+      await renderer.text(label);
+      await renderer.choose(label);
+    };
+    const wholeFolderReview = await until(approvalText, "whole-folder Catalog review", 300000);
+    assert.match(wholeFolderReview, /0 child Rooms/);
+    assert.match(wholeFolderReview, /Eligible files and folders/);
+    assert.match(wholeFolderReview, /Git repositor/);
+    assert.ok(!installed.packageJSON.contributes.views["josh-room"].some(view => view.id === "joshRoom.activity"));
+    await reviewAction("Split folders into Rooms…");
     const selection = await until(async () => {
       const widget = await renderer.widget();
-      return widget?.text.includes("Choose Catalog child Rooms") && widget;
+      return widget?.text.includes("Split folders into child Rooms") && widget;
     }, "native immediate-folder picker");
     assert.deepEqual(selection.rows.filter(row => ["projects", "b"].includes(row.trim())).map(row => row.trim()).sort(), ["b", "projects"]);
     for (const name of ["projects", "b"]) {
@@ -120,18 +138,9 @@ exports.run = async () => {
       })()`), true);
     }
     await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
-    await renderer.choose("Synthetic Composition");
-    const approvalText = async () => {
-      const widget = await renderer.widget();
-      return widget?.text.includes("Review Catalog") && widget.text;
-    };
-    const reviewAction = async label => {
-      await renderer.text(label);
-      await renderer.choose(label);
-    };
     if (!cancel && (handoffPath || command === "joshRoom.new")) {
-      const firstReview = await until(approvalText, "initial Catalog review", 300000);
-      assert.match(firstReview, /Eligible root files and child Room links/);
+      const splitReview = await until(approvalText, "Catalog review after choosing splits", 300000);
+      assert.match(splitReview, /2 child Rooms/);
       await reviewAction("Advanced settings");
       if (handoffPath) {
         await renderer.choose("Customize optional components");
@@ -188,8 +197,8 @@ exports.run = async () => {
     }
     assert.match(approval, /projects\s*Files \+ Git if present/i);
     assert.match(approval, command === "joshRoom.new" ? /b\s*Files only\s*·\s*Workspace only/i : /b\s*Files \+ Git if present\s*·\s*Workspace only/);
-    assert.match(approval, /Eligible root files and child Room links/i);
-    assert.match(approval, /Unchecked folders stay local/i);
+    assert.match(approval, /Eligible files and folders/i);
+    assert.match(approval, /Capture policy exclusions stay local/i);
     assert.doesNotMatch(approval, /Other files stay on this device and are unprotected/i);
     assert.doesNotMatch(approval, /namespace:|[a-f0-9]{32}/i);
     if (cancel) {
@@ -204,10 +213,12 @@ exports.run = async () => {
       return;
     }
     await reviewAction("Save catalog");
-    await until(async () => renderer.evaluate(`[...document.querySelectorAll('.notification-list-item')].some(n=>n.innerText.includes("Catalog saved with 2 child Rooms."))`), "published catalog", 240000);
-    await vscode.commands.executeCommand("notifications.clearAll");
     const saved = await result;
     assert.equal(saved.ok, true);
+    const statusMenu = vscode.commands.executeCommand("joshRoom.showOperation");
+    await until(async () => (await renderer.widget())?.rows.includes("Copy Recovery Receipt"), "saved Catalog recovery receipt action");
+    await renderer.key("Escape", "Escape", 27);
+    await statusMenu;
     assert.deepEqual(saved.children.map(row => row.path).sort(), ["b", "projects"]);
     const sibling = saved.children.find(row => row.path === "b");
     assert.deepEqual(sibling.components, []);
@@ -221,6 +232,7 @@ exports.run = async () => {
     const target = path.join(base, "native-cold-" + saved.namespace);
     cli("composition", "restore-parent", ...common, "--destination", target);
     for (const child of ["projects", "b"]) assert.equal(fs.existsSync(path.join(target, child)), false);
+    assert.equal(fs.readFileSync(path.join(target, "local/file.txt"), "utf8"), fs.readFileSync(path.join(source, "local/file.txt"), "utf8"));
     const entered = cli("composition", "enter-child", ...common, "--workspace", target, "--child-path", "projects");
     assert.equal(entered.marker_verified, true);
     const domain = cli("encryption", "status", "--dimension", "composition-fixture").encryption_domain_id;
@@ -240,7 +252,8 @@ exports.run = async () => {
       command, empty_encryption_cache_verified: Boolean(ready.receipt.uncached_domain_verified),
       uncached_dimension: Boolean(ready.receipt.uncached_domain_verified),
       verified_plan_and_restored_descriptor_domains: true, manual_domain_input: false, runtime: "packaged-controller-existing-Python", file_chooser: "synthetic paths",
-      checked_immediate_folder_count: saved.children.length, native_folder_checkboxes: true, sibling_capture_mode: sibling.capture_mode, root_files_only_reviewed: true, receipt_ids_hidden_in_review: true,
+      checked_immediate_folder_count: saved.children.length, native_folder_checkboxes: true, sibling_capture_mode: sibling.capture_mode, preservation_reviewed: true,
+      unsplit_payload_restored: true, receipt_ids_hidden_in_review: true, status_receipt_action: true, activity_view_absent: true,
       visible_full_repository_approval: true, provider: ready.receipt.provider, parent_pin: saved.parent_snapshot_id,
       child_pin: entered.snapshot_id, git_verified: true, sibling_absent: true,
       selected_components: handoffPath ? names : [],

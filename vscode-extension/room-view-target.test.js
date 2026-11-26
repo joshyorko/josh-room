@@ -55,6 +55,10 @@ test("sidebar selection requires the catalog encryption domain and composition n
   assert.deepEqual(matchingRoomViewTargets([target], item), []);
   item.project.composition_namespace = marker.composition_namespace;
   assert.deepEqual(matchingRoomViewTargets([target], item), [target]);
+  const catalog = { kind: "catalog-parent", dimension: item.dimension,
+    catalog: { parent_room_id: marker.project_id, namespace: marker.composition_namespace } };
+  assert.deepEqual(matchingRoomViewTargets([target], catalog), [target]);
+  assert.deepEqual(matchingRoomViewTargets([target], { ...catalog, kind: "catalog-child-room", room: { room_id: "different" } }), []);
   delete marker.encryption_domain_id;
   assert.deepEqual(matchingRoomViewTargets([target], item), []);
 });

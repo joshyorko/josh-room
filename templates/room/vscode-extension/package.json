@@ -21,6 +21,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:joshRoom.save",
+    "onCommand:joshRoom.showOperation",
     "onCommand:joshRoom.saveFolderAs",
     "onCommand:joshRoom.checkWorkspace",
     "onCommand:joshRoom.new",
@@ -69,6 +70,10 @@
     "onView:joshRoom.rooms",
     "onCommand:joshRoom.splitWorkspace",
     "onCommand:joshRoom.saveCatalog",
+    "onCommand:joshRoom.restoreCatalog",
+    "onCommand:joshRoom.deleteCatalogItem",
+    "onCommand:joshRoom.manageCatalogDeletion",
+    "onCommand:joshRoom.restoreCatalogChildren",
     "onCommand:joshRoom.enterChild",
     "onCommand:joshRoom.saveChild",
     "onCommand:joshRoom.refreshCatalogPins",
@@ -274,6 +279,10 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "joshRoom.showOperation",
+        "title": "Josh: Show Room Operation"
+      },
+      {
         "command": "joshRoom.showLogs",
         "title": "Josh: Show Logs",
         "icon": "$(output)"
@@ -324,7 +333,26 @@
       },
       {
         "command": "joshRoom.saveCatalog",
-        "title": "Josh: Save Catalog Room"
+        "title": "Josh: Save Catalog Room",
+        "icon": "$(library)"
+      },
+      {
+        "command": "joshRoom.restoreCatalog",
+        "title": "Josh: Restore Catalog Room"
+      },
+      {
+        "command": "joshRoom.manageCatalogDeletion",
+        "title": "Delete Catalog…",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "joshRoom.deleteCatalogItem",
+        "title": "Delete…",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "joshRoom.restoreCatalogChildren",
+        "title": "Josh: Restore Catalog Child Rooms…"
       },
       {
         "command": "joshRoom.enterChild",
@@ -421,18 +449,18 @@
       "view/title": [
         {
           "command": "joshRoom.new",
-          "when": "view == joshRoom.rooms",
+          "when": "view == joshRoom.rooms && joshRoom.workspaceKind == folder",
           "group": "navigation@1"
+        },
+        {
+          "command": "joshRoom.new",
+          "when": "view == joshRoom.rooms && joshRoom.workspaceKind =~ /^(room|catalog|child)$/",
+          "group": "workspace@1"
         },
         {
           "command": "joshRoom.addStorage",
           "when": "view == joshRoom.rooms",
-          "group": "navigation@2"
-        },
-        {
-          "command": "joshRoom.save",
-          "when": "view == joshRoom.rooms",
-          "group": "navigation@2"
+          "group": "storage@1"
         },
         {
           "command": "joshRoom.refresh",
@@ -445,7 +473,37 @@
           "group": "4_load"
         }
       ],
+      "commandPalette": [
+        {
+          "command": "joshRoom.manageCatalogDeletion",
+          "when": "false"
+        },
+        {
+          "command": "joshRoom.deleteCatalogItem",
+          "when": "false"
+        }
+      ],
       "view/item/context": [
+        {
+          "command": "joshRoom.refreshCatalogPins",
+          "when": "view == joshRoom.rooms && viewItem == open-catalog-workspace",
+          "group": "catalog@1"
+        },
+        {
+          "command": "joshRoom.manageCatalogDeletion",
+          "when": "view == joshRoom.rooms && viewItem == catalog-parent-deletable",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.deleteCatalogItem",
+          "when": "view == joshRoom.rooms && (viewItem == catalog-point-deletable || viewItem == catalog-child-room || viewItem == catalog-child-point)",
+          "group": "catalog@2"
+        },
+        {
+          "command": "joshRoom.restoreCatalogChildren",
+          "when": "view == joshRoom.rooms && (viewItem == catalog-parent || viewItem == catalog-point || viewItem == catalog-parent-deletable || viewItem == catalog-point-deletable)",
+          "group": "catalog@1"
+        },
         {
           "command": "joshRoom.agentSessionsStatus",
           "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
@@ -538,7 +596,7 @@
         },
         {
           "command": "joshRoom.inspectLogicalSnapshot",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@1"
         },
         {
@@ -558,17 +616,17 @@
         },
         {
           "command": "joshRoom.exportPortableJat",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@2"
         },
         {
           "command": "joshRoom.extractLogicalSnapshot",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@3"
         },
         {
           "command": "joshRoom.serveLogicalSnapshot",
-          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "when": "view == joshRoom.rooms && (viewItem == logical-jat || viewItem == catalog-point || viewItem == catalog-point-deletable || viewItem == catalog-child-point)",
           "group": "logical@4"
         },
         {
@@ -608,7 +666,7 @@
         },
         {
           "command": "joshRoom.explore3D",
-          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "when": "view == joshRoom.rooms && (viewItem == current-room || viewItem == open-catalog-workspace || viewItem == open-room-workspace)",
           "group": "room@1"
         }
       ]

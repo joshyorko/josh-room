@@ -55,7 +55,10 @@ Choose a collection of independent directories. Save a cohesive root repository
 as one Room. Linked worktrees, borrowed object stores and unsupported Git
 layouts require another capture layout. The sealed manifest accepts one to 32
 child pins. Capture stages private copies outside the source and needs scratch
-space for the selected data. Optional child components use the selection below.
+space for the selected data. Save checks free staging space before publishing.
+If the configured location is too small, Save can use an owner-only temporary
+directory on another filesystem. Memory-backed staging also checks available
+memory. Optional child components use the selection below.
 
 Children are independently saved Logical JATs. The parent captures only its
 canonical pinned manifest, generated source-only policy, empty ancestor
@@ -93,25 +96,26 @@ activation/terminal hydration, or selected-file restore is added.
 
 Native commands are `Josh: Save Catalog Room`, `Josh: Enter Child Room`,
 `Josh: Save Child Room`, and `Josh: Refresh Catalog Child Pins`.
-Choose **Configure Catalog Room** from New Room, then select a source folder.
-The native checkbox picker reads and lists only that folder's immediate
-directories; it does not recursively discover child candidates. Check up to 32
-folders. Each checked directory becomes one independent child Room containing
-its deeper contents. The child capture scans those contents normally after
-admission, so the shallow picker does not make child captures shallow.
+Choose **Configure Catalog Room** from New Room, then select a source folder,
+name the Catalog and choose the destination. **Review Catalog** shows the
+destination and what the parent will preserve. The default includes eligible
+files and folders under the source capture policy, with eligible Git
+repositories kept intact in the Catalog parent. Policy exclusions stay local.
 
-Eligible regular files directly in the source root are saved with the Catalog
-parent. Every unchecked directory stays local, including directories with
-names that cannot be restored across platforms. The extension uses
-`--root-files-only` for both `composition capture-plan` and `composition save`,
-and passes assignments only for checked immediate child directories. The flag
-defines the root-file/child boundary for that operation; CLI calls without the
-flag retain their existing explicit subtree-assignment behavior.
+Choose **Split folders into Rooms…** to give up to 32 immediate folders
+independent recovery points. Each checked folder becomes one whole child Room.
+The other eligible folders stay in the parent. A split within a cohesive Git
+repository is blocked when retaining Git history. You can save a Catalog with
+zero separate child Rooms.
 
-After folder selection, choose the destination. **Review Catalog** shows the
-destination, the Catalog parent, and a scrollable list of child folders with
-their Git capture settings and optional content. Choose **Save catalog** to
-approve, or **Cancel** to leave without saving.
+The extension uses `--preserve-content --assign .=parent` for both
+`composition capture-plan` and `composition save`. The controller binds the
+capture mode, exact assignments, and source inventory into the review. The
+existing CLI `--root-files-only` option still saves direct root files plus
+explicitly selected immediate children. Existing Catalogs retain their saved
+capture boundaries.
+
+Choose **Save catalog** to approve, or **Cancel** to leave without saving.
 **Advanced settings** is available from that review for the existing child Git
 and optional component settings. Returning from settings always creates a new
 plan and requires a new confirmation. If a child has incomplete Git history,
@@ -125,8 +129,59 @@ receipt** in the Save confirmation and keep the receipt for cold parent restore.
 In a restored Catalog parent, **Enter Child Room** lets you choose a saved child.
 **Refresh Catalog Child Pins** lets you choose a child and a particular saved
 version. The controller verifies the parent's membership and exact recovery points.
-Cold parent restore uses the CLI above. Native discovery and restore from a fresh
-machine are tracked in [issue #231](https://github.com/joshyorko/josh-room/issues/231).
+On an enrolled machine, reload **Rooms** and expand the storage bucket. Saved
+Catalog parents appear by name and save date. Select a folder under
+**Child Rooms** to enter it from its newest listed Catalog pin. Expand the
+folder to see its own recovery points. If the exact parent is not open,
+choose a new folder to restore that parent first. To restore several
+children, use **Restore Catalog Child Rooms…** from the recovery point's
+context menu, check the folders you want, or use **Select All**. One restore
+job checks the parent and restores the selected children in order. If a child
+cannot be restored, the job stops and reports how many completed. Open a dated
+point to choose one child, several children, or just the parent before choosing
+the destination. When the restore finishes, choose **Open Folder** to switch
+workspaces or **Stay Here** to continue where you are. **Open Workspace** at
+the top of **Rooms** shows the current Catalog and its restored child count.
+Use **Restore missing children…** or expand **Child Rooms** for individual
+folder status. **Refresh Catalog Child Pins** is in the workspace row menu.
+**Save Catalog** in the open workspace creates a recovery point in the same
+Catalog. The review lists the restored child Rooms whose recovery points
+will change. The new Catalog point includes its root files and the updated
+child pins. Missing child Rooms keep their saved pins. **Save Child Room**
+still saves a child independently.
+The open workspace shows the Save action for its type. Use **New Room** in
+the Rooms toolbar when opening an unbound folder, or in the toolbar's menu
+when a Room or Catalog is open.
+**Open Workspace** checks the local filesystem against the saved Room
+marker when the view opens, the window regains focus, or files change.
+Root edits mark the Catalog. Edits inside a restored child mark that
+child Room. The backup's capture policy determines which files count.
+Use **Explore Room in 3D** on an open workspace or its matching Catalog row.
+On a Catalog or child recovery point, the usual **Inspect Logical JAT**,
+**Extract**, **Export Portable JAT**, and **Serve** actions use that point's
+Catalog repository. OCI and Hauler content is attached to the child that
+captured it.
+Select a restored child to open it, or select a missing child to restore
+and open it. The bulk picker lists missing children only. When an existing Catalog parent opens with a child that is not
+yet on disk, Josh Room offers the checkbox picker once for that folder and
+recovery point. Each restore requires an explicit choice and never overwrites
+an occupied child. Unrelated edits to the Catalog parent can stay in place
+while restoring missing children. Restore still verifies the parent binding,
+manifest and capture policy. If files change after a child is promoted,
+Josh Room reports the restore and the local changes separately.
+If discovery is marked incomplete, the receipt and CLI
+still allow restoring a known exact recovery point.
+
+In **Rooms**, use **Delete Catalog…** on the Catalog row and confirm the
+number of recovery points and child Rooms affected. Josh Room retires the
+Catalog recovery points first to release their child pins, then the child
+recovery points, the empty child Rooms, and finally the empty Catalog.
+The sidebar updates after the verified deletion. Use **Delete…** on a
+specific recovery point or empty child Room to delete it individually.
+A retained parent pin protects the child recovery point it references. Deletion removes the selected item from discovery and blocks
+future restores of it. Existing local folders and encrypted payloads remain
+in place. After deleting the newest point, you can restore older points.
+Save and pin refresh still require the recorded baseline.
 
 ## Selecting child components
 
@@ -468,7 +523,13 @@ The v2 writer requires the live/private/restored effective policy digest to matc
 the exact authenticated baseline through publication, including for fresh/no-op
 operations. Policy changes require reconciliation, which remains unsupported.
 
-A full Git child requires Git to inspect its index. Catalog capture refuses an index that tracks the generated child policy, guard, or marker at its root, even when the working copy of that file is missing. Sparse directory indexes, split indexes requiring an external base, and submodule gitlinks are unsupported. Save such a repository as one ordinary Room. The same checks apply before a subsequent child Save.
+A full Git child requires Git to inspect its index. A portable sparse index
+and a split index with its local shared base can be preserved. Gitlinks
+without submodule configuration are preserved as index entries, alongside
+the existing working files. Configured submodules and missing Git objects
+still block full Git capture. Catalog capture also refuses an index that
+tracks the generated child policy, guard, or marker at its root. The same
+checks apply before a subsequent child Save.
 A standalone `.gitmodules` file without sibling Git metadata is ordinary source
 content and does not make a copied folder a submodule repository.
 An enabled `extensions.worktreeConfig` flag is supported when the repository has
