@@ -57,7 +57,7 @@ test("catalog confirmation assigns only checked child folders and explains root-
     assert.equal(destination.description, "MinIO");
     assert.equal(destination.detail, "https://storage.example.invalid:fixture");
     assert.equal(picker.items.find(item => item.label === "Connection").description, "synthetic-connection");
-    assert.equal(picker.items.find(item => item.label === "Dimension").description, "dimension");
+    assert.equal(picker.items.find(item => item.label === "Storage ID").description, "dimension");
     assert.match(picker.activeItem.label, /Catalog parent/);
     assert.match(picker.activeItem.detail, /Unchecked folders stay local/);
     const child = picker.items.find(item => item.label === "$(folder) a");
@@ -86,7 +86,7 @@ test("Advanced settings return to a fresh plan and a second confirmation", async
   const vscode = { window: {
     showOpenDialog: async () => [{ fsPath: source }],
     showQuickPick: async (rows, settings) => {
-      if (settings.title === "Where should this catalog be saved?") return { dimension: { id: "dimension", provider: "minio" } };
+      if (settings.title === "Save Catalog") return { dimension: { id: "dimension", provider: "minio" } };
       if (settings.title === "Catalog child settings") return { id: settingsMenus++ === 0 ? "components" : "review" };
       if (settings.title === "Apply settings to folders") return [rows[0]];
       return assert.fail(`Unexpected picker: ${settings.title}`);
@@ -366,7 +366,7 @@ test("child-specific mode and component inputs reach both plan and approved capt
   let review = 0;
   const vscode = { window: {
     showOpenDialog: async () => [{ fsPath: source }], showQuickPick: async (rows, picker) => {
-      if (picker.title === "Where should this catalog be saved?") return { dimension: { id: "test", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" } };
+      if (picker.title === "Save Catalog") return { dimension: { id: "test", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" } };
       if (picker.title === "Catalog child settings") return [{ id: "git" }, { id: "components" }, { id: "review" }][settingsMenu++];
       if (picker.title === "Apply settings to folders") return [[rows[1]], [rows[0]]][folderScope++];
       if (picker.title === "Git capture for 1 folders") return { id: "source-only" };

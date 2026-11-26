@@ -68,7 +68,7 @@ class RoomOperations {
     this.tick(Boolean(row.target));
     try {
       const result = await vscode.window.withProgress(
-        { title, location: { viewId: ROOMS_VIEW }, cancellable: !cancellation && cancellable },
+        { title, location: operation.notification ? vscode.ProgressLocation.Notification : { viewId: ROOMS_VIEW }, cancellable: !cancellation && cancellable },
         (progress, token) => task({
           report: ({ message, detail, index }) => {
             if (!message) return;

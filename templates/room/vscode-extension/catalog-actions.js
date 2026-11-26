@@ -2,6 +2,8 @@
 const path = require("path");
 const crypto = require("crypto");
 
+const { BACK, CANCEL, flowPick, flowInput } = require("./flow-picker");
+
 const SPLIT_CHILDREN = "Split folders into Rooms…";
 
 function relativeSource(root, value) {
@@ -74,6 +76,9 @@ function reviewCatalog(vscode, name, destination, children, preservation) {
   };
   const picker = vscode.window.createQuickPick();
   picker.title = `Review Catalog · ${name} → ${destination.label} · ${children.length} child ${children.length === 1 ? "Room" : "Rooms"}`;
+  picker.step = 4;
+  picker.totalSteps = 4;
+  if (vscode.QuickInputButtons?.Back) picker.buttons = [vscode.QuickInputButtons.Back];
   picker.placeholder = "Review what will be saved";
   picker.matchOnDescription = true;
   picker.matchOnDetail = true;
@@ -81,7 +86,7 @@ function reviewCatalog(vscode, name, destination, children, preservation) {
   picker.items = [
     heading("Destination"), { label: destination.label, description: destination.description, detail: destination.detail },
     { label: "Connection", description: destination.connection },
-    { label: "Dimension", description: destination.dimension },
+    { label: "Storage ID", description: destination.dimension },
     heading("Capture"), parent,
     ...(preservation?.localOnly.length ? [
       heading("Stays on this device"),
@@ -101,6 +106,12 @@ function reviewCatalog(vscode, name, destination, children, preservation) {
       if (!selected?.action) return;
       action = selected.action;
       picker.hide();
+    });
+    picker.onDidTriggerButton?.(button => {
+      if (button === vscode.QuickInputButtons?.Back) {
+        action = BACK;
+        picker.hide();
+      }
     });
     picker.onDidHide(() => {
       picker.dispose();
@@ -148,18 +159,42 @@ async function catalogSettings(vscode, root, assignments, chooseComponents) {
 }
 
 async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponents, plan, save, preserveByDefault = false, onSaved }) {
-  const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
-  if (!source?.length) return "cancelled";
-  const root = source[0].fsPath;
-  const children = preserveByDefault ? [] : await selectChildren(root);
-  if (!children || (!preserveByDefault && !children.length)) return "cancelled";
+  let root, name, choice, assignments;
   const validateName = value => !value.trim() || [...value.trim()].length > 100 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
     ? "Enter a Catalog name on one line, up to 100 characters." : undefined;
-  const name = await vscode.window.showInputBox({ title: "Name the Catalog Room",
-    value: path.basename(root) || "Catalog Room", validateInput: validateName });
-  if (name === undefined) return "cancelled";
-  if (validateName(name)) throw new Error(validateName(name));
-  let assignments = children.map(path => ({ path, outcome: "child" }));
+  async function setupCatalog(firstStep) {
+    for (let step = firstStep; step <= 3;) {
+      if (step === 1) {
+        const source = await vscode.window.showOpenDialog({ title: "Save Catalog (1/4) · Source",
+          canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
+        if (!source?.length) return false;
+        if (root !== source[0].fsPath) {
+          root = source[0].fsPath;
+          name = undefined;
+          const children = preserveByDefault ? [] : await selectChildren(root);
+          if (!children || (!preserveByDefault && !children.length)) return false;
+          assignments = children.map(path => ({ path, outcome: "child" }));
+        }
+      } else if (step === 2) {
+        const value = await flowInput(vscode, { title: "Name the Catalog", step, totalSteps: 4,
+          value: name ?? (path.basename(root) || "Catalog"), validateInput: validateName });
+        if (value === CANCEL) return false;
+        if (value === BACK) { step--; continue; }
+        if (validateName(value)) throw new Error(validateName(value));
+        name = value.trim();
+      } else {
+        const configured = await dimensions(root);
+        const value = await flowPick(vscode, configured.map(dimension => ({ label: dimension.display_name || dimension.id, dimension })),
+          { title: "Save Catalog", step, totalSteps: 4, placeHolder: "Choose Storage" });
+        if (value === CANCEL) return false;
+        if (value === BACK) { step--; continue; }
+        choice = value;
+      }
+      step++;
+    }
+    return true;
+  }
+  if (!await setupCatalog(1)) return "cancelled";
   const editSplits = async () => {
     const selected = await selectChildren(root, assignments.filter(row => row.outcome === "child").map(row => row.path));
     if (selected === undefined) return;
@@ -169,14 +204,10 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
       ...assignments.filter(row => row.outcome === "local-only" && !selected.includes(row.path)),
     ];
   };
-  const configured = await dimensions(root);
-  const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Where should this catalog be saved?" });
-  if (!choice) return "cancelled";
   const namespace = crypto.randomUUID().replaceAll("-", "");
   const parentRoom = `catalog-${namespace}`;
-  const sourceSelection = { root, namespace, parentRoom, name: name.trim(), dimension: choice.dimension };
   for (;;) {
-    const selection = { ...sourceSelection, assignments };
+    const selection = { root, namespace, parentRoom, name, dimension: choice.dimension, assignments };
     let preview;
     try {
       preview = await plan(selection);
@@ -248,6 +279,10 @@ async function saveCatalog(vscode, { dimensions, selectChildren, chooseComponent
       };
     }
     const approved = await reviewCatalog(vscode, selection.name, destination, childSummary, preservation);
+    if (approved === BACK) {
+      if (!await setupCatalog(3)) return "cancelled";
+      continue;
+    }
     if (approved === SPLIT_CHILDREN) {
       await editSplits();
       continue;
@@ -386,11 +421,26 @@ async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch,
   const { choices } = await pinnedChildChoices(marker, listChildren, false);
   const missing = choices.filter(choice => localState(choice.row) === "missing");
   if (childPaths === undefined && !missing.length) {
-    void vscode.window.showInformationMessage("No child Rooms are available to restore here. Check Open Workspace for folder status.");
+    void vscode.window.showInformationMessage("No child Rooms are available to restore here. Check Rooms for folder status.");
     return "cancelled";
   }
-  const selected = childPaths ?? (await vscode.window.showQuickPick(missing, { canPickMany: true,
-    title: "Restore Catalog child Rooms", placeHolder: "Check the missing child Rooms to restore, or use Select All." }))?.map(choice => choice.label);
+  let selected = childPaths;
+  if (selected === undefined) {
+    let previous;
+    for (;;) {
+      const choices = await flowPick(vscode, missing, { title: "Restore Child Rooms", step: 1, totalSteps: 2,
+        canPickMany: true, placeHolder: "Check the Child Rooms to restore", selected: previous });
+      if (!Array.isArray(choices) || !choices.length) return "cancelled";
+      if (vscode.QuickInputButtons?.Back) {
+        const review = await flowPick(vscode, [{ label: "Restore", detail: choices.map(choice => choice.label).join(", ") }],
+          { title: "Restore Child Rooms", step: 2, totalSteps: 2, placeHolder: "Review the selected folders" });
+        if (review === BACK) { previous = choices; continue; }
+        if (review === CANCEL) return "cancelled";
+      }
+      selected = choices.map(choice => choice.label);
+      break;
+    }
+  }
   if (!selected?.length) return "cancelled";
   const pinned = [...new Set(selected)].map(label => missing.find(choice => choice.label === label));
   if (pinned.some(choice => !choice)) throw new Error("A selected child is unavailable at this Catalog recovery point.");
@@ -401,7 +451,7 @@ async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch,
   if (!batch?.ok || batch.namespace !== marker.composition_namespace || batch.parent_snapshot_id !== marker.snapshot_id
       || !Array.isArray(restored) || restored.length > children.length
       || !restored.every((result, index) => matchesPinnedChild(marker, children[index], result))) {
-    throw new Error("The controller could not verify the batch restore. Check Open Workspace for folder status.");
+    throw new Error("The controller could not verify the batch restore. Check Rooms for folder status.");
   }
   if (batch.status === "partial" && batch.failed_index === restored.length && restored.length < children.length) {
     const reason = {
@@ -413,7 +463,7 @@ async function hydrateChildren(vscode, { root, marker, listChildren, enterBatch,
     throw new Error(`Restored ${restored.length} of ${children.length} child Rooms. Restore stopped at ${children[batch.failed_index].path}.${reason ? ` ${reason}` : ""}`);
   }
   if (batch.status !== "hydrated" || restored.length !== children.length) {
-    throw new Error("The controller returned an incomplete batch restore receipt. Check Open Workspace for folder status.");
+    throw new Error("The controller returned an incomplete batch restore receipt. Check Rooms for folder status.");
   }
   if (notify) {
     const changed = restored.filter(result => result.local_changes === true).length;

@@ -23,6 +23,12 @@ function progressDetail(event) {
   return undefined;
 }
 
+// Use quiet status for routine, short work; callers opt into notification progress explicitly.
+function quietProgress(updateStatus, initial, task) {
+  updateStatus(initial);
+  return Promise.resolve().then(task).finally(() => updateStatus(undefined));
+}
+
 function parseProgressLine(line) {
   try {
     const event = JSON.parse(line);
@@ -44,4 +50,4 @@ function followProgressFile(progressPath, onEvent, options = {}) {
   }, options);
 }
 
-module.exports = { followProgressFile, parseProgressLine, progressDetail };
+module.exports = { followProgressFile, parseProgressLine, progressDetail, quietProgress };
