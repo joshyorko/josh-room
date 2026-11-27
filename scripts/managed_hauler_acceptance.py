@@ -119,7 +119,8 @@ def known_windows_registry_failure(platform, env, exit_code, result, hauler_sha2
         and isinstance(details, str)
         and re.search(r"Hauler endpoint on port [0-9]+ exited with status 1:", details) is not None
         and "failed to copy config: unexpected status from POST request" in details
-        and "/v2/hauler/joshs-all-the-things-workspace.tar.zst/blobs/uploads/" in details
+        and any(f"/v2/{repo}/blobs/uploads/" in details
+                for repo in ("hauler/joshs-all-the-things-workspace.tar.zst", REPO))
         and "500 Internal Server Error unknown: unknown error" in details
     )
 

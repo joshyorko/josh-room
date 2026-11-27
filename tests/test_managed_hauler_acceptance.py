@@ -34,6 +34,22 @@ def test_exact_official_windows_registry_failure_is_a_known_limitation():
     assert known_windows_registry_failure(**affected_case())
 
 
+def test_exact_synthetic_oci_fixture_upload_is_also_affected():
+    case = affected_case()
+    case["result"]["diagnostics"] = case["result"]["diagnostics"].replace(
+        "hauler/joshs-all-the-things-workspace.tar.zst", "josh-room-synthetic/hauler",
+    )
+    assert known_windows_registry_failure(**case)
+
+
+def test_unrelated_registry_repository_still_fails():
+    case = affected_case()
+    case["result"]["diagnostics"] = case["result"]["diagnostics"].replace(
+        "hauler/joshs-all-the-things-workspace.tar.zst", "other/image",
+    )
+    assert not known_windows_registry_failure(**case)
+
+
 @pytest.mark.parametrize("field,value", [
     ("platform", "posix"), ("exit_code", None), ("exit_code", 1),
     ("hauler_sha256", "0" * 64),
