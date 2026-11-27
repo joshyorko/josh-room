@@ -34,7 +34,7 @@ wheel does not require a repository checkout or an adjacent VSIX. The separate
 published 0.1.52 wheel lacks these assets; its recorded Save failure is not
 changed by this correction.
 
-When the source contains `robot.yaml`, Save captures the RCC Environment Artifact and stores its RCCA as a Room Store component. Save requires RCC v18.19.11 and fails closed if RCC cannot publish or export that artifact. The source workspace and its robot files also remain part of the complete Restic snapshot.
+When the source contains `robot.yaml`, Save captures the RCC Environment Artifact and stores its RCCA as a Room Store component. Save requires RCC v18.19.12 and fails closed if RCC cannot publish or export that artifact. The source workspace and its robot files also remain part of the complete Restic snapshot.
 
 The CLI does not capture requested Hauler images yet. It fails closed when you pass `--image` or `--all-images`.
 

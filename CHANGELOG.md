@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.4]
+
+- Promote published RCC v18.19.12, JAT v0.1.22 runtime, and separately qualified Linux/Windows controller artifacts.
+- Align native RCC capture and encrypted artifact receipts with v18.19.12 while retaining previously supported snapshot receipt versions.
+
 ## [1.0.3]
 
 - Land Josh Room VS Code navigation and Catalog UX on main (#248) (#249)

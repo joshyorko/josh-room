@@ -39,6 +39,23 @@ template version in `devcontainer-template.json` and both release locks in the
 same candidate, and its report includes each qualified JAT platform digest for
 the generated PR description.
 
+## RCC v18.19.12 adoption
+
+The 1.0.4 candidate consumes published [RCC v18.19.12](https://github.com/joshyorko/rcc/releases/tag/v18.19.12),
+source `22f64b93130ed54c2280f790d6ee5e178c0533f2`, and immutable
+[JAT v0.1.22-jat-runtime](https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.22-jat-runtime),
+source `1d757a5ab75e82c4132e6356e382290c31af7ebd`.
+Native capture requires the managed RCC version. Envelope validation accepts
+v18.19.12 while retaining v18.19.11 and every previously supported receipt
+version. Controller qualification, installed-VSIX acceptance on Linux/Windows,
+merged-main staging, and owner-authorized publication remain separate gates.
+
+The Windows OCI Hauler round trip remains required for this candidate. The
+retained v0.1.22 run failed during registry blob upload, matching the upstream
+[Windows filesystem registry issue](https://github.com/hauler-dev/hauler/issues/916).
+A published runtime or a successful files-only Serve does not establish that
+OCI registry gate. Do not expand the older v0.1.21 exception to this candidate.
+
 ## RCC v18.19.11 adoption
 
 This promotion consumes published [RCC v18.19.11](https://github.com/joshyorko/rcc/releases/tag/v18.19.11),
