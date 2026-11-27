@@ -2,6 +2,8 @@
 
 ## [1.0.4]
 
+- Known Windows limitation: native OCI registry Serve with official JAT v0.1.22 / Hauler v2.2.0-dev.5 fails registry upload with HTTP 500 ([Hauler #916](https://github.com/hauler-dev/hauler/issues/916)). Native Windows OCI pulls are not qualified. File-only Serve, portable capture/restore and unaffected Windows checks remain required; Linux retains the full OCI smoke test. Only the exact official binary/runtime and diagnosed failure receive a recorded known-limitation result, never an OCI pass.
+
 - Promote published RCC v18.19.12, JAT v0.1.22 runtime, and separately qualified Linux/Windows controller artifacts.
 - Align native RCC capture and encrypted artifact receipts with v18.19.12 while retaining previously supported snapshot receipt versions.
 

@@ -176,6 +176,8 @@ async function main() {
       JOSH_ROOM_CONTROLLER_ARTIFACT: controller.artifact,
       JOSH_ROOM_JAT_ROOT: jat.jatRoot,
       JOSH_ROOM_JAT_ARTIFACT: jat.artifact,
+      JOSH_ROOM_JAT_RELEASE_TAG: manifest.jat.release_tag,
+      JOSH_ROOM_JAT_SOURCE_SHA: manifest.jat.git_sha,
       PYTHONPATH: controllerRoot,
     };
     const readManagedResult = (filename) => {
@@ -498,7 +500,16 @@ async function main() {
         "python", [path.join(repository, "scripts", "managed_hauler_acceptance.py"), path.join(root, "hauler-roundtrip")],
         { env: environment, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", timeout: 240000 },
       ).trim());
-      if (haulerRoundTrip.status !== "passed") throw new Error("installed Hauler round trip did not pass");
+      const documentedWindowsLimitation = platform === "win32-x64"
+        && manifest.jat.release_tag === "v0.1.22-jat-runtime"
+        && manifest.jat.git_sha === "1d757a5ab75e82c4132e6356e382290c31af7ebd"
+        && jat.artifact === "sha256:9f09e2e2774d0b91473135af92ad7ec89f1f4244db8be271b0011764622e0bc9"
+        && haulerRoundTrip.status === "known-limitation"
+        && haulerRoundTrip.issue === "hauler-dev/hauler#916"
+        && haulerRoundTrip.native_windows_oci_pull === "not-passed";
+      if (haulerRoundTrip.status !== "passed" && !documentedWindowsLimitation) {
+        throw new Error("installed Hauler round trip did not pass");
+      }
     }
     await fsp.writeFile(
       path.join(evidenceDir, "hauler-roundtrip.json"),
@@ -589,6 +600,7 @@ async function main() {
       private_runtime: privateRuntime,
       git_recovery: gitRecovery,
       windows_room_store_acceptance: windowsRoomStoreAcceptance,
+      hauler_roundtrip: haulerRoundTrip,
       restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {
         release_tag: lock.controller.release_tag,

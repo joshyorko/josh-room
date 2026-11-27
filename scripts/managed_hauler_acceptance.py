@@ -100,6 +100,41 @@ def diagnostic(path, root):
     return data.strip()[-4096:]
 
 
+
+# Owner-authorized release limitation, not a successful native OCI pull.
+WINDOWS_JAT_ARTIFACT = "sha256:9f09e2e2774d0b91473135af92ad7ec89f1f4244db8be271b0011764622e0bc9"
+WINDOWS_HAULER_SHA256 = "c813a4917f20ce96a75ba661ef44144aa917f5582ff23ef72253a65681b583a1"
+
+
+def known_windows_registry_failure(platform, env, exit_code, result, hauler_sha256):
+    details = result.get("diagnostics", "")
+    return (
+        platform == "nt" and exit_code == 2
+        and env.get("JOSH_ROOM_JAT_RELEASE_TAG") == "v0.1.22-jat-runtime"
+        and env.get("JOSH_ROOM_JAT_SOURCE_SHA") == "1d757a5ab75e82c4132e6356e382290c31af7ebd"
+        and env.get("JOSH_ROOM_JAT_ARTIFACT") == WINDOWS_JAT_ARTIFACT
+        and hauler_sha256 == WINDOWS_HAULER_SHA256
+        and result.get("operation") == "serve" and result.get("success") is False
+        and result.get("exit_status") == 1 and result.get("error") == "jat serve failed with exit 1"
+        and isinstance(details, str)
+        and re.search(r"Hauler endpoint on port [0-9]+ exited with status 1:", details) is not None
+        and "failed to copy config: unexpected status from POST request" in details
+        and "/v2/hauler/joshs-all-the-things-workspace.tar.zst/blobs/uploads/" in details
+        and "500 Internal Server Error unknown: unknown error" in details
+    )
+
+
+def serve_result(path):
+    for line in reversed(path.read_text(encoding="utf-8", errors="replace").splitlines()):
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict) and value.get("operation") == "serve":
+            return value
+    return {}
+
+
 def verify(root):
     env = dict(os.environ, NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
     read = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
@@ -148,6 +183,22 @@ def verify(root):
                 time.sleep(0.2)
             if not startup.is_file():
                 failure = serve.poll()
+                result = serve_result(serve_log)
+                # Verify the actual binary within the already digest-bound JAT artifact.
+                hauler_sha256 = ""
+                if os.name == "nt" and env.get("JOSH_ROOM_JAT_ARTIFACT") == WINDOWS_JAT_ARTIFACT:
+                    identity = subprocess.run(
+                        [*command("hauler-identity", jat=True), "python", "-c",
+                         ("import hashlib, pathlib, shutil; "
+                          "print(hashlib.sha256(pathlib.Path(shutil.which('hauler')).read_bytes()).hexdigest())")],
+                        env=env, cwd=root, capture_output=True, text=True, check=True, timeout=30,
+                    )
+                    hauler_sha256 = identity.stdout.strip()
+                if known_windows_registry_failure(os.name, env, failure, result, hauler_sha256):
+                    return {"status": "known-limitation", "issue": "hauler-dev/hauler#916",
+                            "native_windows_oci_pull": "not-passed", "exit_status": failure,
+                            "jat_artifact": WINDOWS_JAT_ARTIFACT, "hauler_sha256": hauler_sha256,
+                            "diagnostic": diagnostic(serve_log, root)}
                 raise RuntimeError(f"Hauler Serve readiness not recorded; exit={failure}, "
                                    f"diagnostic={diagnostic(serve_log, root) or '(no output)'}")
             ready = json.loads(startup.read_text(encoding="utf-8"))["serve"]
