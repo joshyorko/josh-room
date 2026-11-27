@@ -34,10 +34,15 @@ def test_exact_official_windows_registry_failure_is_a_known_limitation():
     assert known_windows_registry_failure(**affected_case())
 
 
-def test_exact_synthetic_oci_fixture_upload_is_also_affected():
+@pytest.mark.parametrize("reference", [
+    "hauler/joshs-all-the-things-workspace.tar.zst",
+    "josh-room-synthetic/hauler",
+    "hauler/fixture.txt",
+])
+def test_each_fixture_upload_can_fail_first(reference):
     case = affected_case()
     case["result"]["diagnostics"] = case["result"]["diagnostics"].replace(
-        "hauler/joshs-all-the-things-workspace.tar.zst", "josh-room-synthetic/hauler",
+        "hauler/joshs-all-the-things-workspace.tar.zst", reference,
     )
     assert known_windows_registry_failure(**case)
 
