@@ -23,7 +23,7 @@ from .cancellation import terminate_owned_process
 from .jat import _diagnostic
 from .progress import report_progress
 
-RCC_VERSION = "v18.19.11"
+RCC_VERSION = "v18.19.12"
 MAX_SOURCE_FILE = 2 * 1024 * 1024
 MAX_SOURCE_FILES = 64
 MAX_JSON = 1024 * 1024

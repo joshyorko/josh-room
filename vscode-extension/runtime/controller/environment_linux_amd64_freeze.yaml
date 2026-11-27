@@ -6,7 +6,7 @@ dependencies:
 - bzip2=1.0.8
 - ca-certificates=2026.11.20
 - ld_impl_linux-64=2.46.1
-- libexpat=2.9.0
+- libexpat=2.11.0
 - libffi=3.5.2
 - libgcc=16.2.0
 - libgomp=16.2.0

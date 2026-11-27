@@ -39,6 +39,37 @@ template version in `devcontainer-template.json` and both release locks in the
 same candidate, and its report includes each qualified JAT platform digest for
 the generated PR description.
 
+## RCC v18.19.12 adoption
+
+The 1.0.4 candidate consumes published [RCC v18.19.12](https://github.com/joshyorko/rcc/releases/tag/v18.19.12),
+source `22f64b93130ed54c2280f790d6ee5e178c0533f2`, and immutable
+[JAT v0.1.22-jat-runtime](https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.22-jat-runtime),
+source `1d757a5ab75e82c4132e6356e382290c31af7ebd`.
+Native capture requires the managed RCC version. Envelope validation accepts
+v18.19.12 while retaining v18.19.11 and every previously supported receipt
+version. Controller qualification, installed-VSIX acceptance on Linux/Windows,
+merged-main staging, and owner-authorized publication remain separate gates.
+
+Josh authorized shipping this candidate with the known native Windows OCI
+registry Serve limitation on 2026-11-27. Official JAT v0.1.22 and its official
+Hauler v2.2.0-dev.5 remain unchanged. The installed acceptance still attempts
+the OCI round trip: only native Windows, the exact JAT tag/source/artifact,
+the actual official Hauler executable SHA256, and the structured Serve failure
+with registry blob POST HTTP 500 / failed config copy can produce a
+`known-limitation` receipt. That receipt retains sanitized diagnostics and
+explicitly records native Windows OCI pull as `not-passed`. Unrelated failures,
+timeouts, changed binaries and identities still fail. No blanket allow-failure
+or publication protection change is used.
+
+File-only Serve and portable Save/Enter/Build/Inspect/Restore are required before
+this case, and all subsequent Windows acceptance remains required. Linux still
+runs the complete OCI manifest/config/layer and real Hauler pull round trip.
+The [upstream issue](https://github.com/hauler-dev/hauler/issues/916) and
+[controlled native Windows A/B](https://github.com/joshyorko/josh-all-the-things/actions/runs/45994681751/job/140491000109)
+explain the limitation, not successful native Windows OCI serving. Release
+notes must retain this distinction. The older v0.1.21-only historical exception
+is separate; other JAT versions receive no new exception.
+
 ## RCC v18.19.11 adoption
 
 This promotion consumes published [RCC v18.19.11](https://github.com/joshyorko/rcc/releases/tag/v18.19.11),

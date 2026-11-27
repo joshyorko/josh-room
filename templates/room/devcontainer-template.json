@@ -1,6 +1,6 @@
 {
   "id": "room",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "name": "Josh Room",
   "description": "Josh's encrypted workspace entry environment",
   "documentationURL": "https://github.com/joshyorko/josh-room"
